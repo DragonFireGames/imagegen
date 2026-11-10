@@ -159,26 +159,25 @@ async function denoise(message) {
 async function decode(message) {
   const heightTokens = message.heightTokens;
   const widthTokens = message.widthTokens;
+  const sequence = heightTokens * widthTokens;
   const tokens = new Float32Array(message.latent);
 
-  // The cgb export expects VAE input [1, 32, H/8, W/8].
-  // Each transformer token contains a 2x2 spatial patch for each of 32 channels.
-  const decoderHeight = heightTokens * 2;
-  const decoderWidth = widthTokens * 2;
-  const packed = new Float32Array(32 * decoderHeight * decoderWidth);
-  for (let y = 0; y < heightTokens; y++) {
-    for (let x = 0; x < widthTokens; x++) {
-      const tokenOffset = (y * widthTokens + x) * 128;
-      for (let channel = 0; channel < 32; channel++) {
-        for (let patchY = 0; patchY < 2; patchY++) {
-          for (let patchX = 0; patchX < 2; patchX++) {
-            const feature = channel * 4 + patchY * 2 + patchX;
-            const pixelY = y * 2 + patchY;
-            const pixelX = x * 2 + patchX;
-            packed[(channel * decoderHeight + pixelY) * decoderWidth + pixelX] = tokens[tokenOffset + feature];
-          }
-        }
-      }
+  if (tokens.length !== sequence * 128) {
+    throw new Error(
+      "VAE decoder expected " + (sequence * 128) +
+      " latent values (" + sequence + " tokens × 128 features), got " + tokens.length + "."
+    );
+  }
+
+  // The transformer returns [image_sequence, 128] tokens. The decoder
+  // expects those same packed latents in channel-first NCHW order:
+  // [1, 128, height/16, width/16]. Do not unpatchify them here; the
+  // exported decoder graph consumes the 128 packed channels directly.
+  const packed = new Float32Array(tokens.length);
+  for (let token = 0; token < sequence; token++) {
+    const tokenOffset = token * 128;
+    for (let channel = 0; channel < 128; channel++) {
+      packed[channel * sequence + token] = tokens[tokenOffset + channel];
     }
   }
 
@@ -190,7 +189,7 @@ async function decode(message) {
     ]);
     const inputName = session.inputNames[0];
     const outputs = await session.run({
-      [inputName]: new ort.Tensor("float32", packed, [1, 32, decoderHeight, decoderWidth])
+      [inputName]: new ort.Tensor("float32", packed, [1, 128, heightTokens, widthTokens])
     });
     const image = outputs.sample || outputs[session.outputNames[0]];
     const data = bufferOf(asFloat32(image));
@@ -199,7 +198,6 @@ async function decode(message) {
     if (session) await session.release();
   }
 }
-
 self.onmessage = async (event) => {
   try {
     const message = event.data;
