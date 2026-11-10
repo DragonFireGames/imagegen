@@ -4,7 +4,7 @@ A static, browser-only FLUX.2 Klein 4B demo. Image generation runs locally in th
 
 ## Deploy
 
-GitHub Pages is configured through the workflow at .github/workflows/deploy.yml. Pushes to main trigger a Pages deployment. The expected site URL is:
+GitHub Pages is configured through the workflow at .github/workflows/deploy.yml. For the first deployment, open **Settings → Pages → Build and deployment**, set **Source** to **GitHub Actions**, then push to `main` (or run the workflow manually from Actions). Pushes to `main` trigger subsequent deployments. The expected site URL is:
 
 https://dragonfiregames.github.io/imagegen/
 
