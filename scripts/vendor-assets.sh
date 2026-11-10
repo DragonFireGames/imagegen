@@ -12,7 +12,13 @@ mkdir -p "$TMP/ort" vendor/onnxruntime-web
 tar -xzf "$TMP/onnxruntime-web-1.31.1.tgz" -C "$TMP/ort"
 cp "$TMP/ort/package/dist/ort.webgpu.min.mjs" vendor/onnxruntime-web/
 find "$TMP/ort/package/dist" -maxdepth 1 -type f \( -name 'ort-wasm-*.jsep.wasm' -o -name 'ort-wasm-*.jsep.mjs' \) -exec cp {} vendor/onnxruntime-web/ \;
-cp "$TMP/ort/package/LICENSE" vendor/onnxruntime-web/LICENSE
+# Some npm tarballs omit the repository-level license file. Keep the
+# license alongside the vendored runtime regardless of npm's packlist.
+if [ -f "$TMP/ort/package/LICENSE" ]; then
+  cp "$TMP/ort/package/LICENSE" vendor/onnxruntime-web/LICENSE
+else
+  curl --fail --location --retry 3 "https://raw.githubusercontent.com/microsoft/onnxruntime/main/LICENSE" -o vendor/onnxruntime-web/LICENSE
+fi
 
 echo "Packing Transformers.js 3.8.1..."
 npm pack @huggingface/transformers@3.8.1 --silent --pack-destination "$TMP"
