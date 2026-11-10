@@ -275,16 +275,33 @@
         const widthTokens = message.widthTokens;
         const sequence = heightTokens * widthTokens;
         const tokens = new Float32Array(message.latent);
-        const packed = new Float32Array(128 * sequence);
-        for (let i = 0; i < sequence; i++) {
-          for (let channel = 0; channel < 128; channel++) packed[channel * sequence + i] = tokens[i * 128 + channel];
+        // FLUX.2 packs each 2x2 patch of a 32-channel VAE latent into 128
+        // values per transformer token. The decoder expects that patch
+        // unpacked as [1, 32, H/8, W/8], channel-first.
+        const decoderHeight = heightTokens * 2;
+        const decoderWidth = widthTokens * 2;
+        const packed = new Float32Array(32 * decoderHeight * decoderWidth);
+        for (let y = 0; y < heightTokens; y++) {
+          for (let x = 0; x < widthTokens; x++) {
+            const tokenOffset = (y * widthTokens + x) * 128;
+            for (let channel = 0; channel < 32; channel++) {
+              for (let patchY = 0; patchY < 2; patchY++) {
+                for (let patchX = 0; patchX < 2; patchX++) {
+                  const feature = channel * 4 + patchY * 2 + patchX;
+                  const pixelY = y * 2 + patchY;
+                  const pixelX = x * 2 + patchX;
+                  packed[(channel * decoderHeight + pixelY) * decoderWidth + pixelX] = tokens[tokenOffset + feature];
+                }
+              }
+            }
+          }
         }
         self.postMessage({ type:"status", text:"Loading VAE decoder…" });
         const session = await createSession("vae_decoder.onnx",null,[
           { path:"vae_decoder.onnx.data", data:MODEL + "vae_decoder.onnx.data" }
         ]);
         try {
-          const latentTensor = new ort.Tensor("float32",packed,[1,128,heightTokens,widthTokens]);
+          const latentTensor = new ort.Tensor("float32",packed,[1,32,decoderHeight,decoderWidth]);
           const inputName = session.inputNames[0];
           const outputs = await session.run({ [inputName]:latentTensor });
           const image = outputs.sample || outputs[session.outputNames[0]];
