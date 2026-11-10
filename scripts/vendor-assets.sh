@@ -11,7 +11,17 @@ npm pack onnxruntime-web@1.31.1 --silent --pack-destination "$TMP"
 mkdir -p "$TMP/ort" vendor/onnxruntime-web
 tar -xzf "$TMP/onnxruntime-web-1.31.1.tgz" -C "$TMP/ort"
 cp "$TMP/ort/package/dist/ort.webgpu.min.mjs" vendor/onnxruntime-web/
-find "$TMP/ort/package/dist" -maxdepth 1 -type f \( -name 'ort-wasm-*.jsep.wasm' -o -name 'ort-wasm-*.jsep.mjs' \) -exec cp {} vendor/onnxruntime-web/ \;
+# This ort.webgpu.min.mjs build imports the Asyncify runtime (not JSEP).
+# Keep its matching JS module and WASM binary beside the runtime bundle.
+find vendor/onnxruntime-web -maxdepth 1 -type f -name 'ort-wasm-*' -delete
+for extension in mjs wasm; do
+  file="ort-wasm-simd-threaded.asyncify.$extension"
+  if [ ! -f "$TMP/ort/package/dist/$file" ]; then
+    echo "Missing required ONNX Runtime WebGPU asset: $file" >&2
+    exit 1
+  fi
+  cp "$TMP/ort/package/dist/$file" vendor/onnxruntime-web/
+done
 # Some npm tarballs omit the repository-level license file. Keep the
 # license alongside the vendored runtime regardless of npm's packlist.
 if [ -f "$TMP/ort/package/LICENSE" ]; then
