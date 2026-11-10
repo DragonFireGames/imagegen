@@ -59,9 +59,11 @@ function renderImage(buffer, dims) {
   const plane = width * height;
   for (let pixel = 0; pixel < plane; pixel++) {
     const offset = pixel * 4;
-    image.data[offset] = Math.max(0, Math.min(255, Math.round(data[pixel] * 255)));
-    image.data[offset + 1] = Math.max(0, Math.min(255, Math.round(data[plane + pixel] * 255)));
-    image.data[offset + 2] = Math.max(0, Math.min(255, Math.round(data[plane * 2 + pixel] * 255)));
+    // The ONNX VAE graph returns the raw decoder range [-1, 1].
+    // Match Diffusers' VaeImageProcessor: map it to [0, 1] before writing pixels.
+    image.data[offset] = Math.max(0, Math.min(255, Math.round((data[pixel] * 0.5 + 0.5) * 255)));
+    image.data[offset + 1] = Math.max(0, Math.min(255, Math.round((data[plane + pixel] * 0.5 + 0.5) * 255)));
+    image.data[offset + 2] = Math.max(0, Math.min(255, Math.round((data[plane * 2 + pixel] * 0.5 + 0.5) * 255)));
     image.data[offset + 3] = 255;
   }
   context.putImageData(image, 0, 0);

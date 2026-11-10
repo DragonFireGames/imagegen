@@ -68,18 +68,43 @@ function floatToHalf(value) {
 }
 
 function makeHalf(values) {
+  // ONNX Runtime 1.31+ uses native Float16Array when the browser provides it.
+  // Store numeric half values in that case; retain raw IEEE-754 bits on older browsers.
+  if (typeof Float16Array !== "undefined") return Float16Array.from(values);
   const out = new Uint16Array(values.length);
   for (let i = 0; i < values.length; i++) out[i] = floatToHalf(values[i]);
   return out;
 }
 
+function float16View(buffer) {
+  return typeof Float16Array !== "undefined"
+    ? new Float16Array(buffer)
+    : new Uint16Array(buffer);
+}
+
 function asFloat32(tensor) {
-  if (tensor.type === "float16" || tensor.data instanceof Uint16Array) {
-    const out = new Float32Array(tensor.data.length);
-    for (let i = 0; i < out.length; i++) out[i] = halfToFloat(tensor.data[i]);
-    return out;
+  if (tensor.type === "float16") {
+    // Float16Array elements are already numeric values, not bit patterns.
+    if (typeof Float16Array !== "undefined" && tensor.data instanceof Float16Array) {
+      return Float32Array.from(tensor.data);
+    }
+    // Older browsers use Uint16Array as a raw IEEE-754 binary16 container.
+    if (tensor.data instanceof Uint16Array) {
+      const out = new Float32Array(tensor.data.length);
+      for (let i = 0; i < out.length; i++) out[i] = halfToFloat(tensor.data[i]);
+      return out;
+    }
+    throw new Error("Unsupported ONNX Runtime float16 output buffer: " + Object.prototype.toString.call(tensor.data));
   }
   return Float32Array.from(tensor.data);
+}
+
+function assertFinite(values, label) {
+  for (let i = 0; i < values.length; i++) {
+    if (!Number.isFinite(values[i])) {
+      throw new Error(label + " contains a non-finite value at index " + i + ".");
+    }
+  }
 }
 
 async function encode(message) {
@@ -118,7 +143,7 @@ async function denoise(message) {
   const widthTokens = message.width / 16;
   const sequence = heightTokens * widthTokens;
   const latent = new Float32Array(message.latent);
-  const promptEmbeds = new Uint16Array(message.promptBuffer);
+  const promptEmbeds = float16View(message.promptBuffer);
   const imgIds = new BigInt64Array(message.imgIds);
   const txtIds = new BigInt64Array(message.txtIds);
   const sigmas = schedulerSigmas(sequence, message.steps);
@@ -145,8 +170,10 @@ async function denoise(message) {
       const prediction = outputs.noise_pred || outputs[session.outputNames[0]];
       const noise = asFloat32(prediction);
       if (noise.length !== latent.length) throw new Error("Transformer output shape did not match the latent input.");
+      assertFinite(noise, "Transformer prediction at step " + (step + 1));
       const delta = sigmas[step + 1] - sigmas[step];
       for (let i = 0; i < latent.length; i++) latent[i] += delta * noise[i];
+      assertFinite(latent, "Denoised latent after step " + (step + 1));
     }
 
     const data = bufferOf(latent);
@@ -192,8 +219,19 @@ async function decode(message) {
       [inputName]: new ort.Tensor("float32", packed, [1, 128, heightTokens, widthTokens])
     });
     const image = outputs.sample || outputs[session.outputNames[0]];
-    const data = bufferOf(asFloat32(image));
-    self.postMessage({ type: "done", buffer: data, dims: image.dims }, [data]);
+    const imageValues = asFloat32(image);
+    assertFinite(imageValues, "VAE decoder output");
+    let imageMin = Infinity;
+    let imageMax = -Infinity;
+    for (let i = 0; i < imageValues.length; i++) {
+      if (imageValues[i] < imageMin) imageMin = imageValues[i];
+      if (imageValues[i] > imageMax) imageMax = imageValues[i];
+    }
+    if (!Number.isFinite(imageMin) || imageMax - imageMin < 1e-6) {
+      throw new Error("VAE decoder returned a constant or empty image (min=" + imageMin + ", max=" + imageMax + ").");
+    }
+    const data = bufferOf(imageValues);
+    self.postMessage({ type: "done", buffer: data, dims: image.dims, range: [imageMin, imageMax] }, [data]);
   } finally {
     if (session) await session.release();
   }
