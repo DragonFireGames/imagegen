@@ -1,42 +1,60 @@
 # Imagegen
 
-A static, browser-only FLUX.2 Klein 4B demo. Image generation runs locally in the visitor's browser through WebGPU; prompts and generated images are not sent to an inference server.
+A browser-local FLUX.2 Klein 4B image generator. The application, JavaScript runtimes, WebAssembly files, and tokenizer are served from this repository. The multi-gigabyte ONNX weights are fetched directly from Hugging Face and inference runs on the visitor's WebGPU adapter.
 
-## Deploy
+**Live demo:** https://dragonfiregames.github.io/imagegen/
 
-GitHub Pages is configured through the workflow at .github/workflows/deploy.yml. For the first deployment, open **Settings → Pages → Build and deployment**, set **Source** to **GitHub Actions**, then push to `main` (or run the workflow manually from Actions). Pushes to `main` trigger subsequent deployments. The expected site URL is:
+## Features
 
-https://dragonfiregames.github.io/imagegen/
+- FLUX.2 Klein 4B, running locally through ONNX Runtime WebGPU.
+- 512×512, 768×768, and 1024×1024 output presets.
+- 4, 6, or 8 denoising steps.
+- Reproducible seeds and PNG download.
+- One short-lived Web Worker per model stage. The encoder, transformer, and decoder workers are terminated after their stage, because releasing an ONNX Runtime WebGPU session alone may not return the allocations to the adapter.
+- No generation API, account, API key, telemetry, or app-side prompt-blocking layer.
 
-## First run
+## Repository layout
 
-The app downloads model files directly from Hugging Face. The ONNX model pack is about **6.69 GB** in total (text encoder, transformer, VAE decoder and tokenizer). Browser HTTP caching may retain files between sessions, but browser cache quotas and eviction policies vary.
+- index.html and styles.css: UI.
+- src/: tokenizer integration, generation pipeline, and inference worker.
+- vendor/onnxruntime-web/: local WebGPU JS runtime and required WASM binaries.
+- vendor/transformers/: local Transformers.js distribution.
+- models/qwen3-4b-tokenizer/: local tokenizer/configuration files.
+- scripts/vendor-assets.sh: reproducible asset-vendoring script.
+- .github/workflows/: Pages deployment and dependency-vendoring workflows.
 
-The repository intentionally does not contain model weights. GitHub Pages is used only for the static app; the weights are served by the model repository:
+The vendor workflow fetches pinned npm distributions and the upstream tokenizer, commits them into vendor/ and models/, then deploys the static site. To refresh these dependencies, run **Actions → Vendor browser dependencies**.
 
-- [cgb/flux2-klein-4b-onnx-webgpu](https://huggingface.co/cgb/flux2-klein-4b-onnx-webgpu)
-- [Model card and implementation notes](https://huggingface.co/cgb/flux2-klein-4b-onnx-webgpu/blob/main/README.md)
+There are no third-party script or WASM CDNs at application runtime. The source is ordinary browser JavaScript modules; no build step is needed to run it.
 
-## Browser and hardware
+## Model weights and GitHub Pages
 
-- Use a current Chromium-based browser with WebGPU enabled.
-- The page must be opened over HTTPS or localhost; file URLs are not supported.
-- 512×512 is the conservative starting point. 768×768 is supported by the exported model; 1024×1024 is more memory-intensive.
-- The model card reports about 22 seconds for 512×512 at 4 steps on one recent discrete GPU. Actual performance varies significantly by GPU, browser, and available memory.
-- The text encoder and transformer are run in separate workers so their WebGPU sessions can be released between stages. This is important because WebGPU runtimes may retain allocations after a session is released.
+The ONNX pack is approximately **6.5 GB**: a 2.20 GB int4 text encoder, a 4.14 GB int8 transformer, and a 0.20 GB VAE decoder. These files are intentionally not in this repository. GitHub Pages limits a published site to 1 GB, so including the model weights would make the deployment invalid. See [GitHub Pages limits](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits).
 
-## Model and licensing
+The app downloads only these model files from the licensed [cgb/flux2-klein-4b-onnx-webgpu](https://huggingface.co/cgb/flux2-klein-4b-onnx-webgpu) repository. It uses the publisher's sharded manifests for the large ONNX graphs. Hugging Face is the only external runtime asset host; it is not an inference endpoint.
 
-The ONNX export is marked Apache-2.0 by its publisher and is based on [Black Forest Labs FLUX.2 Klein 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) and Qwen3-4B. See the model card and upstream notices for model-weight terms and attribution. ONNX Runtime Web is MIT-licensed. Transformers.js is used only for tokenization.
+The model publisher reports cosine similarity of 0.999232 for the int4 text encoder and 0.999426 for the int8 transformer against its PyTorch reference. The 4.14 GB transformer makes adapter memory capacity important. The model stages are run in separate workers to avoid carrying WebGPU allocations from one stage into the next.
 
-## About "uncensored"
+## Run locally
 
-The app itself does not add a prompt moderation or prompt-blocking layer. This initial browser pipeline uses the ONNX Qwen3 text encoder included in the model pack. It does **not** yet load the separately published Cordux uncensored GGUF encoder: GGUF is not a drop-in ONNX replacement, and that encoder needs a compatible browser execution/export path before it can be substituted. Do not mistake the absence of an app-side filter for a guarantee that the current encoder has no learned refusals.
+Any static HTTP server works. From the repository root:
 
-## Architecture
+    python3 -m http.server 8080
 
-- index.html contains the UI, application code, and an inline Web Worker source.
-- ONNX Runtime WebGPU is loaded from jsDelivr.
-- The Qwen3 tokenizer is loaded with Transformers.js.
-- Text encoder, transformer, and VAE weights are fetched from Hugging Face at runtime.
-- No server, API key, or hosted image-generation endpoint is used.
+Then open http://localhost:8080/ in a WebGPU-capable browser. Do not use file URLs; browsers require a secure context for WebGPU and module workers.
+
+The first generation downloads several gigabytes. Browser caching may retain those files between sessions, but eviction and cache quotas depend on the browser and device.
+
+## Browser requirements
+
+Use a current desktop Chromium-based browser with WebGPU enabled. Safari and Firefox WebGPU support is not assumed by this demo. A GPU adapter with sufficient maximum buffer size and memory is required. If 768×768 fails, try 512×512 first.
+
+## About prompt filtering
+
+The application does not apply its own prompt moderation or blocklist. The current model pack still uses the stock Qwen3 text encoder, which may have learned refusals; lack of an app-side filter is not a guarantee that every prompt will be followed. The separately published uncensored GGUF encoder is not a drop-in replacement for this ONNX graph.
+
+## Licensing
+
+The app source in this repository is MIT-licensed. Third-party runtime distributions and tokenizer assets retain their upstream licenses; see THIRD_PARTY_NOTICES.md and the license files inside vendor/ and models/qwen3-4b-tokenizer/.
+
+The model weights are supplied by cgb under Apache-2.0 as stated in its model card. Read that model repository's license and notices before redistributing the weights separately.

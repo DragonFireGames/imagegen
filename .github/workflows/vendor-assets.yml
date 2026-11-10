@@ -1,0 +1,60 @@
+name: Vendor browser dependencies
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/vendor-assets.yml"
+      - "scripts/vendor-assets.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vendor-browser-dependencies
+  cancel-in-progress: false
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Download and vendor dependencies
+        run: bash scripts/vendor-assets.sh
+
+      - name: Commit vendored files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add vendor models/qwen3-4b-tokenizer
+          if git diff --cached --quiet; then
+            echo "Vendored assets are already current."
+          else
+            git commit -m "Vendor browser inference dependencies and tokenizer"
+            git push
+          fi
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload static site
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: .
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
