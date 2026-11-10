@@ -35,7 +35,9 @@ for file in added_tokens.json chat_template.jinja merges.txt special_tokens_map.
   echo "  - $file"
   curl --fail --location --retry 3 --retry-delay 2 "$TOKENIZER_BASE/$file" -o "$TOKENIZER_DIR/$file"
 done
-curl --fail --location --retry 3 "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B/resolve/5e67da950fce4a097bc150c22958a05716994cea/LICENSE" -o "$TOKENIZER_DIR/LICENSE"
+# The pinned FLUX.2 [klein] 4B model card declares Apache-2.0, but
+# that repository revision does not expose a root LICENSE file.
+curl --fail --location --retry 3 "https://www.apache.org/licenses/LICENSE-2.0.txt" -o "$TOKENIZER_DIR/LICENSE"
 
 echo "Vendored file sizes:"
 du -sh vendor/onnxruntime-web vendor/transformers "$TOKENIZER_DIR"
