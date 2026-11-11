@@ -19,6 +19,9 @@ function metric(label, value) {
 }
 
 async function inspectDevice() {
+  device?.destroy();
+  device = null;
+  adapter = null;
   $("gpu-dot").className = "dot";
   $("gpu-status").textContent = "Checking WebGPU…";
   $("run-benchmark").disabled = true;
@@ -147,12 +150,20 @@ async function runOneMatmul(n, dtype) {
         let exponent = ((bits >>> 23) & 0xff) - 127 + 15;
         let mantissa = bits & 0x7fffff;
         if (exponent <= 0) {
-          half[i] = exponent < -10 ? sign : sign | (((mantissa | 0x800000) >> (1 - exponent) + 0x1000) >> 13);
+          if (exponent < -10) {
+            half[i] = sign;
+          } else {
+            mantissa = (mantissa | 0x800000) >> (1 - exponent);
+            half[i] = sign | ((mantissa + 0x1000 + ((mantissa >> 13) & 1)) >> 13);
+          }
         } else if (exponent >= 31) {
           half[i] = sign | 0x7c00;
         } else {
           mantissa += 0x1000 + ((mantissa >> 13) & 1);
-          if (mantissa & 0x800000) { mantissa = 0; exponent++; }
+          if (mantissa & 0x800000) {
+            mantissa = 0;
+            exponent++;
+          }
           half[i] = exponent >= 31 ? sign | 0x7c00 : sign | (exponent << 10) | (mantissa >> 13);
         }
       }
