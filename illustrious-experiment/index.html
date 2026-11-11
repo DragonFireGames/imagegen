@@ -207,6 +207,19 @@
     </section>
 
     <section class="panel">
+      <p class="eyebrow">Full CLIP-L adapter patch</p>
+      <h2>Apply all mapped Personal Ami CLIP-L weights</h2>
+      <p>This applies all 66 shape-compatible CLIP-L LoRA pairs to the matching FP16 ONNX initializers. The six layer-11 pairs remain excluded because the graph exposes the penultimate hidden state and does not index that final block. It then loads both the original and patched CLIP-L sessions and compares their outputs.</p>
+      <p class="notice">This is the next validation stage, not full image generation. It downloads the CLIP-L external-data shard and reads the selected local adapter's CLIP-L factor tensors. The .safetensors file is not uploaded. CLIP-bigG and the three UNet partitions are not patched by this test.</p>
+      <label for="fullClipLStrength">Full CLIP-L LoRA strength</label>
+      <input class="number-input" id="fullClipLStrength" type="number" min="0" max="2" step="0.05" value="0.75">
+      <button class="button" id="testFullClipL" type="button">Test all 66 CLIP-L LoRA pairs</button>
+      <p class="status" id="fullClipLStatus" data-type="info" aria-live="polite">Select Personal Ami in the shared .safetensors picker above first.</p>
+      <div class="data-list" id="fullClipLSummary" hidden></div>
+      <pre class="inspect-output" id="fullClipLOutput" hidden></pre>
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Full local adapter integrity check</p>
       <h2>Verify all Personal Ami BF16 payload values</h2>
       <p>Stream the entire selected .safetensors data block in 4 MiB chunks, validate every tensor's shape and byte range, and scan all BF16 values for NaN/Infinity. This checks the actual 218 MB adapter payload rather than just its JSON header.</p>
@@ -365,6 +378,7 @@
   <script type="module" src="./lora-payload-smoke-test.js"></script>
   <script type="module" src="./lora-payload-integrity-test.js"></script>
   <script type="module" src="./lora-clipl-patch-test.js"></script>
+  <script type="module" src="./lora-full-clipl-test.js"></script>
   <script type="module" src="./runtime-probe.js"></script>
   <script type="module" src="./component-smoke-test.js"></script>
   <script type="module" src="./text-encoder-2-smoke-test.js"></script>
