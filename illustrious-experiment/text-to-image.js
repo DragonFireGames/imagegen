@@ -669,8 +669,11 @@ function readOptions() {
       throw new Error("Personal Ami strength must be between 0 and 2.");
     }
   }
+  const adapterPrompt = fields.personalAmi.checked && !/\\bpersonal\\s+ami\\b/i.test(prompt)
+    ? prompt + ", personal ami"
+    : prompt;
   return {
-    prompt: prompt + (suffix ? ", " + suffix : ""),
+    prompt: adapterPrompt + (suffix ? ", " + suffix : ""),
     negative,
     width,
     height,
