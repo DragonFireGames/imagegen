@@ -252,6 +252,7 @@ Both routes target browser-native inference: model computation occurs inside the
 - heavy-model-test-lock.js: page-wide lock that rejects overlapping CLIP, VAE, prompt-conditioning and UNet smoke tests before they download weights or allocate WebGPU sessions.
 - lora-inspector.js: reads only the first safetensors header block and reports tensor names, shapes, dtypes, byte-range validity, common LoRA A/B or down/up pairs, rank-dimension mismatches, possible extended adapter tensors, and embedded training metadata. It does not upload or deserialize tensor payloads.
 - lora-weight-map-inspector.js: new local-header-only mapping test; matches Personal Ami pair stems to CLIP-L, CLIP-bigG and all three UNet FP16 weights-index maps, checks Torch-shape compatibility and transposition flags; it does not read tensor payloads or edit ONNX shards; awaits browser results.
+- lora-payload-smoke-test.js: reads one small local CLIP-L BF16 down/up pair and scalar alpha, applies it to a deterministic test vector in FP32, and checks for a finite nonzero delta; it does not upload payload bytes or patch ONNX weights; awaits browser results.
 - tools/fuse_lora_and_export.py: validates the safetensors header, loads its tensors as a Diffusers state dict, verifies that UNet and both text encoders receive the adapter, then fuses it at the selected strength. The real Personal Ami header report is recorded above; actual full Diffusers fusion still needs to be run.
 - tools/README.md: isolated environment and export instructions.
 - runtime-probe.js: reports WebGPU capabilities and explicitly flags the built-in ORT LoRA API as WASM-only.
@@ -298,6 +299,7 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [ ] Run the VAE encoder zero-image WebGPU smoke test; inspect output tensor contract before attempting encode/decode round-trip.
 - [ ] Run real-prompt dual-tokenizer + CLIP conditioning test; verify the combined SDXL tensors [1,77,2048] and [1,1280].
 - [ ] Run header-only Personal Ami → ONNX weights-index mapping and inspect unmatched or shape-incompatible pairs across all 5 indexed components.
+- [ ] Run one-pair local BF16 payload test; confirm byte decoding and low-rank delta math on a representative CLIP-L linear layer.
 - [ ] Run the scheduler-only Euler ancestral math test against the Illustrious beta/timestep config; then integrate scheduler with the real three-part UNet chain after that chain passes.
 - [x] Add an offline Diffusers fusion / generic ONNX reference export script (Python syntax and `--help` pass; synthetic BF16 Safetensors test reproduced the real scan's 2,958 keys, 986 rank-32 pairs, 986 alpha keys, and three component counts; deliberately malformed rank was rejected). Real Personal Ami loading/fusion is still pending.
 - [x] Inspect the exact Personal Ami LoRA header and tensor-key layout in the browser (actual report recorded above).
