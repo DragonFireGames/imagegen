@@ -45,9 +45,12 @@ button.addEventListener("click", async () => {
     const version = ort.env.versions?.web || "version not exposed";
     addRow("ONNX Runtime Web", version);
     addRow(
-      "ORT LoRA adapter API",
-      typeof ort.LoraAdapter === "function" ? "Exported by this build" : "Not exported by this build"
+      "Built-in ORT LoRA adapter API",
+      typeof ort.LoraAdapter === "function"
+        ? "Exported, but WASM-only (not usable with WebGPU)"
+        : "Not exported by this build"
     );
+    addRow("Built-in LoRA API for this WebGPU path", "No — use the model pack's weight-index route instead");
     addRow(
       "Float16Array",
       typeof Float16Array === "function" ? "Available" : "Not available"
