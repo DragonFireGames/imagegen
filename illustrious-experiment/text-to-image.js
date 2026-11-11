@@ -1,6 +1,7 @@
 import * as ort from "../vendor/onnxruntime-web/ort.webgpu.min.mjs";
 import { CLIPTokenizer } from "../vendor/transformers/transformers.min.js";
 import { acquireHeavyModelTest, releaseHeavyModelTest } from "./heavy-model-test-lock.js";
+import { preparePersonalAmiComponent } from "./personal-ami-lora.js";
 
 const MODEL_ID = "aaaaaeeeee/blip-sdxl-anime-wai-illustrious17";
 const MODEL_BASE = "https://huggingface.co/" + MODEL_ID + "/resolve/main/";
@@ -29,7 +30,10 @@ const fields = {
   height: document.querySelector("#generationHeight"),
   steps: document.querySelector("#generationSteps"),
   cfg: document.querySelector("#generationCfg"),
-  seed: document.querySelector("#generationSeed")
+  seed: document.querySelector("#generationSeed"),
+  personalAmi: document.querySelector("#generationPersonalAmi"),
+  loraStrength: document.querySelector("#generationLoraStrength"),
+  loraFile: document.querySelector("#loraFile")
 };
 
 let cancelRequested = false;
@@ -296,21 +300,21 @@ function externalData(component) {
   }));
 }
 
-async function loadSession(manifest, key, label) {
+async function loadSession(manifest, key, label, patchedExternalData = null) {
   const component = manifest?.components?.[key];
   const started = performance.now();
   log("Loading " + label + " (" + formatBytes(component?.bytes) + ")…");
   const session = await ort.InferenceSession.create(MODEL_BASE + component.onnx, {
     executionProviders: ["webgpu"],
     graphOptimizationLevel: "basic",
-    externalData: externalData(component)
+    externalData: patchedExternalData || externalData(component)
   });
   log(label + " session created in " + ((performance.now() - started) / 1000).toFixed(2) +
     "s · inputs: " + session.inputNames.join(", "));
   return session;
 }
 
-async function encodePrompts(manifest, prompt, negativePrompt) {
+async function encodePrompts(manifest, prompt, negativePrompt, personalAmi) {
   const options = { padding: "max_length", truncation: true, max_length: 77 };
   log("Loading CLIP-L and tokenizing positive/negative prompts…");
   const tokenizerL = await loadTokenizer("tokenizer");
@@ -323,7 +327,10 @@ async function encodePrompts(manifest, prompt, negativePrompt) {
   let hiddenL;
   let negativeHiddenL;
   try {
-    sessionL = await loadSession(manifest, "text_encoder", "CLIP-L");
+    const patchedL = personalAmi
+      ? await preparePersonalAmiComponent(personalAmi.file, manifest, "text_encoder", personalAmi.strength, log, checkCancelled)
+      : null;
+    sessionL = await loadSession(manifest, "text_encoder", "CLIP-L", patchedL?.externalData);
     const positive = await sessionL.run({ input_ids: new ort.Tensor("int64", idsL, [1, 77]) });
     hiddenL = fp16Values(positive.penultimate_hidden_state, "CLIP-L positive hidden", [1, 77, 768]);
     const negative = await sessionL.run({ input_ids: new ort.Tensor("int64", negativeIdsL, [1, 77]) });
@@ -347,7 +354,10 @@ async function encodePrompts(manifest, prompt, negativePrompt) {
   let pooledG;
   let negativePooledG;
   try {
-    sessionG = await loadSession(manifest, "text_encoder_2", "CLIP-bigG");
+    const patchedG = personalAmi
+      ? await preparePersonalAmiComponent(personalAmi.file, manifest, "text_encoder_2", personalAmi.strength, log, checkCancelled)
+      : null;
+    sessionG = await loadSession(manifest, "text_encoder_2", "CLIP-bigG", patchedG?.externalData);
     const positive = await sessionG.run({ input_ids: new ort.Tensor("int64", idsG, [1, 77]) });
     hiddenG = fp16Values(positive.penultimate_hidden_state, "CLIP-bigG positive hidden", [1, 77, 1280]);
     pooledG = fp16Values(positive.text_embeds, "CLIP-bigG positive pooled", [1, 1280]);
@@ -652,6 +662,13 @@ function readOptions() {
   if (!Number.isSafeInteger(seed) || seed < 0 || seed > 4294967295) {
     throw new Error("Seed must be an integer from 0 to 4294967295.");
   }
+  if (fields.personalAmi.checked) {
+    if (!fields.loraFile.files?.[0]) throw new Error("Choose the Personal Ami .safetensors file in the adapter inspector above.");
+    const strength = Number(fields.loraStrength.value);
+    if (!Number.isFinite(strength) || strength < 0 || strength > 2) {
+      throw new Error("Personal Ami strength must be between 0 and 2.");
+    }
+  }
   return {
     prompt: prompt + (suffix ? ", " + suffix : ""),
     negative,
@@ -659,7 +676,11 @@ function readOptions() {
     height,
     steps,
     cfg,
-    seed
+    seed,
+    personalAmi: fields.personalAmi.checked ? {
+      file: fields.loraFile.files?.[0] || null,
+      strength: Number(fields.loraStrength.value)
+    } : null
   };
 }
 
@@ -677,12 +698,16 @@ async function generate(options) {
   log("Negative: " + (options.negative || "(empty)"));
   log("Seed " + options.seed + " · CFG " + options.cfg);
   log("CLIP encoders run sequentially; all three UNet sessions stay resident through denoising; VAE loads after UNet release.");
-  log("Personal Ami LoRA is not applied in this build; this is the WAI Illustrious v17 base model.");
+  if (options.personalAmi) {
+    log("Personal Ami enabled · " + options.personalAmi.file.name + " · strength " + options.personalAmi.strength.toFixed(3) + " · all 980 mapped pairs will be patched.");
+  } else {
+    log("Personal Ami disabled · using unmodified WAI Illustrious v17 base weights.");
+  }
 
   checkCancelled();
   setProgress(2, "Encoding prompts");
   setStatus("Encoding positive and negative prompts…");
-  const conditioning = await encodePrompts(manifest, options.prompt, options.negative);
+  const conditioning = await encodePrompts(manifest, options.prompt, options.negative, options.personalAmi);
   checkCancelled();
 
   const scheduler = createEulerAncestralScheduler(schedulerConfig, options.steps);
@@ -702,11 +727,20 @@ async function generate(options) {
   try {
     setProgress(8, "Loading UNet partitions");
     setStatus("Loading UNET_A, UNET_B, and UNET_C together. This requires several GiB of memory…");
-    sessions.a = await loadSession(manifest, "unet_a", "UNET_A");
+    const patchedA = options.personalAmi
+      ? await preparePersonalAmiComponent(options.personalAmi.file, manifest, "unet_a", options.personalAmi.strength, log, checkCancelled)
+      : null;
+    sessions.a = await loadSession(manifest, "unet_a", "UNET_A", patchedA?.externalData);
     checkCancelled();
-    sessions.b = await loadSession(manifest, "unet_b", "UNET_B");
+    const patchedB = options.personalAmi
+      ? await preparePersonalAmiComponent(options.personalAmi.file, manifest, "unet_b", options.personalAmi.strength, log, checkCancelled)
+      : null;
+    sessions.b = await loadSession(manifest, "unet_b", "UNET_B", patchedB?.externalData);
     checkCancelled();
-    sessions.c = await loadSession(manifest, "unet_c", "UNET_C");
+    const patchedC = options.personalAmi
+      ? await preparePersonalAmiComponent(options.personalAmi.file, manifest, "unet_c", options.personalAmi.strength, log, checkCancelled)
+      : null;
+    sessions.c = await loadSession(manifest, "unet_c", "UNET_C", patchedC?.externalData);
     validateSessionInputs(sessions.a, ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], "UNET_A");
     validateSessionInputs(sessions.b, ["hidden", "emb", "encoder_hidden_states", "skip_6", "skip_7", "skip_8"], "UNET_B");
     validateSessionInputs(sessions.c, ["hidden", "emb", "encoder_hidden_states", "skip_0", "skip_1", "skip_2", "skip_3", "skip_4", "skip_5"], "UNET_C");
