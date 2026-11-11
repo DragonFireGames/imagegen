@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101114">
+  <meta name="description" content="NoobAI XL 1.1 browser-only SDXL experiment using ONNX Runtime WebGPU and persistent local model caching.">
+  <title>NoobAI XL 1.1 — Browser Experiment</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <a class="brand" href="../" aria-label="Back to Imagegen">
+        <span class="brand-mark" aria-hidden="true">✳</span>
+        <span><span class="eyebrow">Browser-only model experiment</span><strong>NoobAI XL 1.1</strong></span>
+      </a>
+      <div class="connection"><span class="dot" id="gpu-dot"></span><span id="gpu-status">Checking WebGPU…</span></div>
+    </header>
+
+    <main>
+      <section class="intro">
+        <div>
+          <span class="eyebrow">Illustrious lineage · SDXL · ONNX Runtime WebGPU</span>
+          <h1>Your model. Your browser. Your prompts.</h1>
+          <p>NoobAI XL 1.1 is the target checkpoint for this separate experiment. Model inference is designed to run locally in this browser tab. The model is downloaded into persistent browser storage once, then reused for later generations.</p>
+        </div>
+        <div class="model-stats">
+          <div><strong>SDXL</strong><span>Dual CLIP encoders + U-Net + VAE</span></div>
+          <div><strong>Danbooru + e621</strong><span>Model-card-described training sources</span></div>
+          <div><strong>WebGPU + WASM</strong><span>No local runtime installation</span></div>
+        </div>
+      </section>
+
+      <section class="status-banner" aria-live="polite">
+        <div>
+          <strong id="setup-title">Browser runtime check</strong>
+          <p id="setup-detail">Checking WebGPU, OPFS and JavaScript Promise Integration support.</p>
+        </div>
+        <span class="status-pill" id="runtime-pill">Checking</span>
+      </section>
+
+      <section class="workspace">
+        <form class="panel controls" id="generation-form">
+          <div class="panel-title"><h2>Generation</h2><span class="pill">LOCAL INFERENCE</span></div>
+
+          <label for="model-url">Published ONNX model-pack URL</label>
+          <input id="model-url" type="url" inputmode="url" placeholder="https://huggingface.co/OWNER/REPO/resolve/main/browser-pack" autocomplete="off">
+          <p class="hint">This is the exported browser pack, not the original .safetensors checkpoint. See the export guide to create and publish it. The browser fetches the manifest and model shards from this base URL.</p>
+          <button class="secondary full" id="load-model" type="button" disabled>Load and cache model</button>
+
+          <div class="storage-row">
+            <div><span class="hint">Model status</span><strong id="model-status">No model pack loaded</strong></div>
+            <div><span class="hint">Browser storage</span><strong id="storage-status">Checking…</strong></div>
+          </div>
+          <div class="progress-wrap compact">
+            <div class="progress-top"><span id="progress-label">Waiting for a model pack</span><span id="progress-extra">—</span></div>
+            <div class="progress"><div id="progress-bar"></div></div>
+          </div>
+
+          <label for="prompt">Positive prompt</label>
+          <textarea id="prompt" maxlength="6000" required>score_9, score_8_up, score_7_up, 1girl, adult woman, intricate illustration, detailed lighting, beautiful composition</textarea>
+          <p class="hint">Use NoobAI's quality and Danbooru-style tags as desired. Nothing is automatically prepended to this prompt.</p>
+
+          <div class="label-row">
+            <label for="negative-prompt">Negative prompt</label>
+            <span class="hint">Optional · fully editable</span>
+          </div>
+          <textarea id="negative-prompt" class="negative" maxlength="4000">score_6, score_5, score_4, worst quality, low quality, blurry, bad anatomy, bad hands, extra digits, watermark, signature, text</textarea>
+          <p class="hint">Clear this field to disable negative conditioning. The app does not insert an NSFW-negative tag or rewrite your prompt.</p>
+
+          <div class="two-col">
+            <div>
+              <label for="width">Width</label>
+              <select id="width">
+                <option value="512">512</option>
+                <option value="640">640</option>
+                <option value="768" selected>768</option>
+                <option value="832">832</option>
+                <option value="896">896</option>
+                <option value="1024">1024</option>
+                <option value="1152">1152</option>
+                <option value="1216">1216</option>
+              </select>
+            </div>
+            <div>
+              <label for="height">Height</label>
+              <select id="height">
+                <option value="512">512</option>
+                <option value="640">640</option>
+                <option value="768" selected>768</option>
+                <option value="832">832</option>
+                <option value="896">896</option>
+                <option value="1024">1024</option>
+                <option value="1152">1152</option>
+                <option value="1216">1216</option>
+              </select>
+            </div>
+          </div>
+          <div class="presets">
+            <button type="button" class="preset active" data-width="768" data-height="768">768²</button>
+            <button type="button" class="preset" data-width="1024" data-height="1024">1024²</button>
+            <button type="button" class="preset" data-width="832" data-height="1216">832 × 1216</button>
+            <button type="button" class="preset" data-width="1216" data-height="832">1216 × 832</button>
+          </div>
+          <p class="hint">Start at 768² if memory is limited. Use dimensions divisible by 64; increase image size after a successful test.</p>
+
+          <div class="two-col">
+            <div>
+              <label for="steps">Sampling steps</label>
+              <input id="steps" type="number" min="10" max="50" step="1" value="28">
+            </div>
+            <div>
+              <label for="seed">Seed <span class="hint inline">(−1 = random)</span></label>
+              <input id="seed" type="number" min="-1" max="2147483647" value="-1">
+            </div>
+          </div>
+
+          <div class="guidance-header">
+            <label for="cfg">CFG scale</label>
+            <output id="cfg-value" for="cfg">5.5</output>
+          </div>
+          <input id="cfg" type="range" min="1" max="12" step="0.1" value="5.5">
+          <div class="range-ends"><span>1 · low guidance</span><span>12 · strong guidance</span></div>
+
+          <button class="generate" id="generate" type="submit" disabled>Load the model pack first</button>
+          <div class="fine-print">
+            <strong>Memory and storage</strong>
+            <p>NoobAI XL 1.1 is a large SDXL model. Its U-Net weights alone are about 5.14 GB in FP16. Starting at 768² reduces activation memory, not model-weight memory; a 9 GB total-memory machine may still fail to allocate the U-Net. The current FP16 pack is an initial compatibility target, not yet the low-memory build.</p>
+            <p>Persistent storage is requested from the browser. The browser may deny the request or clear best-effort data; the model status reports whether the cache is present.</p>
+          </div>
+        </form>
+
+        <section class="panel stage">
+          <div class="stage-head">
+            <div><h2>Result</h2><div class="hint" id="result-info">No generation has run</div></div>
+            <div class="result-actions"><span class="stage-meta" id="seed-info"></span><a class="secondary" id="download" hidden download="noobai-image.png">Download PNG</a></div>
+          </div>
+          <div class="preview">
+            <div class="placeholder" id="placeholder"><div class="placeholder-icon">✳</div><h3>Browser inference is the target</h3><p>First publish a NoobAI ONNX pack using the offline conversion guide. Once its URL is entered, the browser can download and cache the model.</p></div>
+            <canvas id="canvas" hidden></canvas>
+          </div>
+          <div class="log-panel">
+            <div class="log-heading"><strong>Runtime log</strong><button class="text-button" id="clear-cache" type="button">Clear cached model</button></div>
+            <pre id="log" aria-live="polite"></pre>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <footer>
+      <span>NoobAI XL 1.1 · ONNX Runtime Web · WebGPU</span>
+      <span><a href="./README.md">Technical and export guide</a> · <a href="https://huggingface.co/Laxhar/noobai-XL-1.1" target="_blank" rel="noreferrer">Original model</a> · <a href="../uncensored-experiment/">Pony experiment</a> · <a href="../">Back to Imagegen</a></span>
+    </footer>
+  </div>
+  <script type="module" src="./pwa.js"></script>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

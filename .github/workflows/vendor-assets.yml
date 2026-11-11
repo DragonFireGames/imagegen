@@ -42,7 +42,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add vendor models/qwen3-4b-tokenizer
+          git add vendor models/qwen3-4b-tokenizer noobai-browser-experiment/vendor
           if git diff --cached --quiet; then
             echo "Vendored assets are already current."
           else
