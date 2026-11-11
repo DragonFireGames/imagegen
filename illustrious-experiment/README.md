@@ -241,7 +241,7 @@ Preferred sequence:
 
 1. Run the CLIP-L, CLIP-bigG, and VAE decoder component smoke tests in the browser. All three have now passed on the target machine, confirming external-data loading and real WebGPU inference for both text encoders and the decoder.
 2. The full staged A → B → C graph chain and VAE encoder have passed their isolated tests. Validate real positive/negative prompt conditioning and VAE encode/decode scaling next; then integrate the scheduler-driven iterative denoising loop.
-3. Build the no-LoRA WAI v17 SDXL pipeline in JavaScript and generate a baseline image. Keep in mind that WAI v17 is a derivative, not the original Illustrious v0.1 training checkpoint.
+3. The no-LoRA WAI v17 SDXL JavaScript pipeline is now connected to a generation interface. Run it on the target browser, validate the simultaneously resident UNet sessions, and capture a baseline image. WAI v17 is a derivative, not the original Illustrious v0.1 training checkpoint.
 4. Use Python/Diffusers offline to load the actual Personal Ami adapter, fuse it into the official Illustrious v0.1 base, and generate a reproducible reference image. Do not require a Python inference server.
 5. Inspect the WAI FP16 weight-index format and implement a converter for Personal Ami only after all 986 pairs have been mapped and shape-checked. If the derivative graph cannot be validated, export the exact base as a separate browser model instead.
 6. Compare browser outputs with Diffusers at strengths 0.6, 0.75, and 0.9 before adding a LoRA-strength control.
@@ -252,7 +252,7 @@ Both routes target browser-native inference: model computation occurs inside the
 
 ## Current implementation
 
-- index.html: separate experiment page with model/runtime research notes and a local LoRA inspection utility.
+- index.html: separate experiment page with a prompt/settings panel, progress and cancellation controls, a generated-image preview/PNG download, and detailed performance logging, alongside the research notes and local LoRA inspection utility.\n- text-to-image.js: browser-only text-to-image pipeline. It tokenizes and encodes positive/negative prompts through the dual CLIP encoders sequentially, builds CFG batch-2 conditioning, holds the three split UNet WebGPU sessions resident for the full Euler ancestral loop, releases them, then loads the VAE decoder and renders the output to PNG. Supports 512–1024 dimensions in multiples of 64, steps, CFG, fixed seed, positive suffix, negative prompt, progress and cancellation between graph calls. First full generation is not yet verified on the target browser. The Personal Ami adapter is not applied in this pipeline.
 - heavy-model-test-lock.js: page-wide lock that rejects overlapping CLIP, VAE, prompt-conditioning and UNet smoke tests before they download weights or allocate WebGPU sessions.
 - lora-inspector.js: reads only the first safetensors header block and reports tensor names, shapes, dtypes, byte-range validity, common LoRA A/B or down/up pairs, rank-dimension mismatches, possible extended adapter tensors, and embedded training metadata. It does not upload or deserialize tensor payloads.
 - lora-weight-map-inspector.js: local-header-only matcher for the five FP16 indexes. The corrected browser report matched 980/986 names, with all 980 shape-compatible: 66 CLIP-L, 192 CLIP-bigG, 350 UNET_A, 306 UNET_B, and 66 UNET_C. All 980 targets require ONNX matrix-delta transposition. The six unmatched pairs are exactly CLIP-L layer 11's two MLP and four attention projections; the tested CLIP-L graph exposes `penultimate_hidden_state`, consistent with that final block being absent from the graph index. The mapper now classifies these six separately from unexpected misses. No LoRA tensor payloads were read.
@@ -273,9 +273,9 @@ Both routes target browser-native inference: model computation occurs inside the
 - prompt-conditioning-smoke-test.js: passed positive and negative prompts through both actual CLIP BPE tokenizers and text encoders. It built finite positive/negative `encoder_hidden_states [1,77,2048]` and pooled `text_embeds [1,1280]`; total 69.8 s. This validates real conditioning tensors, not image generation.
 - scheduler-math-smoke-test.js: passed 28 deterministic synthetic Euler ancestral steps; beta/timestep schedule, monotonic sigmas, sigma-up/down identity, repeatability and finite output checked; it did not run the UNet or generate an image.
 - unet-resident-memory-preflight.js: high-memory preflight that creates A, B and C ONNX Runtime WebGPU sessions while retaining earlier sessions, validates graph interfaces, then releases them in reverse order. It does not run inference; awaits browser validation.
-- Full iterative image-generation inference is not wired up yet.
+- Full iterative text-to-image inference is wired into the page, but end-to-end browser generation and simultaneous UNet session residency are not yet verified.
 
-## Offline LoRA fusion and ONNX reference export
+## Browser text-to-image pipeline\n\nThe generator keeps the two CLIP encoders sequential to limit peak memory, then creates a two-item CFG batch (negative first, positive second). At every scheduler step, the same scaled latent is duplicated into batch 2; UNET_A produces the shared embedding and skip tensors, UNET_B consumes its A intermediates, and UNET_C consumes B's hidden output plus A's remaining skips. The guided epsilon prediction is combined on the CPU and passed to the Euler ancestral update. After the last step, all three UNet sessions are released before the VAE decoder loads.\n\nThe initial latent and per-step ancestral noise use a deterministic seeded PRNG. The default 1024×1024 / 28-step / CFG 5 settings match the candidate pack's published defaults. The generator currently uses the WAI v17 base weights only; the Personal Ami LoRA has been mapped but is not fused or injected. No generated image has yet been confirmed by the target browser.\n\n## Offline LoRA fusion and ONNX reference export
 
 The offline helper is documented in [tools/README.md](tools/README.md). It loads the official Illustrious v0.1 Diffusers pipeline, loads a local SDXL `.safetensors` adapter, fuses it at a chosen scale with `safe_fusing=True`, and optionally runs:
 
@@ -305,7 +305,7 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [x] Run the VAE encoder zero-image WebGPU smoke test; FP16 image [1,3,1024,1024] produced finite latent_mean [1,4,128,128]. Latent scaling and round-trip compatibility remain pending.
 - [x] Run positive + negative prompt dual-tokenizer / dual-CLIP conditioning; both FP16 CFG conditioning pairs [1,77,2048] and pooled text embeddings [1,1280] were finite.
 - [x] Run header-only Personal Ami → ONNX weights-index mapping; 980/986 pairs matched and were shape-compatible (66 CLIP-L, 192 bigG, 350 UNET_A, 306 UNET_B, 66 UNET_C); six CLIP-L layer-11 pairs are unindexed, consistent with the graph's penultimate output; zero shape mismatches.
-- [ ] Test whether all three UNet graph sessions can remain resident simultaneously; manifest payload total is about 4.8 GiB before runtime/activation overhead.
+- [ ] Test whether all three UNet graph sessions can remain resident simultaneously; the generator now requires this mode and the manifest payload total is about 4.8 GiB before runtime/activation overhead.
 - [x] Run one-pair local BF16 payload test; a real CLIP-L linear pair decoded and produced a finite, nonzero low-rank delta.
 - [x] Run full local BF16 payload integrity scan over all 2,958 tensors / 114,017,242 values; all byte ranges and BF16 values passed with zero non-finite values.
 - [x] Run the scheduler-only Euler ancestral math test against the Illustrious beta/timestep config; 28 deterministic synthetic steps passed. Integrating the scheduler with iterative real UNet denoising remains pending.
@@ -316,12 +316,12 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [ ] Prototype ExecuTorch WebGPU export for the SDXL UNet and verify required operator coverage.
 - [x] Complete the staged A → B → C WebGPU denoiser graph chain with zero conditioning.
 - [x] Validate real positive/negative prompt conditioning and construct both finite SDXL CFG conditioning pairs.
-- [ ] Validate VAE encode/decode scaling and round-trip compatibility; test simultaneous UNet session residency; then connect the scheduler to iterative UNet denoising.
+- [ ] Validate VAE encode/decode scaling and round-trip compatibility independently. The end-to-end generator now applies the WAI/Kohaku VAE scaling factor and runs iterative UNet denoising, but this has not yet been tested as a complete image-generation run.
 - [ ] Run a baseline prompt in browser WebGPU without a LoRA.
 - [ ] Match a reference image from Diffusers within expected precision differences.
 - [ ] Apply Personal Ami LoRA at strengths 0.6, 0.75, and 0.9; compare against Diffusers.
 - [ ] Investigate quantized UNet execution and adapter application.
-- [ ] Add arbitrary dimensions, negative prompt, CFG, sampler/steps, seed, caching, and PNG output.
+- [x] Add dimension controls (512–1024 multiples of 64), negative prompt, CFG, Euler ancestral steps, seed, progress, cancellation, performance logs, and PNG output.
 - [ ] Verify memory use and generation on the target Mac/browser before calling it usable.
 
 ## References
