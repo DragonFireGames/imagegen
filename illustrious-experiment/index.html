@@ -171,6 +171,17 @@
     </section>
 
     <section class="panel">
+      <p class="eyebrow">First split-UNet execution test</p>
+      <h2>UNET_A ONNX WebGPU smoke test</h2>
+      <p>Load only the first UNet partition (down path and middle) and run one zero-input inference at 1024 × 1024 output resolution. This loads UNET_A's own multi-gigabyte weights, but does not load UNET_B, UNET_C, or any other model component. The three skip groups and hidden tensors are checked for finite values.</p>
+      <p class="notice">This is a substantially larger allocation than CLIP-bigG. Close memory-heavy tabs first, keep the other UNet tests closed, and run only one UNet partition at a time. The session is released after the test. A browser/GPU allocation failure is possible and does not imply that the smaller components are broken.</p>
+      <button class="button" id="testUnetA" type="button">Test UNET_A (about 2.49 GB)</button>
+      <p class="status" id="unetAStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="unetASummary" hidden></div>
+      <p class="notice">A successful result validates the first UNet partition only. UNET_B, UNET_C, split-graph chaining, end-to-end denoising, and LoRA application remain untested.</p>
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Runtime diagnostics</p>
       <h2>Check browser and ONNX Runtime support</h2>
       <p>This local probe checks WebGPU, relevant adapter limits, the ONNX Runtime version, and the adapter API surface. ONNX Runtime's built-in LoRA adapter API is WASM-only, so it is not usable by this experiment's WebGPU execution path.</p>
@@ -193,5 +204,6 @@
   <script type="module" src="./text-encoder-2-smoke-test.js"></script>
   <script type="module" src="./vae-smoke-test.js"></script>
   <script type="module" src="./unet-metadata-inspector.js"></script>
+  <script type="module" src="./unet-a-smoke-test.js"></script>
 </body>
 </html>
