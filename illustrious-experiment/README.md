@@ -150,9 +150,12 @@ one dummy-token inference. The output was `penultimate_hidden_state`, shape
 took 15.6 seconds. This validates CLIP-L only, not the other encoder, UNet,
 scheduler, full-model memory use, or LoRA injection.
 
-A second independent test is now available for the VAE decoder. It loads about
-99 MB of graph and weights and runs a zero-latent decode. It has not yet been
-run in the user's browser.
+A second independent test is now available for the VAE decoder. The user's
+first browser run created the WebGPU session and loaded the external data, but
+the inference call rejected the supplied FP32 input: this graph expects an
+FP16 latent tensor. The browser test was corrected to pass a zero-filled
+FP16 tensor of shape `[1, 4, 128, 128]`. The corrected inference has not yet
+been rerun in the user's browser.
 
 ## Runtime decision
 
@@ -180,7 +183,7 @@ Both routes target browser-native inference: model computation occurs inside the
 - tools/README.md: isolated environment and export instructions.
 - runtime-probe.js: reports WebGPU capabilities and explicitly flags the built-in ORT LoRA API as WASM-only.
 - component-smoke-test.js: CLIP-L graph and dummy-token WebGPU inference; passed in the user's browser (221.3 MiB, 15.6 s, output [1, 77, 768], FP16, finite).
-- vae-smoke-test.js: loads only the VAE decoder and runs a zero-latent WebGPU inference; awaits browser validation.
+- vae-smoke-test.js: loads only the VAE decoder and runs a zero-latent FP16 WebGPU inference. Initial run confirmed session creation but failed at inference because the graph expects FP16; input dtype corrected, awaiting rerun.
 - Full image-generation inference is not wired up yet.
 
 ## Offline LoRA fusion and ONNX reference export
@@ -204,7 +207,7 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [x] Identify an Illustrious v0.1-derived browser ONNX package with FP16 graph weights-index metadata and inspect its current manifest.
 - [x] Run the browser capability probe: the user's browser reports WebGPU, Float16Array, ONNX Runtime Web 1.31.1, and 4 GiB maximum buffer/binding limits.
 - [x] Run the 232 MB CLIP-L ONNX WebGPU smoke test: success; output `[1, 77, 768]`, FP16, all finite, 15.6 seconds.
-- [ ] Run the ~99 MB VAE decoder ONNX WebGPU smoke test.
+- [ ] Rerun the ~99 MB VAE decoder ONNX WebGPU smoke test with the corrected FP16 input (the initial session load succeeded, but inference rejected FP32).
 - [ ] Inspect CLIP-bigG and all three split UNet graphs before loading them.
 - [x] Add an offline Diffusers fusion / generic ONNX reference export script (Python syntax and `--help` pass; synthetic BF16 Safetensors test reproduced the real scan's 2,958 keys, 986 rank-32 pairs, 986 alpha keys, and three component counts; deliberately malformed rank was rejected). Real Personal Ami loading/fusion is still pending.
 - [x] Inspect the exact Personal Ami LoRA header and tensor-key layout in the browser (actual report recorded above).
