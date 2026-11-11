@@ -101,6 +101,13 @@
     </section>
 
     <section class="panel">
+      <p class="eyebrow">Browser-side LoRA format reference</p>
+      <h2><a href="https://huggingface.co/aaaaaeeeee/blip-lora-sdxl-lightning8" target="_blank" rel="noreferrer">SDXL LoRA browser package</a></h2>
+      <p>The same publisher repacks a standard Kohya .safetensors LoRA into <code>lora.json</code> plus <code>lora.bin</code> for its browser runtime (FP16 factors; its example has 788 UNet layers). This is a custom format, not built-in ONNX Runtime support, and its layer map cannot be reused for Personal Ami.</p>
+      <p>We'll need to map the actual Personal Ami tensors onto the Illustrious ONNX graph, then validate the converted adapter against a Diffusers reference.</p>
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Runtime status</p>
       <h2>Inference is not wired up yet</h2>
       <p>Target architecture: offline Python/Diffusers conversion, then ONNX Runtime WebGPU inference in this page. Python would be used for export only; no Python inference server is intended. ExecuTorch WebGPU is a second experimental route being evaluated. The FLUX.2 application remains untouched.</p>
