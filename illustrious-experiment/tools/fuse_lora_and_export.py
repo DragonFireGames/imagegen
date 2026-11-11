@@ -16,6 +16,7 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from collections import Counter
 
 
 DEFAULT_BASE = "OnomaAIResearch/Illustrious-xl-early-release-v0"
@@ -30,11 +31,123 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, type=Path, help="Output directory (keep this outside the Git repo).")
     parser.add_argument("--base-model", default=DEFAULT_BASE, help=f"Diffusers base model (default: {DEFAULT_BASE}).")
     parser.add_argument("--strength", type=float, default=0.75, help="LoRA fuse scale (suggested Personal Ami range: 0.6–0.9).")
-    parser.add_argument("--dtype", choices=("float16", "bfloat16", "float32"), default="float16")
+    parser.add_argument("--dtype", choices=("float16", "bfloat16", "float32"), default="bfloat16", help="Illustrious v0.1 is published with BF16 weights; use float16 for hardware without reliable BF16 support.")
+    parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto", help="Device used for fusion/export. Auto prefers CUDA, then Apple MPS, then CPU.")
     parser.add_argument("--export-onnx", action="store_true", help="Run optimum-cli export after fusing.")
     parser.add_argument("--keep-diffusers", action="store_true", help="Keep the merged Diffusers model beside the ONNX export.")
     parser.add_argument("--adapter-name", default=ADAPTER_NAME, help="Internal Diffusers adapter name.")
     return parser.parse_args()
+
+
+
+def inspect_lora_header(lora_path: Path, safe_open) -> dict:
+    """Inspect tensor keys/shapes and embedded metadata without loading payloads."""
+    component_prefixes = {
+        "lora_unet_": "unet",
+        "lora_te1_": "text_encoder",
+        "lora_te2_": "text_encoder_2",
+    }
+    suffixes = (
+        (".lora_down.weight", "down"),
+        (".lora_up.weight", "up"),
+        (".lora_A.weight", "down"),
+        (".lora_B.weight", "up"),
+    )
+    component_counts = Counter()
+    pair_shapes = {}
+    alpha_count = 0
+    unknown_keys = []
+    tensor_count = 0
+
+    with safe_open(str(lora_path), framework="pt", device="cpu") as handle:
+        header_metadata = handle.metadata() or {}
+        keys = list(handle.keys())
+        tensor_count = len(keys)
+
+        for key in keys:
+            component = next(
+                (name for prefix, name in component_prefixes.items() if key.startswith(prefix)),
+                None,
+            )
+            if component is None:
+                unknown_keys.append(key)
+            else:
+                component_counts[component] += 1
+
+            if key.endswith(".alpha"):
+                alpha_count += 1
+                continue
+
+            pair_suffix = next(
+                ((suffix, side) for suffix, side in suffixes if key.endswith(suffix)),
+                None,
+            )
+            if pair_suffix is None:
+                continue
+
+            suffix, side = pair_suffix
+            stem = key[:-len(suffix)]
+            shape = tuple(handle.get_slice(key).get_shape())
+            pair_shapes.setdefault(stem, {})[side] = shape
+
+    incomplete = 0
+    rank_mismatches = []
+    ranks = Counter()
+    for stem, shapes in pair_shapes.items():
+        down = shapes.get("down")
+        up = shapes.get("up")
+        if down is None or up is None:
+            incomplete += 1
+            continue
+        if len(down) < 2 or len(up) < 2 or down[0] != up[1]:
+            rank_mismatches.append({"layer": stem, "down": down, "up": up})
+            continue
+        ranks[down[0]] += 1
+
+    expected_components = {"unet", "text_encoder", "text_encoder_2"}
+    missing_components = sorted(expected_components - set(component_counts))
+    if missing_components:
+        raise RuntimeError(
+            "The LoRA is missing expected SDXL component groups: "
+            + ", ".join(missing_components)
+        )
+    if unknown_keys:
+        sample = ", ".join(unknown_keys[:8])
+        raise RuntimeError(
+            f"The LoRA contains {len(unknown_keys)} keys outside the supported "
+            f"SDXL Kohya prefixes (examples: {sample})."
+        )
+    if incomplete or rank_mismatches:
+        raise RuntimeError(
+            f"LoRA header validation failed: {incomplete} incomplete pairs, "
+            f"{len(rank_mismatches)} rank mismatches."
+        )
+
+    return {
+        "metadata": header_metadata,
+        "tensor_count": tensor_count,
+        "component_tensor_counts": dict(component_counts),
+        "pair_count": len(pair_shapes),
+        "alpha_tensor_count": alpha_count,
+        "rank_counts": {str(rank): count for rank, count in ranks.items()},
+    }
+
+
+def choose_device(torch, requested: str) -> str:
+    if requested != "auto":
+        if requested == "cuda" and not torch.cuda.is_available():
+            raise SystemExit("--device cuda was selected, but CUDA is not available.")
+        if requested == "mps" and not (
+            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        ):
+            raise SystemExit("--device mps was selected, but Apple MPS is not available.")
+        return requested
+
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 
 def main() -> int:
@@ -59,11 +172,29 @@ def main() -> int:
         import torch
         import diffusers
         from diffusers import DiffusionPipeline
+        from safetensors import safe_open
+        from safetensors.torch import load_file
     except ImportError as exc:
         raise SystemExit(
             "Missing export dependencies. Install tools/requirements-export.txt "
             "in a dedicated Python environment after installing a matching PyTorch build."
         ) from exc
+
+    device = choose_device(torch, args.device)
+    lora_header = inspect_lora_header(lora_path, safe_open)
+    print("LoRA header:", flush=True)
+    print(json.dumps({
+        "tensor_count": lora_header["tensor_count"],
+        "component_tensor_counts": lora_header["component_tensor_counts"],
+        "pair_count": lora_header["pair_count"],
+        "alpha_tensor_count": lora_header["alpha_tensor_count"],
+        "rank_counts": lora_header["rank_counts"],
+        "ss_base_model_version": lora_header["metadata"].get("ss_base_model_version"),
+        "ss_network_dim": lora_header["metadata"].get("ss_network_dim"),
+        "ss_network_alpha": lora_header["metadata"].get("ss_network_alpha"),
+    }, indent=2), flush=True)
+    if lora_header["pair_count"] != lora_header["alpha_tensor_count"]:
+        print("WARNING: LoRA pair count and .alpha tensor count differ.", file=sys.stderr)
 
     dtype_map = {
         "float16": torch.float16,
@@ -79,15 +210,27 @@ def main() -> int:
 
         print(f"Loading base pipeline: {args.base_model}", flush=True)
         print(f"Loading dtype: {args.dtype}", flush=True)
+        print(f"Fusion device: {device}", flush=True)
         pipe = DiffusionPipeline.from_pretrained(
             args.base_model,
-            torch_dtype=dtype_map[args.dtype],
+            dtype=dtype_map[args.dtype],
             use_safetensors=True,
             low_cpu_mem_usage=True,
         )
+        pipe.to(device)
 
-        print(f"Loading adapter: {lora_path.name}", flush=True)
-        pipe.load_lora_weights(str(lora_path), adapter_name=args.adapter_name)
+        print(f"Reading local adapter tensors: {lora_path.name}", flush=True)
+        # Diffusers accepts a state dict directly. Passing the .safetensors file
+        # itself as the model path is ambiguous and is not the documented local
+        # file interface. This also preserves Kohya .alpha entries for conversion
+        # into Diffusers network_alphas.
+        lora_state_dict = load_file(str(lora_path), device="cpu")
+        pipe.load_lora_weights(
+            lora_state_dict,
+            adapter_name=args.adapter_name,
+            low_cpu_mem_usage=True,
+        )
+        del lora_state_dict
 
         adapter_map = pipe.get_list_adapters()
         attached_components = [
@@ -95,10 +238,12 @@ def main() -> int:
             for component, names in adapter_map.items()
             if args.adapter_name in names
         ]
-        if not attached_components:
+        required_components = {"unet", "text_encoder", "text_encoder_2"}
+        missing_components = sorted(required_components - set(attached_components))
+        if missing_components:
             raise RuntimeError(
-                "Diffusers loaded no adapter layers for this file. "
-                "The file may not be a compatible SDXL LoRA."
+                "Diffusers did not attach all three components reported by the "
+                "header. Missing: " + ", ".join(missing_components)
             )
 
         print(
@@ -107,6 +252,7 @@ def main() -> int:
         )
         print(f"Fusing at strength {args.strength:g} with safe_fusing=True...", flush=True)
         pipe.fuse_lora(
+            components=["unet", "text_encoder", "text_encoder_2"],
             lora_scale=args.strength,
             safe_fusing=True,
             adapter_names=[args.adapter_name],
@@ -129,7 +275,14 @@ def main() -> int:
             "adapter_name": args.adapter_name,
             "lora_strength": args.strength,
             "source_dtype": args.dtype,
+            "device": device,
             "fused_components": attached_components,
+            "lora_header_metadata": lora_header["metadata"],
+            "lora_tensor_count": lora_header["tensor_count"],
+            "lora_component_tensor_counts": lora_header["component_tensor_counts"],
+            "lora_pair_count": lora_header["pair_count"],
+            "lora_alpha_tensor_count": lora_header["alpha_tensor_count"],
+            "lora_rank_counts": lora_header["rank_counts"],
             "diffusers_version": diffusers.__version__,
             "torch_version": torch.__version__,
             "created_utc": datetime.now(timezone.utc).isoformat(),
