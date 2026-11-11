@@ -137,6 +137,17 @@
     </section>
 
     <section class="panel">
+      <p class="eyebrow">Local adapter tensor-value test</p>
+      <h2>Decode one Personal Ami BF16 LoRA pair</h2>
+      <p>Read one representative shape-compatible CLIP-L down/up pair plus its scalar alpha directly from the selected local file. Decode BF16 payloads, apply the pair to a deterministic FP32 test vector, and verify the resulting low-rank delta is finite and nonzero.</p>
+      <p class="notice">This reads only a small pair's byte ranges from the local .safetensors file (typically well under 1 MB). No adapter payload is uploaded. It does not patch ONNX weights or claim model-output equivalence.</p>
+      <button class="button" id="testLoraPayload" type="button">Test one local BF16 LoRA pair</button>
+      <p class="status" id="loraPayloadStatus" data-type="info" aria-live="polite">Choose the Personal Ami .safetensors file above first.</p>
+      <div class="data-list" id="loraPayloadSummary" hidden></div>
+      <pre class="inspect-output" id="loraPayloadOutput" hidden></pre>
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Browser-side LoRA format reference</p>
       <h2><a href="https://huggingface.co/aaaaaeeeee/blip-lora-sdxl-lightning8" target="_blank" rel="noreferrer">SDXL LoRA browser package</a></h2>
       <p>The same publisher repacks a standard Kohya .safetensors LoRA into <code>lora.json</code> plus <code>lora.bin</code> for its browser runtime (FP16 factors; its example has 788 UNet layers). This is a custom format, not built-in ONNX Runtime support, and its layer map cannot be reused for Personal Ami.</p>
@@ -270,6 +281,7 @@
   </main>
   <script type="module" src="./lora-inspector.js"></script>
   <script type="module" src="./lora-weight-map-inspector.js"></script>
+  <script type="module" src="./lora-payload-smoke-test.js"></script>
   <script type="module" src="./runtime-probe.js"></script>
   <script type="module" src="./component-smoke-test.js"></script>
   <script type="module" src="./text-encoder-2-smoke-test.js"></script>
