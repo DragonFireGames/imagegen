@@ -153,6 +153,7 @@ def reshard_external_weights(graph_path: Path, max_shard_bytes=SHARD_BYTES):
     graph = model.graph
     folder = graph_path.parent
     old_data_files = list(folder.glob("*.onnx_data*")) + list(folder.glob("*.onnx.data")) + list(folder.glob("*.data"))
+    previous_shards = list(folder.glob("weights-*.bin"))
 
     shards = []
     shard_index = -1
@@ -241,10 +242,14 @@ def reshard_external_weights(graph_path: Path, max_shard_bytes=SHARD_BYTES):
             (folder / name).unlink(missing_ok=True)
         raise
 
-    # Remove only the source external-data assets, after the new ONNX graph has
-    # been committed with its replacement references.
+    # Remove only the source external-data assets and obsolete old shards,
+    # after the new ONNX graph has been committed with its replacement refs.
     for old in old_data_files:
         old.unlink(missing_ok=True)
+    current_shards = set(shards)
+    for old in previous_shards:
+        if old.name not in current_shards:
+            old.unlink(missing_ok=True)
     return shards
 
 

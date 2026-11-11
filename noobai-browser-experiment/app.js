@@ -126,7 +126,6 @@ function ensureWorker() {
         setStatus("Model pack could not be loaded", data.message.split("\n")[0], "error");
         $("model-status").textContent = "Not loaded";
       }
-      $("load-model").disabled = !runtimeReady;
       setBusy(false);
     } else if (data.type === "cache-cleared") {
       modelReady = false;
@@ -143,7 +142,6 @@ function ensureWorker() {
     logLine("Worker error: " + (event.message || "Unknown worker error"));
     $("result-info").textContent = event.message || "Inference worker failed to start.";
     setProgress("Worker failed", 0);
-    $("load-model").disabled = !runtimeReady;
     setBusy(false);
   };
   worker.onmessageerror = () => {
@@ -223,7 +221,7 @@ async function loadModel(baseUrl = $("model-url").value.trim().replace(/\/+$/, "
   } catch (error) {
     logLine(error.message);
     setStatus("Could not start model loading", error.message, "error");
-    $("load-model").disabled = !runtimeReady;
+    $("load-model").disabled = false;
   }
 }
 
@@ -287,12 +285,17 @@ $("download").addEventListener("click", () => {
 
 $("clear-cache").addEventListener("click", async () => {
   if (!confirm("Remove the cached NoobAI model files from this browser? The next load will download them again.")) return;
+  localStorage.removeItem("noobai-browser-model-url");
   try {
     if (worker) {
       worker.postMessage({ op: "clear-cache" });
     } else {
       await clearModelCache();
+      modelReady = false;
       $("model-status").textContent = "Cache cleared";
+      $("load-model").textContent = "Load and cache model";
+      $("generate").disabled = true;
+      $("generate").textContent = "Load the model pack first";
       setProgress("Browser model cache cleared", 0);
       updateStorageStatus();
     }

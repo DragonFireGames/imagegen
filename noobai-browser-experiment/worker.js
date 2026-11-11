@@ -270,7 +270,12 @@ function makeSigmas(config, steps) {
     throw new Error("Unsupported timestep spacing: " + spacing);
   }
   sigmas[steps] = 0;
-  return { sigmas, timesteps };
+  // Diffusers EulerDiscreteScheduler scales the initial noise differently for
+  // leading spacing than for linspace/trailing. NoobAI's config uses leading.
+  const initNoiseSigma = spacing === "linspace" || spacing === "trailing"
+    ? sigmas[0]
+    : Math.sqrt(sigmas[0] * sigmas[0] + 1);
+  return { sigmas, timesteps, initNoiseSigma };
 }
 
 async function predictNoise(session, latents, sigma, timestep, condition, height, width) {
@@ -314,9 +319,9 @@ async function generate(message) {
   const latentWidth = width / 8;
   const latentSize = 4 * latentHeight * latentWidth;
   const rng = makeRng(seed);
-  const { sigmas, timesteps } = makeSigmas(activePack.manifest.scheduler || {}, steps);
+  const { sigmas, timesteps, initNoiseSigma } = makeSigmas(activePack.manifest.scheduler || {}, steps);
   let latents = makeNoise(latentSize, rng);
-  for (let i = 0; i < latentSize; i++) latents[i] *= sigmas[0];
+  for (let i = 0; i < latentSize; i++) latents[i] *= initNoiseSigma;
 
   status("Loading SDXL U-Net", "WebGPU");
   const unet = await createSession("unet", "webgpu");
