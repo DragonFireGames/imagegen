@@ -65,6 +65,44 @@ The same Hugging Face publisher also exposes a browser-ready [SDXL-Lightning LoR
 
 For Personal Ami, the conversion step must map its exact source tensor names to the target Illustrious graph weights. Text-encoder factors, UNet factors, fused projections, convolutional weights, rank/alpha, and any unsupported adapter variants all need explicit handling. Do not use the Lightning adapter's layer table for another LoRA.
 
+## ONNX Runtime's built-in LoRA API
+
+The repository currently vendors ONNX Runtime Web **1.31.1**. That build exports
+a JavaScript `LoraAdapter` API, but this is not a direct Safetensors loader.
+The API loads an ONNX Runtime `.onnx_adapter` file and activates it for an
+inference run. The ONNX graph must already contain the corresponding adapter
+parameters and names. The Personal Ami Kohya `.safetensors` file cannot be
+passed to `LoraAdapter` as-is.
+
+The API has meaningful runtime constraints: ONNX Runtime documents it as a
+WebAssembly-backend feature, it is not supported in WASM proxy mode, and
+`activeLoraAdapters` cannot be used with sessions using I/O binding (including
+GPU-preferred outputs and graph capture). The vendored build exports the API,
+but a complete adapter run against an SDXL WebGPU session has not been tested.
+See the [LoraAdapter API](https://onnxruntime.ai/docs/api/js/interfaces/LoraAdapter.html)
+and [RunOptions.activeLoraAdapters](https://onnxruntime.ai/docs/api/js/interfaces/InferenceSession.RunOptions.html).
+
+Microsoft Olive's `ExtractAdapters` pass can prepare an ONNX graph by exposing
+adapter weights as model inputs or external initializers, and its adapter tools
+include the `.onnx_adapter` format. This is a possible route for a graph
+intentionally exported with LoRA branches; it does not by itself convert an
+arbitrary Diffusers SDXL graph or prove that the Personal Ami mapping matches.
+See [Olive ExtractAdapters](https://microsoft.github.io/Olive/reference/pass.html)
+and [Olive adapter commands](https://microsoft.github.io/Olive/reference/cli.html).
+
+The candidate WAI Illustrious v17 package documents a different mechanism:
+per-component `weights-index.json` files that map weight offsets inside ONNX
+external-data shards for its own browser-side LoRA implementation. That is a
+custom weight-index format, not the ONNX Runtime `.onnx_adapter` format. We
+must inspect and validate its exact name/shape mapping before using it with
+Personal Ami. The package is also a WAI v17 fine-tune based on Illustrious v0.1,
+not the unmodified training checkpoint.
+
+The page's **Check local runtime** probe only confirms that the browser exposes
+WebGPU and the vendored runtime exports the adapter class. It does not create
+a session, fetch model weights, test an `.onnx_adapter`, or prove that the
+Personal Ami weights fit any exported graph.
+
 ## Runtime decision
 
 Do not try to bundle the Python Diffusers runtime into this static site. Diffusers depends on PyTorch and native/runtime facilities that are not directly compilable to browser WASM as-is.
