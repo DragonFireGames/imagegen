@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Illustrious Experiment</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; padding: 32px 16px; background: #111319; color: #e5e6eb; font: 15px/1.6 system-ui, sans-serif; }
+    main { width: min(900px, 100%); margin: 16px auto; }
+    a { color: #f08acb; }
+    .panel { padding: 24px; border: 1px solid #343740; border-radius: 12px; background: #191b21; }
+    .status { display: inline-flex; align-items: center; gap: 8px; color: #e5a64b; }
+    .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    code { color: #f3b6dc; }
+    li { margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <p><a href="../">← Back to FLUX.2 generator</a></p>
+    <h1>Illustrious Experiment</h1>
+    <section class="panel">
+      <p class="status">Browser runtime under development</p>
+      <p>This is a separate SDXL/Illustrious experiment. The existing FLUX.2 generator is not modified by this page.</p>
+      <h2>Target adapter</h2>
+      <p><a href="https://civitai.com/models/1309467/personal-ami-style-illustrious" target="_blank" rel="noreferrer">Personal Ami Style – Illustrious</a></p>
+      <ul>
+        <li>Base family: Illustrious / SDXL</li>
+        <li>Trigger word: <code>personal ami</code></li>
+        <li>Suggested LoRA strength: <code>0.6–0.9</code></li>
+      </ul>
+      <h2>Execution plan</h2>
+      <ol>
+        <li>Export the SDXL pipeline to ONNX once, using Python only as a conversion tool.</li>
+        <li>Run the exported components locally in this browser with ONNX Runtime WebGPU.</li>
+        <li>Load the LoRA locally and validate its effect against a Diffusers reference before exposing generation controls.</li>
+      </ol>
+      <p><strong>No Python inference server is intended.</strong> This page is a research scaffold; generation is not wired up yet.</p>
+      <p><a href="./README.md">Read the technical plan and validation checklist</a></p>
+    </section>
+  </main>
+</body>
+</html>
