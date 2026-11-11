@@ -61,6 +61,15 @@ function createEulerAncestralScheduler(config, steps) {
   if (config.timestep_spacing !== "leading") {
     throw new Error("Unexpected base timestep_spacing: " + config.timestep_spacing);
   }
+  if (config.rescale_betas_zero_snr) {
+    throw new Error("This test does not implement rescale_betas_zero_snr.");
+  }
+  if (config.use_karras_sigmas) {
+    throw new Error("This test expects the base configuration's non-Karras sigma schedule.");
+  }
+  if (config.final_sigmas_type && config.final_sigmas_type !== "zero") {
+    throw new Error("Unexpected final sigma policy: " + config.final_sigmas_type);
+  }
 
   const betas = new Float32Array(trainSteps);
   const alphasCumprod = new Float32Array(trainSteps);
@@ -69,16 +78,16 @@ function createEulerAncestralScheduler(config, steps) {
   let cumulative = 1;
 
   for (let i = 0; i < trainSteps; i++) {
-    const rootBeta = start + (end - start) * (i / (trainSteps - 1));
-    const beta = rootBeta * rootBeta;
+    const rootBeta = Math.fround(start + (end - start) * (i / (trainSteps - 1)));
+    const beta = Math.fround(rootBeta * rootBeta);
     betas[i] = beta;
-    cumulative *= 1 - beta;
+    cumulative = Math.fround(cumulative * Math.fround(1 - beta));
     alphasCumprod[i] = cumulative;
   }
 
   const trainingSigmas = new Float32Array(trainSteps);
   for (let i = 0; i < trainSteps; i++) {
-    trainingSigmas[i] = Math.sqrt((1 - alphasCumprod[i]) / alphasCumprod[i]);
+    trainingSigmas[i] = Math.fround(Math.sqrt((1 - alphasCumprod[i]) / alphasCumprod[i]));
   }
 
   const ratio = Math.floor(trainSteps / steps);
@@ -184,6 +193,7 @@ button.addEventListener("click", async () => {
     const config = await response.json();
 
     addRow("Base scheduler config", config._class_name + " · " + (config._diffusers_version || "version unspecified"));
+    addRow("Sampler update", "EulerAncestralDiscreteScheduler (euler_a)");
     addRow("Beta schedule", config.beta_schedule + " · " + config.beta_start + " → " + config.beta_end);
     addRow("Prediction type", config.prediction_type);
     addRow("Timestep spacing", config.timestep_spacing + " · offset " + config.steps_offset);
