@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101114">
+  <meta name="description" content="FLUX.1-dev reference and browser WebGPU experiments.">
+  <title>FLUX.1-dev Experiment — Imagegen</title>
+  <link rel="stylesheet" href="../styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <a class="brand" href="../" aria-label="Back to Imagegen">
+        <span class="brand-mark" aria-hidden="true">✳</span>
+        <span><span class="eyebrow">Separate model experiment</span><strong>FLUX.1-dev</strong></span>
+      </a>
+      <span class="pill">FLUX.1 · NOT FLUX.2</span>
+    </header>
+    <main>
+      <section class="intro">
+        <div>
+          <span class="eyebrow">Natural-language image generation</span>
+          <h1>FLUX.1-dev + uncensored LoRA</h1>
+          <p>This experiment targets the FLUX.1-dev model and the Flux-Uncensored-V2 adapter. It is separate from the FLUX.2 Klein and NoobAI browser apps.</p>
+        </div>
+      </section>
+      <section class="layout">
+        <article class="panel">
+          <h2>Browser/WebGPU preflight</h2>
+          <p>Start here in the Chrome browser where you eventually want to generate images. It reports the WebGPU adapter limits, checks FP16 shader support, and runs a small GPU matrix benchmark. It does not download model weights.</p>
+          <a class="generate" href="./browser/" style="display:inline-block;text-decoration:none">Open browser preflight</a>
+        </article>
+        <article class="panel">
+          <h2>Colab reference generation</h2>
+          <p>Known-good Diffusers reference using FLUX.1-dev + Flux-Uncensored-V2, with the descriptive prompt and reference seed.</p>
+          <p><a href="https://colab.research.google.com/github/DragonFireGames/imagegen/blob/main/flux-experiment/FLUX_Dev_Uncensored_Reference.ipynb" target="_blank" rel="noreferrer">Open reference notebook</a></p>
+        </article>
+        <article class="panel">
+          <h2>4-bit performance benchmark</h2>
+          <p>Tests transformer-only NF4 quantization on Colab while keeping the text encoders and VAE in FP16. This is a separate quality/performance comparison, not a browser benchmark.</p>
+          <p><a href="https://colab.research.google.com/github/DragonFireGames/imagegen/blob/main/flux-experiment/FLUX_Dev_4bit_Benchmark.ipynb" target="_blank" rel="noreferrer">Open 4-bit notebook</a></p>
+        </article>
+      </section>
+      <section class="panel">
+        <h2>Implementation sequence</h2>
+        <ol>
+          <li>Measure the actual target browser's WebGPU limits and matrix throughput.</li>
+          <li>Inspect official FLUX.1-dev ONNX graph compatibility and quantized operator support.</li>
+          <li>Run one real transformer block in Chrome and compare its output with the Colab reference.</li>
+          <li>Build the full local pipeline only after numerical correctness is established.</li>
+        </ol>
+      </section>
+    </main>
+    <footer><span>FLUX.1-dev · Browser and Colab experiments</span><span><a href="../">Imagegen home</a></span></footer>
+  </div>
+</body>
+</html>
