@@ -1,9 +1,10 @@
 # Offline export dependencies. The browser app itself needs none of these.
-# PyTorch is installed separately by the Colab notebook from a CUDA-specific wheel index.
+# PyTorch is supplied by the CUDA-enabled Colab runtime; do not replace it here.
 diffusers>=0.31.0,<0.40.0
 transformers>=4.44.0,<5.0
 accelerate>=1.1.0
 safetensors>=0.4.0
-onnx>=1.17.0
-numpy<2.0
+onnx>=1.19.0,<2.0
+numpy>=2.1,<2.6
+ml_dtypes>=0.5.1
 huggingface_hub>=0.26.0
