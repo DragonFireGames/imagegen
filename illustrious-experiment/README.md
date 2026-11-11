@@ -265,8 +265,8 @@ Both routes target browser-native inference: model computation occurs inside the
 - unet-abc-chain-test.js: sequential full A→B→C chain; keeps only A's required CPU-side FP16 outputs while releasing A and B before loading the next partition; verifies final FP16 out_sample [1,4,128,128]; awaits browser validation.
 - All component/UNet/prompt smoke tests acquire the same shared lock before any download or WebGPU allocation and release it in `finally`; concurrent heavy tests are refused with a visible status error.
 - vae-encoder-smoke-test.js: isolated zero-image FP16 VAE encoder inference; discovers input shape through session metadata, checks every output for finite FP16 values; awaits browser validation.
-- prompt-conditioning-smoke-test.js: real prompt through both Transformers.js tokenizers and CLIP encoders sequentially; assembles SDXL hidden states [1,77,2048] and pooled embedding [1,1280]; awaits browser validation.
-- scheduler-math-smoke-test.js: loads the pinned Illustrious v0.1 scheduler config and runs deterministic synthetic Euler ancestral steps; checks timesteps, sigma monotonicity, sigma-up/down identity, repeatability and finite output; no ONNX or GPU allocation.
+- prompt-conditioning-smoke-test.js: positive + negative prompts through both Transformers.js tokenizer folders and CLIP encoders sequentially; assembles CFG conditioning pairs (positive/negative encoder_hidden_states [1,77,2048] and pooled text_embeds [1,1280]); awaits browser validation. The browser bundle import and int64 tensor conversion match the existing main app.
+- scheduler-math-smoke-test.js: loads the pinned Illustrious v0.1 scheduler config and runs deterministic synthetic Euler ancestral steps; checks the leading timestep schedule, sigma monotonicity, sigma-up/down identity, seeded repeatability and finite output; no ONNX or GPU allocation.
 - Full image-generation inference is not wired up yet.
 
 ## Offline LoRA fusion and ONNX reference export
@@ -297,7 +297,7 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [x] Run the staged UNET_A → UNET_B chain: actual A tensors consumed by B; 8.8 MiB CPU intermediates; A 106.5 s, B 150.5 s, total 275.9 s; finite FP16 hidden_out [1,1280,64,64].
 - [ ] Run the full sequential UNET_A → UNET_B → UNET_C chain and verify final out_sample [1,4,128,128].
 - [ ] Run the VAE encoder zero-image WebGPU smoke test; inspect output tensor contract before attempting encode/decode round-trip.
-- [ ] Run real-prompt dual-tokenizer + CLIP conditioning test; verify the combined SDXL tensors [1,77,2048] and [1,1280].
+- [ ] Run positive + negative prompt dual-tokenizer / dual-CLIP conditioning test; verify both CFG tensors [1,77,2048] and pooled embeddings [1,1280].
 - [ ] Run header-only Personal Ami → ONNX weights-index mapping and inspect unmatched or shape-incompatible pairs across all 5 indexed components.
 - [ ] Run one-pair local BF16 payload test; confirm byte decoding and low-rank delta math on a representative CLIP-L linear layer.
 - [ ] Run the scheduler-only Euler ancestral math test against the Illustrious beta/timestep config; then integrate scheduler with the real three-part UNet chain after that chain passes.
@@ -321,5 +321,7 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [ExecuTorch WebGPU operator support](https://docs.pytorch.org/executorch/stable/backends/webgpu/webgpu-op-support.html)
 - [ONNX Runtime WebGPU guide](https://onnxruntime.ai/docs/tutorials/web/ep-webgpu.html)
 - [WAI Illustrious ONNX/WebGPU package](https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17)
+- [Illustrious v0.1 scheduler configuration](https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0/blob/b41f1c324e32e03f9e104bd9ace0992e4e135597/scheduler/scheduler_config.json)
+- [Diffusers Euler ancestral scheduler implementation](https://github.com/huggingface/diffusers/blob/main/src/diffusers/schedulers/scheduling_euler_ancestral_discrete.py)
 - [Illustrious XL v0.1 model card](https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0)
 - [Personal Ami Style - Illustrious](https://civitai.com/models/1309467/personal-ami-style-illustrious)
