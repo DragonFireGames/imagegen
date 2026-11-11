@@ -1,0 +1,10 @@
+# Install a PyTorch build appropriate for your machine first:
+# https://pytorch.org/get-started/locally/
+diffusers>=0.35.1
+transformers>=4.48.0
+accelerate>=1.2.0
+peft>=0.14.0
+safetensors>=0.4.5
+optimum[onnxruntime]>=1.24.0
+onnx>=1.17.0
+onnxruntime>=1.20.0
