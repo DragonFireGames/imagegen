@@ -182,6 +182,17 @@
     </section>
 
     <section class="panel">
+      <p class="eyebrow">Next: test the partition boundary</p>
+      <h2>UNET_A → UNET_B sequential WebGPU chain</h2>
+      <p>Run UNET_A again with zero inputs, copy only the five FP16 tensors that UNET_B consumes (hidden, emb, skip_6, skip_7, skip_8), release A's session, then load UNET_B and feed it those exact A outputs. The text-conditioning tensor is zero-filled in both stages, so this validates the graph boundary and B's operators—not prompt conditioning or image quality.</p>
+      <p class="notice">This loads both multi-gigabyte partitions sequentially, not simultaneously. A's weights are about 2.32 GiB; B's exact size is read from the manifest when the test starts. Close memory-heavy tabs first. A may be fetched again if the browser does not retain its external shards in cache. Do not run the standalone UNET_A test at the same time.</p>
+      <button class="button" id="testUnetAB" type="button">Test UNET_A → UNET_B chain</button>
+      <p class="status" id="unetABStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="unetABSummary" hidden></div>
+      <p class="notice">A successful result validates A-to-B tensor handoff and UNET_B's output. UNET_C, the final denoiser output, scheduler, and LoRA remain untested.</p>
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Runtime diagnostics</p>
       <h2>Check browser and ONNX Runtime support</h2>
       <p>This local probe checks WebGPU, relevant adapter limits, the ONNX Runtime version, and the adapter API surface. ONNX Runtime's built-in LoRA adapter API is WASM-only, so it is not usable by this experiment's WebGPU execution path.</p>
@@ -205,5 +216,6 @@
   <script type="module" src="./vae-smoke-test.js"></script>
   <script type="module" src="./unet-metadata-inspector.js"></script>
   <script type="module" src="./unet-a-smoke-test.js"></script>
+  <script type="module" src="./unet-ab-chain-test.js"></script>
 </body>
 </html>
