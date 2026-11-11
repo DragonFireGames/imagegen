@@ -302,7 +302,6 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [ ] Run header-only Personal Ami → ONNX weights-index mapping and inspect unmatched or shape-incompatible pairs across all 5 indexed components.
 - [ ] Run one-pair local BF16 payload test; confirm BF16 decoding and low-rank delta math on a representative CLIP-L linear layer.
 - [ ] Run full local BF16 payload integrity scan over all 2,958 tensors / 114.0M parameters; verify byte ranges and all finite values.
-- [ ] Run one-pair local BF16 payload test; confirm byte decoding and low-rank delta math on a representative CLIP-L linear layer.
 - [ ] Run the scheduler-only Euler ancestral math test against the Illustrious beta/timestep config; then integrate scheduler with the real three-part UNet chain after that chain passes.
 - [x] Add an offline Diffusers fusion / generic ONNX reference export script (Python syntax and `--help` pass; synthetic BF16 Safetensors test reproduced the real scan's 2,958 keys, 986 rank-32 pairs, 986 alpha keys, and three component counts; deliberately malformed rank was rejected). Real Personal Ami loading/fusion is still pending.
 - [x] Inspect the exact Personal Ami LoRA header and tensor-key layout in the browser (actual report recorded above).
