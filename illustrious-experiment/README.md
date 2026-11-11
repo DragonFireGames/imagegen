@@ -166,9 +166,15 @@ Both SDXL text encoders and the VAE decoder have now passed isolated WebGPU
 inference tests.
 
 The next target is the split UNet. Do not load all three graphs at once yet:
-first inspect each graph's I/O contract, the external-data manifest, the
-three-part chaining/partition convention, and the `weights-index.json` format.
-Only then design staged tests with explicit memory controls.
+the three FP16 parts total about 5.14 GB of weights, before runtime allocations.
+The new metadata-only inspector fetches the three small ONNX protobuf graph
+files and their `weights-index.json` files (about 3.8 MB total), verifies their
+manifest size and SHA-256 records, and parses graph inputs/outputs, tensor
+types/shapes, node/initializer counts, external-data references, and sample
+index entries. It deliberately does not fetch any external weight shards or
+create an ONNX session. The user has not run this inspection yet. Use its
+results to understand the partition chain and adapter-name mapping before
+designing any staged UNet inference tests.
 
 ## Runtime decision
 
@@ -198,6 +204,7 @@ Both routes target browser-native inference: model computation occurs inside the
 - component-smoke-test.js: CLIP-L graph and dummy-token WebGPU inference; passed in the user's browser (221.3 MiB, 15.6 s, output [1, 77, 768], FP16, finite).
 - text-encoder-2-smoke-test.js: passed in the user's browser; 1.29 GiB, int64 [1, 77] input, FP16 outputs [1, 77, 1280] and [1, 1280], all 99,840 values finite, 79.1 seconds.
 - vae-smoke-test.js: passed in the user's browser; FP16 input [1, 4, 128, 128], FP16 image output [1, 3, 1024, 1024], all finite, 16.1 seconds.
+- unet-metadata-inspector.js: fetches and hash-verifies only the three small ONNX graph protobufs and three weights-index JSON files; parses I/O contracts and index structure without fetching model tensor shards or allocating GPU sessions. Awaits browser results.
 - Full image-generation inference is not wired up yet.
 
 ## Offline LoRA fusion and ONNX reference export
