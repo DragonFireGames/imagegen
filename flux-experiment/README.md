@@ -25,3 +25,11 @@ The base Hugging Face repository is gated: accept its access conditions and auth
 Open [the Colab notebook](./FLUX_Dev_Uncensored_Reference.ipynb), select a CUDA runtime, provide a Hugging Face token with access to the base model, and run the cells. The notebook uses sequential CPU offload as a conservative memory option; it may be slow and depends on available host RAM.
 
 This experiment is for fictional adult subjects only. Do not use it to create sexual content involving minors or non-consensual real people.
+
+## Browser preflight
+
+The first browser/WebGPU feasibility page is at [`browser/`](./browser/) and is deployed at:
+
+https://dragonfiregames.github.io/imagegen/flux-experiment/browser/
+
+Run its device report and 256/512 matrix benchmark in the target Chrome browser before attempting a model download. The benchmark is only a GPU microbenchmark, not a FLUX generation estimate.
