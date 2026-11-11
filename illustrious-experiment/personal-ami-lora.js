@@ -4,8 +4,8 @@ const EXPECTED = { text_encoder: 66, text_encoder_2: 192, unet_a: 350, unet_b: 3
 const FINAL_CLIP_L = /^text_model_encoder_layers_11_(?:mlp_fc1|mlp_fc2|self_attn_(?:k_proj|out_proj|q_proj|v_proj))$/;
 
 function groupForStem(stem) {
-  if (stem.startsWith("lora_te1_")) return { component: "text_encoder", module: stem.slice(10) };
-  if (stem.startsWith("lora_te2_")) return { component: "text_encoder_2", module: stem.slice(10) };
+  if (stem.startsWith("lora_te1_")) return { component: "text_encoder", module: stem.slice(9) };
+  if (stem.startsWith("lora_te2_")) return { component: "text_encoder_2", module: stem.slice(9) };
   if (stem.startsWith("lora_unet_")) return { component: "unet", module: stem.slice(10) };
   return null;
 }
@@ -321,6 +321,7 @@ export async function preparePersonalAmiComponent(file, manifest, componentName,
       if (found) break;
     }
     if (!found) {
+      if (pair.group.component === "unet") continue;
       if (componentName === "text_encoder" && FINAL_CLIP_L.test(pair.group.module)) { skipped++; continue; }
       throw new Error("No " + componentName + " index entry for " + pair.stem + " (tried " + keys.join(" | ") + ").");
     }
