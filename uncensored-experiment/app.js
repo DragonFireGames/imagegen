@@ -35,8 +35,8 @@ async function checkEngine() {
     if (status.ready) {
       connectionDot.classList.add("ready");
       connectionLabel.textContent = "Local engine ready";
-      setupTitle.textContent = "Qwen engine is ready";
-      setupDetail.textContent = "All model files and the local sd-cli executable were found. Generation is processed on this machine.";
+      setupTitle.textContent = "Pony engine is ready";
+      setupDetail.textContent = "The sd-cli executable and Pony Diffusion model weights were found. Generation is processed on this machine.";
       generateButton.disabled = false;
       generateButton.textContent = "Generate locally";
       $("result-info").textContent = "Ready · " + (status.offloadToCpu ? "CPU offload enabled" : "CPU offload disabled");

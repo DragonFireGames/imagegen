@@ -32,9 +32,7 @@ function configuredPath(configKey, envKey, fallback) {
 
 const paths = {
   cli: configuredPath("sdCli", "SD_CLI", ".local/stable-diffusion.cpp/build/bin/sd-cli"),
-  diffusion: configuredPath("diffusionModel", "QWEN_DIFFUSION_MODEL", ".local/qwen-image-2.1/qwen-image-2.1-UC-Q4_K_M.gguf"),
-  textEncoder: configuredPath("textEncoder", "QWEN_TEXT_ENCODER", ".local/qwen-image-2.1/Qwen3-VL-8B-Instruct-Q4_K_M.gguf"),
-  vae: configuredPath("vae", "QWEN_VAE", ".local/qwen-image-2.1/qwen_image_2.1_vae_bf16.safetensors"),
+  model: configuredPath("model", "PONY_MODEL", ".local/pony-diffusion-v6-xl/pony-diffusion-v6-xl-Q8_0.gguf"),
   offloadToCpu: localConfig.offloadToCpu !== false
 };
 
@@ -65,20 +63,16 @@ function getStatus() {
   };
 
   const engine = inspect(paths.cli);
-  const diffusion = inspect(paths.diffusion);
-  const textEncoder = inspect(paths.textEncoder);
-  const vae = inspect(paths.vae);
+  const model = inspect(paths.model);
   const missing = [
-    !engine.exists && "sd-cli executable",
-    !diffusion.exists && "Qwen-Image-2.1 diffusion weights",
-    !textEncoder.exists && "Qwen3-VL text encoder",
-    !vae.exists && "Qwen-Image-2.1 VAE"
+    !engine.exists && "stable-diffusion.cpp sd-cli executable",
+    !model.exists && "Pony Diffusion V6 XL model weights"
   ].filter(Boolean);
 
   return {
     ready: missing.length === 0 && !configWarning,
     engine,
-    models: { diffusion, textEncoder, vae },
+    model,
     offloadToCpu: paths.offloadToCpu,
     missing,
     warning: configWarning
@@ -108,15 +102,15 @@ function validateGeneration(body) {
   if (!prompt || prompt.length > 6000) throw new Error("Enter a prompt (maximum 6,000 characters).");
   if (negativePrompt.length > 4000) throw new Error("Negative prompt must be 4,000 characters or fewer.");
   if (!Number.isInteger(width) || !Number.isInteger(height) ||
-      width < 512 || height < 512 || width > 2048 || height > 2048 ||
-      width % 32 !== 0 || height % 32 !== 0) {
-    throw new Error("Width and height must be 512–2048 pixels and divisible by 32.");
+      width < 512 || height < 512 || width > 1536 || height > 1536 ||
+      width % 64 !== 0 || height % 64 !== 0) {
+    throw new Error("Width and height must be 512–1536 pixels and divisible by 64.");
   }
-  if (!Number.isInteger(steps) || steps < 10 || steps > 80) {
-    throw new Error("Steps must be an integer from 10 to 80.");
+  if (!Number.isInteger(steps) || steps < 10 || steps > 60) {
+    throw new Error("Steps must be an integer from 10 to 60.");
   }
-  if (!Number.isFinite(cfgScale) || cfgScale < 1 || cfgScale > 10) {
-    throw new Error("Guidance scale must be between 1 and 10.");
+  if (!Number.isFinite(cfgScale) || cfgScale < 1 || cfgScale > 12) {
+    throw new Error("Guidance scale must be between 1 and 12.");
   }
   if (!Number.isInteger(requestedSeed) || requestedSeed < -1 || requestedSeed > 2147483647) {
     throw new Error("Seed must be -1 (random) or an integer from 0 to 2147483647.");
@@ -135,7 +129,7 @@ function validateGeneration(body) {
 
 function startGeneration(input) {
   const id = randomUUID();
-  const outputName = "qwen-" + id + ".png";
+  const outputName = "pony-" + id + ".png";
   const outputPath = join(OUTPUT_DIR, outputName);
   const job = {
     id,
@@ -151,23 +145,23 @@ function startGeneration(input) {
   activeJobId = id;
 
   const args = [
-    "--diffusion-model", paths.diffusion,
-    "--llm", paths.textEncoder,
-    "--vae", paths.vae,
+    "--model", paths.model,
     "--prompt", input.prompt,
     "--negative-prompt", input.negativePrompt,
     "--width", String(input.width),
     "--height", String(input.height),
     "--steps", String(input.steps),
     "--cfg-scale", String(input.cfgScale),
-    "--sampling-method", "euler",
+    "--sampling-method", "euler_a",
+    "--clip-skip", "2",
     "--seed", String(input.seed),
     "--output", outputPath,
-    "--log-level", "verbose"
+    "--log-level", "verbose",
+    "--vae-tiling"
   ];
   if (paths.offloadToCpu) args.push("--offload-to-cpu");
 
-  addLog(job, "Starting local sd-cli. Seed " + input.seed + ".\n");
+  addLog(job, "Starting local Pony Diffusion V6 XL inference. Seed " + input.seed + ".\n");
   const child = spawn(paths.cli, args, {
     cwd: PROJECT_ROOT,
     stdio: ["ignore", "pipe", "pipe"],
@@ -279,7 +273,7 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "GET" && pathname.startsWith("/outputs/")) {
       const filename = basename(pathname.slice("/outputs/".length));
-      if (!/^qwen-[0-9a-f-]{36}\.png$/i.test(filename)) {
+      if (!/^pony-[0-9a-f-]{36}\.png$/i.test(filename)) {
         json(res, 404, { error: "File not found." });
         return;
       }
@@ -311,7 +305,7 @@ if (!Number.isInteger(port) || port < 1024 || port > 65535) {
 }
 
 server.listen(port, "127.0.0.1", () => {
-  console.log("Qwen Image 2.1 local experiment: http://127.0.0.1:" + port);
+  console.log("Pony Diffusion V6 XL local experiment: http://127.0.0.1:" + port);
   console.log("Bound to 127.0.0.1 only; requests and model inference stay on this machine.");
   const status = getStatus();
   if (!status.ready) console.log("Setup needed: " + status.missing.join(", "));

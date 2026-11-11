@@ -1,87 +1,77 @@
-# Unfiltered Lab — Qwen-Image-2.1
+# Unfiltered Lab — Pony Diffusion V6 XL
 
-This is an isolated experiment. It does not modify the existing FLUX.2 Klein WebGPU pipeline.
+This is an isolated local experiment. It does not modify the existing FLUX.2 Klein WebGPU pipeline.
 
-## Model choice
+## Why this model
 
-As of November 11, 2026, Qwen-Image-2.1 is at the top of Artificial Analysis's open-weights text-to-image leaderboard (1046 Elo, 95% interval 1034–1058; 6,184 comparisons). FLUX 3 Image Klein and Fibo 2.0 are statistically close behind. Qwen-Image-2.1 is a 7B model and supports native 2K output.
+Pony Diffusion V6 XL is an SDXL fine-tune focused on stylized anime, cartoon, furry, and pony art. Its creator reports about 2.6 million training images, with an approximately 1:1:1 balance across safe, questionable, and explicit ratings. Images were captioned with both natural-language captions and tags where available. The creator also states that explicit content involving underage characters was filtered out.
 
-The local Qwen Image inference pipeline ships without a separate safety checker/content-filter stage. A community GGUF distribution labels the model "Uncensored", but its card says the weights are quantized from the original upstream Qwen-Image-2.1. The practical meaning here is **no extra app-side prompt blacklist or output filter**; the original model's learned training behavior still applies. This is not a guarantee that every concept will render exactly as requested.
+That is a materially different starting point from a model that merely has no safety checker. This model was trained with examples from all three content ratings. It still has learned biases and limitations; no model can guarantee that every prompt will be followed.
 
-An independently published test found that ablating the text encoder's refusal direction made essentially no measurable difference to image outputs across 45 sensitive prompts: the image pipeline already had no safety checker, while the 7B denoiser's training still determines what it can draw. For that reason, this experiment uses the supported stock Qwen3-VL text encoder rather than adding an unvalidated "uncensor" patch.
+## Negative prompting and settings
 
-## Negative prompt behavior
+The UI sends the positive prompt and negative prompt separately to stable-diffusion.cpp. Negative conditioning is real classifier-free guidance, controlled by the CFG slider. The default is 7.0 CFG, Euler a, 25 steps, and clip-skip 2. These are conventional Pony V6 settings; adjust them if the composition or style benefits from different guidance.
 
-Qwen-Image-2.1 supports true classifier-free guidance (CFG). The negative prompt is passed separately to sd-cli with `--negative-prompt`; `--cfg-scale` controls its influence. At guidance scale 1, the negative branch is disabled/has no effect. The UI defaults to 6.0, matching the stable-diffusion.cpp Qwen 2.1 example. Higher guidance costs more compute and can make results worse if pushed too far.
+Pony uses score and rating tags. Useful tags include:
+- Quality: score_9, score_8_up, score_7_up
+- Rating: rating_safe, rating_questionable, rating_explicit
 
-## Why the runtime is native
+The app does not automatically prepend safe or add nsfw to the negative prompt. Those are SFW-oriented prompt recommendations found in some model guides, not a required model-level safety mechanism. The initial negative prompt is only for image quality and anatomy artifacts; users can edit or clear it.
 
-This model is not being represented as a browser WebGPU model. The 7B DiT, 8B Qwen3-VL text encoder, and VAE are too large to call the existing ONNX WebGPU pipeline without a separate export, operator validation, and memory work. The experiment uses [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp), which implements Qwen-Image-2.1, supports GGUF, and has an Apple Metal backend. A small Node.js bridge serves this page only on `127.0.0.1` and invokes the native CLI with argument arrays (no shell interpolation). Prompts and generated images stay on the local machine.
+## Runtime
 
-The GitHub Pages page is a setup/research landing page. To generate, run the local server and open its localhost page.
+The model is not being represented as a browser WebGPU model. Its GGUF weights run locally through stable-diffusion.cpp, which supports SDXL and Apple's Metal backend. The Node.js bridge serves the page on 127.0.0.1 only and invokes the native CLI with an argument array (no shell interpolation). Prompts and generated images stay on the local machine.
+
+The GitHub Pages page is an informational/setup landing page. Actual generation requires the local server.
 
 ## macOS setup
 
-Prerequisites: Xcode Command Line Tools, CMake, Git, curl, and Node.js 18 or newer. The script builds the Metal version of stable-diffusion.cpp at a pinned commit and downloads the model assets into `.local/`; no model weights are committed to Git.
+Prerequisites: Xcode Command Line Tools, CMake, Git, curl, and Node.js 18 or newer.
 
 From the repository root:
 
-```bash
-./uncensored-experiment/setup-macos.sh
-node uncensored-experiment/server.mjs
-```
+    ./uncensored-experiment/setup-macos.sh
+    node uncensored-experiment/server.mjs
 
-Then open [http://127.0.0.1:8788](http://127.0.0.1:8788).
+Then open http://127.0.0.1:8788.
 
-The default `quality` profile downloads:
-- Qwen-Image-2.1 Q4_K_M diffusion GGUF: 4.60 GB
-- Qwen3-VL-8B-Instruct Q4_K_M text encoder: 5.03 GB
-- Qwen-Image-2.1 BF16 VAE: 676 MB
+The default Q8 profile downloads one GGUF file of about 4.18 GB. On a machine with limited available memory, use:
 
-That is about 10.3 GB of weights on disk, before temporary inference buffers. A machine with only 9 GB of total unified memory may not have enough headroom, even with CPU offload. For a smaller memory footprint, run:
+    MODEL_PROFILE=low-memory ./uncensored-experiment/setup-macos.sh
 
-```bash
-MODEL_PROFILE=low-memory ./uncensored-experiment/setup-macos.sh
-```
+The Q4_K_S file is about 2.8 GB and trades some fidelity for a smaller working set. Start with 768×768. Increase image area only after a successful generation.
 
-The low-memory profile uses Q2_K diffusion and text-encoder weights; the combined downloads are much smaller, but quantization can reduce prompt and image fidelity. Start with 512×512 or 768×768. Increase resolution only after a successful test.
+The setup script builds stable-diffusion.cpp with Metal at a pinned upstream commit. Model weights are stored under .local/ and are not committed to Git. The setup script can be rerun safely; completed downloads are reused.
 
 ## Controls
 
 - Positive prompt and negative prompt.
-- Guidance scale 1–10. Negative conditioning is effective only above 1.
-- Width/height 512–2048, multiples of 32.
-- Steps 10–80.
+- CFG scale 1–12.
+- Width/height 512–1536, multiples of 64.
+- 10–60 sampling steps.
 - Fixed or random seed.
-- PNG output and raw inference log.
+- PNG output and inference logs.
 
-The server permits one generation at a time and binds to loopback only. It does not add authentication because it is not exposed to the network; do not change the bind address or expose it publicly without adding authentication and origin checks.
+The server permits one generation at a time and binds to loopback only. Do not expose it publicly without adding authentication and origin checks.
 
-## Manual engine configuration
+## Model files and quantization
 
-If you already have a suitable sd-cli build and model files, create `uncensored-experiment/config.local.json` (this file is ignored by Git):
+The original Pony Diffusion V6 XL checkpoint is distributed as safetensors. For this experiment, we use a conversion prepared for stable-diffusion.cpp:
+- Q8_0: about 4.18 GB, better fidelity.
+- Q4_K_S: about 2.8 GB, lower memory use.
 
-```json
-{
-  "sdCli": ".local/stable-diffusion.cpp/build/bin/sd-cli",
-  "diffusionModel": ".local/qwen-image-2.1/qwen-image-2.1-UC-Q4_K_M.gguf",
-  "textEncoder": ".local/qwen-image-2.1/Qwen3-VL-8B-Instruct-Q4_K_M.gguf",
-  "vae": ".local/qwen-image-2.1/qwen_image_2.1_vae_bf16.safetensors",
-  "offloadToCpu": true
-}
-```
+The conversion repository says these files were converted with stable-diffusion.cpp's own conversion path so that the tensor names load directly. This avoids having to manually assemble separate CLIP and VAE files.
 
-The paths are relative to the repository root unless absolute paths are used. Environment variables can override them: `SD_CLI`, `QWEN_DIFFUSION_MODEL`, `QWEN_TEXT_ENCODER`, `QWEN_VAE`, and `PORT`.
+## Licensing
 
-For Linux or Windows, build [stable-diffusion.cpp](https://github.com/leejet/stable-diffusion.cpp) with the backend appropriate to your GPU, then use the manual configuration. Only the macOS Metal setup script is provided here.
+Important distinction: the model is open weights, but it is not OSI-approved open-source software. The original Pony Diffusion V6 XL model is under a modified Fair AI Public License 1.0-SD. The added model terms prohibit inference on websites or applications with monetization without permission; commercial use requires contacting the creator. The base license also prohibits harmful uses including exploiting or harming minors, harassment, and several other harmful activities. Read the original model's terms before redistribution or commercial use.
 
-## Licensing and attribution
+The quantized GGUF repository's metadata lists CreativeML OpenRAIL-M, but a format conversion does not replace the original model's license. This experiment follows the original model's modified Fair AI license.
 
-"Open source" needs a licensing caveat: Qwen's image model and VAE are **not Apache/MIT open source**. The Qwen-Image-2.1 model and VAE use the Qwen Research License Agreement, which grants non-commercial use only; separate commercial permission is required. The text encoder uses Apache-2.0. Review the terms yourself before use or redistribution.
+- Original Pony Diffusion V6 XL and model card: https://huggingface.co/LyliaEngine/Pony_Diffusion_V6_XL
+- Creator's source model page: https://civitai.com/models/257749
+- GGUF conversion and stable-diffusion.cpp instructions: https://huggingface.co/off-grid-ai/pony-diffusion-v6-xl-GGUF
+- Fair AI Public License 1.0-SD text: https://freedevproject.org/faipl-1.0-sd/
+- stable-diffusion.cpp source: https://github.com/leejet/stable-diffusion.cpp
 
-- [Qwen-Image-2.1 model / license](https://huggingface.co/Qwen/Qwen-Image-2.1)
-- [Uncensored GGUF distribution and source provenance](https://huggingface.co/YueFong/Qwen-Image-2.1-Uncensored-GGUF)
-- [Qwen3-VL-8B-Instruct GGUF text encoder](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF)
-- [Qwen VAE file](https://huggingface.co/Comfy-Org/Qwen-Image-2.1/blob/main/vae/qwen_image_2.1_vae_bf16.safetensors)
-- [stable-diffusion.cpp Qwen-Image-2.1 documentation](https://github.com/leejet/stable-diffusion.cpp/blob/master/docs/qwen_image_2.1.md)
-- [Artificial Analysis open-weights text-to-image leaderboard](https://artificialanalysis.ai/image/leaderboard/text-to-image/open-weights)
+This is an adult-capable model trained on explicit-rated images, but it is not a promise of unrestricted behavior or unrestricted licensing. The model creator reports filtering explicit underage content from its training data; use it lawfully and do not use it to create exploitative or non-consensual material.

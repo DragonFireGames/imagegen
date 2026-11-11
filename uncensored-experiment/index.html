@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#101114">
-  <meta name="description" content="Local Qwen-Image-2.1 generation with true classifier-free guidance and negative prompts.">
+  <meta name="description" content="Local Pony Diffusion V6 XL generation, trained with safe, questionable, and explicit image ratings, with negative prompts and classifier-free guidance.">
   <title>Unfiltered Lab — Imagegen</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
@@ -21,14 +21,14 @@
     <main>
       <section class="intro">
         <div>
-          <span class="eyebrow">Qwen-Image-2.1 · 7B · local inference</span>
+          <span class="eyebrow">Pony Diffusion V6 XL · SDXL · local inference</span>
           <h1>More control, fewer layers.</h1>
-          <p>Independent model and runtime from the FLUX.2 Klein page. Positive and negative prompts are both passed to the sampler. No app-side prompt blacklist or hosted generation service.</p>
+          <p>Trained on stylized art with safe, questionable, and explicit ratings represented in the dataset. Positive and negative prompts go directly to the local sampler; this app adds no prompt blacklist or hosted generation service.</p>
         </div>
         <div class="model-stats">
-          <div><strong>Top open weights</strong><span>Current text-to-image leaderboard</span></div>
+          <div><strong>2.6M images</strong><span>Creator-reported training set</span></div>
+          <div><strong>1:1:1 ratings</strong><span>Safe · questionable · explicit</span></div>
           <div><strong>True CFG</strong><span>Negative prompt + guidance scale</span></div>
-          <div><strong>Local native</strong><span>Metal via stable-diffusion.cpp</span></div>
         </div>
       </section>
 
@@ -45,53 +45,60 @@
           <div class="panel-title"><h2>Prompt</h2><span class="pill">NO APP FILTER</span></div>
 
           <label for="prompt">Positive prompt</label>
-          <textarea id="prompt" maxlength="6000" required>A cinematic editorial photograph of a red fox sitting on a moss-covered stone in an ancient forest, shafts of warm morning light, natural fur detail, 50mm lens, realistic colors.</textarea>
-          <p class="hint">Describe the scene, subject, composition, lighting, and visual medium.</p>
+          <textarea id="prompt" maxlength="6000" required>score_9, score_8_up, score_7_up, 1girl, adult woman, elegant fantasy outfit, detailed illustration, dramatic lighting, intricate background</textarea>
+          <p class="hint">Pony responds to score tags, rating tags, and Danbooru-style subject tags. Add rating_explicit, rating_questionable, or rating_safe when you want to steer the rating category.</p>
 
           <div class="label-row">
             <label for="negative-prompt">Negative prompt</label>
             <span class="hint">True classifier-free guidance</span>
           </div>
-          <textarea id="negative-prompt" class="negative" maxlength="4000">blurry, low resolution, jpeg artifacts, distorted anatomy, extra fingers, duplicate subjects, text, watermark</textarea>
-          <p class="hint">This is not just metadata: it is passed to Qwen's negative-conditioning branch when guidance is above 1.</p>
+          <textarea id="negative-prompt" class="negative" maxlength="4000">score_6, score_5, score_4, worst quality, low quality, blurry, bad anatomy, bad hands, extra fingers, watermark, signature, text</textarea>
+          <p class="hint">The negative prompt is passed to the model's conditioning branch. It is not used as a prompt filter.</p>
 
           <div class="two-col">
             <div>
               <label for="width">Width</label>
               <select id="width">
                 <option value="512">512</option>
+                <option value="640">640</option>
                 <option value="768" selected>768</option>
+                <option value="832">832</option>
+                <option value="896">896</option>
                 <option value="1024">1024</option>
                 <option value="1152">1152</option>
+                <option value="1216">1216</option>
                 <option value="1280">1280</option>
-                <option value="1536">1536</option>
-                <option value="2048">2048</option>
+                <option value="1344">1344</option>
               </select>
             </div>
             <div>
               <label for="height">Height</label>
               <select id="height">
                 <option value="512">512</option>
+                <option value="640">640</option>
                 <option value="768" selected>768</option>
+                <option value="832">832</option>
+                <option value="896">896</option>
                 <option value="1024">1024</option>
+                <option value="1152">1152</option>
+                <option value="1216">1216</option>
                 <option value="1280">1280</option>
-                <option value="1536">1536</option>
-                <option value="2048">2048</option>
+                <option value="1344">1344</option>
               </select>
             </div>
           </div>
           <div class="presets">
             <button type="button" class="preset active" data-size="768">768²</button>
             <button type="button" class="preset" data-size="1024">1024²</button>
-            <button type="button" class="preset" data-size="1536">1536²</button>
-            <button type="button" class="preset" data-width="1152" data-height="2048">1152 × 2048</button>
+            <button type="button" class="preset" data-width="832" data-height="1216">832 × 1216</button>
+            <button type="button" class="preset" data-width="1216" data-height="832">1216 × 832</button>
           </div>
-          <p class="hint">Dimensions must be multiples of 32. Start at 512² or 768² if memory is tight.</p>
+          <p class="hint">Dimensions must be multiples of 64. Start at 768² if memory is tight; the model was trained around 1024² image area.</p>
 
           <div class="two-col">
             <div>
               <label for="steps">Sampling steps</label>
-              <input id="steps" type="number" min="10" max="80" step="1" value="30">
+              <input id="steps" type="number" min="10" max="60" step="1" value="25">
             </div>
             <div>
               <label for="seed">Seed <span class="hint inline">(-1 = random)</span></label>
@@ -101,23 +108,23 @@
 
           <div class="guidance-header">
             <label for="cfg">Guidance scale</label>
-            <output id="cfg-value" for="cfg">6.0</output>
+            <output id="cfg-value" for="cfg">7.0</output>
           </div>
-          <input id="cfg" type="range" min="1" max="10" step="0.1" value="6">
-          <div class="range-ends"><span>1 · negative prompt off</span><span>10 · stronger guidance</span></div>
+          <input id="cfg" type="range" min="1" max="12" step="0.1" value="7">
+          <div class="range-ends"><span>1 · low guidance</span><span>12 · strong guidance</span></div>
 
           <button class="generate" id="generate" type="submit" disabled>Checking local engine…</button>
           <div class="fine-print">
             <strong>Memory note</strong>
-            <p>The recommended Q4 model files total about 10.3 GB before inference buffers. A 9 GB memory budget may require the low-memory Q2 profile and smaller images; heavier quantization can reduce fidelity.</p>
-            <p>Qwen's image weights and VAE use the Qwen Research License (non-commercial/research only). The separate Qwen3-VL text encoder is Apache-2.0. Read the model terms before use.</p>
+            <p>Q8 weights are about 4.18 GB; the Q4 low-memory profile is about 2.8 GB. Start at 768² with Q4 if your available memory is limited. Larger images need more runtime memory.</p>
+            <p>The model creator reports that explicit content involving underage characters was excluded from training. The model is under a modified Fair AI Public License, not an OSI-approved open-source license; read the usage terms before redistribution or commercial use.</p>
           </div>
         </form>
 
         <section class="panel stage">
           <div class="stage-head">
             <div><h2>Result</h2><div class="hint" id="result-info">Waiting for generation</div></div>
-            <div class="result-actions"><span class="stage-meta" id="seed-info"></span><a class="secondary" id="download" hidden download="qwen-image.png">Download PNG</a></div>
+            <div class="result-actions"><span class="stage-meta" id="seed-info"></span><a class="secondary" id="download" hidden download="pony-image.png">Download PNG</a></div>
           </div>
           <div class="preview">
             <div class="placeholder" id="placeholder"><div class="placeholder-icon">✳</div><h3>Your image appears here</h3><p>The model runs locally through the native engine. Generated images are written to this experiment's ignored outputs folder.</p></div>
@@ -135,8 +142,8 @@
       </section>
     </main>
     <footer>
-      <span>Qwen-Image-2.1 · stable-diffusion.cpp · Metal</span>
-      <span><a href="https://huggingface.co/YueFong/Qwen-Image-2.1-Uncensored-GGUF" target="_blank" rel="noreferrer">Image weights</a> · <a href="https://github.com/leejet/stable-diffusion.cpp" target="_blank" rel="noreferrer">Runtime source</a> · <a href="../">Back to FLUX.2</a></span>
+      <span>Pony Diffusion V6 XL · stable-diffusion.cpp · Metal</span>
+      <span><a href="https://huggingface.co/LyliaEngine/Pony_Diffusion_V6_XL" target="_blank" rel="noreferrer">Original model</a> · <a href="https://huggingface.co/off-grid-ai/pony-diffusion-v6-xl-GGUF" target="_blank" rel="noreferrer">GGUF weights</a> · <a href="https://github.com/leejet/stable-diffusion.cpp" target="_blank" rel="noreferrer">Runtime source</a> · <a href="../">Back to FLUX.2</a></span>
     </footer>
   </div>
   <script type="module" src="./app.js"></script>
