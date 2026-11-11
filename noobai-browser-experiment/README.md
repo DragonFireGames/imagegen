@@ -10,7 +10,7 @@ The intended user flow is:
 2. On the first visit, enter the published browser-model-pack URL and download its ONNX files.
 3. The browser stores model graphs and weight shards in its Origin Private File System (OPFS).
 4. Generate images locally. Later visits reuse the OPFS copy instead of downloading the multi-gigabyte model again.
-5. The app shell/runtime is cached by a service worker; tokenizer assets are cached by Transformers.js.
+5. The app shell/runtime is cached by a service worker; both fast CLIP tokenizer assets are hosted in the browser pack and cached by Transformers.js.
 
 No Node server, Python inference server, native executable, or local installation is part of the end-user flow. Python is used only by the offline conversion/publishing step.
 
@@ -42,7 +42,7 @@ This is a one-time conversion step, not an inference server. **The end-user gene
 
 The easiest route is the [one-click Google Colab exporter](https://colab.research.google.com/github/DragonFireGames/imagegen/blob/main/noobai-browser-experiment/tools/Export_NoobAI_XL_1.1_to_browser_ONNX.ipynb). Select a CUDA GPU runtime (T4 16 GB VRAM or better), enter a public Hugging Face destination repository, and provide a Hugging Face write token when the notebook asks for it. The notebook installs the dependencies, checks that CUDA is available, converts the model components one at a time, and uploads the browser pack.
 
-The updated exporter no longer loads the entire Diffusers pipeline into host memory. It loads CLIP-L, CLIP-bigG, the U-Net and VAE sequentially, releasing each before the next. It traces the U-Net at 768² with dynamic spatial axes to keep tracing activations lower, upcasts fragile normalization/softmax calculations, validates the ONNX graphs, and streams external weight data into files no larger than 1.5 GB. A high-RAM Colab runtime is still preferable if conversion exhausts host memory.
+The exporter converts both CLIP tokenizers to fast-tokenizer JSON and uploads them with the browser pack. The updated exporter no longer loads the entire Diffusers pipeline into host memory. It loads CLIP-L, CLIP-bigG, the U-Net and VAE sequentially, releasing each before the next. It traces the U-Net at 768² with dynamic spatial axes to keep tracing activations lower, upcasts fragile normalization/softmax calculations, validates the ONNX graphs, and streams external weight data into files no larger than 1.5 GB. A high-RAM Colab runtime is still preferable if conversion exhausts host memory.
 
 For a manual conversion, use a CUDA environment and run:
 
@@ -64,7 +64,7 @@ After the upload, the notebook prints a model-pack URL in this format:
 https://huggingface.co/YOUR_ACCOUNT/noobai-xl-1.1-browser-onnx/resolve/main/browser-pack
 ```
 
-Enter that URL in the app and select **Load and cache model**.
+Enter that URL in the app and select **Load and cache model**. The manifest points Transformers.js to the two bundled fast tokenizers in the same Hugging Face repository. If you already exported a pack before this tokenizer fix, reopen the Colab notebook and run only the **Repair tokenizer assets on an existing pack (no GPU export)** cell; it patches the existing pack without repeating ONNX conversion.
 
 Do not upload the multi-gigabyte model files to this GitHub Pages repository. GitHub Pages has a published-site size limit; keep the application/runtime here and host the ONNX model pack separately.
 
