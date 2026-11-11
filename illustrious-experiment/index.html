@@ -125,6 +125,17 @@
     </section>
 
     <section class="panel">
+      <p class="eyebrow">Local adapter compatibility inspection</p>
+      <h2>Personal Ami → ONNX weight-index mapping</h2>
+      <p>Select the Personal Ami file in the local inspector above, then compare its LoRA pair names and matrix shapes against the candidate pack's CLIP-L, CLIP-bigG, and three UNet weight indexes. This reads only the safetensors header and downloads only the small index JSON files.</p>
+      <p class="notice">No LoRA tensor payloads, ONNX graph files, or multi-gigabyte weight shards are read. The report can identify matching target names, shape compatibility, and ONNX-transposed weights. It cannot calculate A×B deltas or prove numerical equivalence.</p>
+      <button class="button" id="mapLoraWeights" type="button">Map local LoRA to ONNX weights</button>
+      <p class="status" id="loraMapStatus" data-type="info" aria-live="polite">Choose the local .safetensors file above first.</p>
+      <div class="data-list" id="loraMapSummary" hidden></div>
+      <pre class="inspect-output" id="loraMapOutput" hidden></pre>
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Browser-side LoRA format reference</p>
       <h2><a href="https://huggingface.co/aaaaaeeeee/blip-lora-sdxl-lightning8" target="_blank" rel="noreferrer">SDXL LoRA browser package</a></h2>
       <p>The same publisher repacks a standard Kohya .safetensors LoRA into <code>lora.json</code> plus <code>lora.bin</code> for its browser runtime (FP16 factors; its example has 788 UNet layers). This is a custom format, not built-in ONNX Runtime support, and its layer map cannot be reused for Personal Ami.</p>
@@ -244,6 +255,7 @@
     </section>
   </main>
   <script type="module" src="./lora-inspector.js"></script>
+  <script type="module" src="./lora-weight-map-inspector.js"></script>
   <script type="module" src="./runtime-probe.js"></script>
   <script type="module" src="./component-smoke-test.js"></script>
   <script type="module" src="./text-encoder-2-smoke-test.js"></script>
