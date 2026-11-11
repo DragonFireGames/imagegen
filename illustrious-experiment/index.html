@@ -343,7 +343,7 @@
     <section class="panel">
       <p class="eyebrow">Runtime status</p>
       <h2>Full image-generation interface is wired up</h2>
-      <p>Both CLIP encoders, both VAE directions, real positive/negative SDXL prompt conditioning, and the complete split UNET_A → B → C forward chain have now passed separate browser-side WebGPU tests. The browser-side generation path now connects real prompt encoding, batched classifier-free guidance, resident split-UNet denoising, Euler ancestral latent updates, and VAE decoding into one interface. The first full image run still needs to be verified on-device; this interface does not yet inject the Personal Ami LoRA. Python is export-only; no Python inference server is intended. The FLUX.2 application remains untouched.</p>
+      <p>The first complete browser-side image generation has succeeded: both CLIP encoders produced real positive/negative conditioning, all three split UNet sessions remained resident together (4.79 GiB manifest payload), all 28 Euler ancestral CFG denoising steps completed, and the VAE decoded a 1024×1024 PNG. This baseline used the WAI Illustrious v17 base weights without Personal Ami; the LoRA is mapped but not applied yet. Python is export-only; no Python inference server is intended. The FLUX.2 application remains untouched.</p>
       <p><a href="./README.md">Technical plan and validation checklist</a> · <a href="./tools/README.md">Offline LoRA fusion / ONNX export instructions</a></p>
     </section>
   </main>
