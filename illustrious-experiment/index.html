@@ -240,13 +240,15 @@
     <section class="panel">
       <p class="eyebrow">Real prompt conditioning</p>
       <h2>Dual tokenizer + CLIP WebGPU conditioning test</h2>
-      <p>Tokenize one actual prompt with both tokenizer folders, then run CLIP-L and CLIP-bigG sequentially on those token IDs. The test assembles the SDXL conditioning tensors expected by the UNet: encoder_hidden_states [1, 77, 2048] and pooled text_embeds [1, 1280].</p>
-      <label for="conditioningPrompt">Prompt</label>
+      <p>Tokenize a positive and negative prompt with both tokenizer folders, then run CLIP-L and CLIP-bigG sequentially on both token-ID sequences. The test assembles both SDXL conditioning pairs expected by classifier-free guidance: encoder_hidden_states [1, 77, 2048] and pooled text_embeds [1, 1280].</p>
+      <label for="conditioningPrompt">Positive prompt</label>
       <textarea class="prompt-input" id="conditioningPrompt" rows="3">personal ami, 1girl, portrait, masterpiece, best quality</textarea>
-      <button class="button" id="testPromptConditioning" type="button">Test real prompt conditioning</button>
+      <label for="conditioningNegativePrompt">Negative prompt</label>
+      <textarea class="prompt-input" id="conditioningNegativePrompt" rows="2">worst quality, low quality, bad anatomy, extra limbs, extra fingers, blurry, watermark</textarea>
+      <button class="button" id="testPromptConditioning" type="button">Test positive + negative conditioning</button>
       <p class="status" id="promptConditioningStatus" data-type="info" aria-live="polite">Not tested yet.</p>
       <div class="data-list" id="promptConditioningSummary" hidden></div>
-      <p class="notice">This loads the two small tokenizer folders and then the two text encoders sequentially. The model weights may be requested again if the browser does not keep the earlier downloads in cache. It does not load the UNet or VAE and does not generate an image.</p>
+      <p class="notice">This loads the two small tokenizer folders and then the two text encoders sequentially. It runs both positive and negative prompts through both encoders to prepare classifier-free guidance. The model weights may be requested again if the browser does not keep the earlier downloads in cache. It does not load the UNet or VAE and does not generate an image.</p>
     </section>
 
     <section class="panel">
