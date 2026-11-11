@@ -140,6 +140,16 @@
     </section>
 
     <section class="panel">
+      <p class="eyebrow">Second model component test</p>
+      <h2>VAE decoder ONNX WebGPU smoke test</h2>
+      <p>Load only the candidate pack's VAE decoder and run a zero-latent decode. This downloads about 99 MB of graph and weights. It does not download the UNet, bigG encoder, VAE encoder, or LoRA, and it does not generate a meaningful image.</p>
+      <button class="button" id="testVaeDecoder" type="button">Test VAE decoder (about 99 MB)</button>
+      <p class="status" id="vaeSmokeStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="vaeSmokeSummary" hidden></div>
+      <p class="notice">A successful result validates the VAE decoder's graph, external-data mapping, and WebGPU operators. It does not validate the split UNet or full text-to-image pipeline.</p>
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Runtime diagnostics</p>
       <h2>Check browser and ONNX Runtime support</h2>
       <p>This local probe checks WebGPU, relevant adapter limits, the ONNX Runtime version, and the adapter API surface. ONNX Runtime's built-in LoRA adapter API is WASM-only, so it is not usable by this experiment's WebGPU execution path.</p>
@@ -159,5 +169,6 @@
   <script type="module" src="./lora-inspector.js"></script>
   <script type="module" src="./runtime-probe.js"></script>
   <script type="module" src="./component-smoke-test.js"></script>
+  <script type="module" src="./vae-smoke-test.js"></script>
 </body>
 </html>
