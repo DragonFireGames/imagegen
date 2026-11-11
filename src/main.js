@@ -118,10 +118,24 @@ async function generate() {
   downloadButton.hidden = true;
   $("seed-info").textContent = "";
   $("result-info").textContent = "Preparing local inference";
-  const width = Number($("resolution").value);
-  const height = width;
+  const width = Number($("width").value);
+  const height = Number($("height").value);
   const steps = Number($("steps").value);
   const seed = chosenSeed();
+  if (!Number.isInteger(width) || !Number.isInteger(height) ||
+      width < 256 || height < 256 || width > 1024 || height > 1024 ||
+      width % 16 !== 0 || height % 16 !== 0) {
+    busy = false;
+    generateButton.disabled = false;
+    generateButton.textContent = "Generate image";
+    $("resolution-hint").textContent = "Enter dimensions from 256 to 1024, both divisible by 16.";
+    $("resolution-hint").classList.add("error");
+    $("width").focus();
+    return;
+  }
+  $("resolution-hint").textContent = "Both dimensions must be multiples of 16. Larger images use substantially more GPU memory.";
+  $("resolution-hint").classList.remove("error");
+  if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
 
   try {
     pipeline ||= new Flux2Pipeline(updateProgress);
@@ -154,3 +168,21 @@ downloadButton.addEventListener("click", () => {
 });
 
 checkWebGPU();
+
+for (const preset of document.querySelectorAll(".preset")) {
+  preset.addEventListener("click", () => {
+    $("width").value = preset.dataset.width;
+    $("height").value = preset.dataset.height;
+    document.querySelectorAll(".preset").forEach((button) => button.classList.toggle("active", button === preset));
+    $("resolution-hint").classList.remove("error");
+    $("resolution-hint").textContent = "Both dimensions must be multiples of 16. Larger images use substantially more GPU memory.";
+  });
+}
+for (const field of [$("width"), $("height")]) {
+  field.addEventListener("input", () => {
+    document.querySelectorAll(".preset").forEach((button) => {
+      button.classList.toggle("active", Number(button.dataset.width) === Number($("width").value) &&
+        Number(button.dataset.height) === Number($("height").value));
+    });
+  });
+}

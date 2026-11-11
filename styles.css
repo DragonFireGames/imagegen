@@ -87,3 +87,12 @@ a:not(.brand) { color:#efa078; text-decoration:none; }
 a:not(.brand):hover { text-decoration:underline; }
 @media(max-width:850px) { .shell{padding:16px}.layout{grid-template-columns:1fr}.stage{min-height:560px}.preview{min-height:380px} }
 @media(max-width:480px) { header{align-items:flex-start}.hardware{font-size:10px}.controls{padding:15px}.stage{padding:13px;min-height:480px}.preview{min-height:320px} }
+
+.resolution-heading { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+.resolution-heading label { margin-bottom:7px; }
+.resolution-fields { gap:10px; }
+.resolution-fields input { font-variant-numeric:tabular-nums; }
+.presets { display:flex; flex-wrap:wrap; gap:6px; margin-top:9px; }
+.preset { border:1px solid var(--line); border-radius:7px; padding:5px 8px; background:#20232a; color:#c9ced8; font-size:10px; }
+.preset:hover,.preset.active { border-color:#f18b5580; color:#ffb17e; background:#f18b5514; }
+#resolution-hint { min-height:17px; }

@@ -78,6 +78,10 @@ export class Flux2Pipeline {
 
   async generate({ prompt, width, height, steps, seed }) {
     const started = performance.now();
+    if (!Number.isInteger(width) || !Number.isInteger(height) ||
+        width < 256 || height < 256 || width > 1024 || height > 1024) {
+      throw new Error("Width and height must each be between 256 and 1024 pixels.");
+    }
     const heightTokens = height / 16;
     const widthTokens = width / 16;
     if (!Number.isInteger(heightTokens) || !Number.isInteger(widthTokens)) {

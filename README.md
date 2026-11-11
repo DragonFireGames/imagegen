@@ -7,10 +7,10 @@ A browser-local FLUX.2 Klein 4B image generator. The application, JavaScript run
 ## Features
 
 - FLUX.2 Klein 4B, running locally through ONNX Runtime WebGPU.
-- 512×512, 768×768, and 1024×1024 output presets.
+- Arbitrary 256–1024 pixel width and height (both multiples of 16), including portrait and landscape images.
 - 4, 6, or 8 denoising steps.
 - Reproducible seeds and PNG download.
-- One short-lived Web Worker per model stage. The encoder, transformer, and decoder workers are terminated after their stage, because releasing an ONNX Runtime WebGPU session alone may not return the allocations to the adapter.
+- One short-lived Web Worker per model stage. The encoder, transformer, and decoder workers are terminated after their stage to release WebGPU allocations. Downloaded model files are persisted in the browser Cache API when storage is available, avoiding repeated multi-gigabyte network downloads.
 - No generation API, account, API key, telemetry, or app-side prompt-blocking layer.
 
 ## Repository layout
@@ -43,7 +43,7 @@ Any static HTTP server works. From the repository root:
 
 Then open http://localhost:8080/ in a WebGPU-capable browser. Do not use file URLs; browsers require a secure context for WebGPU and module workers.
 
-The first generation downloads several gigabytes. Browser caching may retain those files between sessions, but eviction and cache quotas depend on the browser and device.
+The first generation downloads several gigabytes. Model weights are cached in the browser Cache API and reused on later generations and visits when storage quota permits. The browser may evict cached data under storage pressure; the app requests persistent storage where supported. Even when weights are cached, each generation must still load the model into WebGPU memory.
 
 ## Browser requirements
 

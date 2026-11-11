@@ -23,10 +23,26 @@
         <label for="prompt">Prompt</label>
         <textarea id="prompt" placeholder="Describe the image you want…">A tiny astronaut tending a greenhouse on the moon, cinematic photography, soft sunrise, highly detailed</textarea>
         <p class="hint">Describe the subject, setting, lighting, composition, and visual style.</p>
-        <div class="row">
-          <div><label for="resolution">Resolution</label><select id="resolution"><option value="512">512 × 512</option><option value="768" selected>768 × 768</option><option value="1024">1024 × 1024</option></select></div>
-          <div><label for="steps">Steps</label><select id="steps"><option value="4" selected>4 · Recommended</option><option value="6">6 · Slower</option><option value="8">8 · Slower</option></select></div>
+        <div class="resolution-heading">
+          <label>Resolution</label>
+          <span class="hint inline">256–1024 · multiples of 16</span>
         </div>
+        <div class="row resolution-fields">
+          <div><label for="width">Width</label><input id="width" type="number" min="256" max="1024" step="16" value="768"></div>
+          <div><label for="height">Height</label><input id="height" type="number" min="256" max="1024" step="16" value="768"></div>
+        </div>
+        <div class="presets" aria-label="Common resolutions">
+          <button type="button" class="preset" data-width="256" data-height="256">256²</button>
+          <button type="button" class="preset" data-width="512" data-height="512">512²</button>
+          <button type="button" class="preset active" data-width="768" data-height="768">768²</button>
+          <button type="button" class="preset" data-width="768" data-height="1024">768 × 1024</button>
+          <button type="button" class="preset" data-width="768" data-height="512">768 × 512</button>
+          <button type="button" class="preset" data-width="1024" data-height="768">1024 × 768</button>
+          <button type="button" class="preset" data-width="1024" data-height="1024">1024²</button>
+        </div>
+        <p class="hint" id="resolution-hint">Both dimensions must be multiples of 16. Larger images use substantially more GPU memory.</p>
+        <label for="steps">Steps</label>
+        <select id="steps"><option value="4" selected>4 · Recommended</option><option value="6">6 · Slower</option><option value="8">8 · Slower</option></select>
         <label for="seed">Seed <span class="hint inline">(−1 = random)</span></label>
         <input id="seed" type="number" min="-1" max="2147483647" value="-1">
         <button id="generate" class="generate" disabled>Checking WebGPU…</button>

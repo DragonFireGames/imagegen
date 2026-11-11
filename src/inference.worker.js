@@ -1,6 +1,37 @@
 import * as ort from "../vendor/onnxruntime-web/ort.webgpu.min.mjs";
 
 const MODEL_BASE = "https://huggingface.co/cgb/flux2-klein-4b-onnx-webgpu/resolve/main/";
+const MODEL_CACHE = "imagegen-model-weights-v1";
+const nativeFetch = self.fetch.bind(self);
+let modelCachePromise;
+self.fetch = async (input, init) => {
+  const request = new Request(input, init);
+  const url = request.url;
+  if (request.method !== "GET" || !url.startsWith(MODEL_BASE) || request.headers.has("range")) {
+    return nativeFetch(request);
+  }
+  try {
+    modelCachePromise ||= caches.open(MODEL_CACHE);
+    const cache = await modelCachePromise;
+    const cached = await cache.match(url);
+    if (cached) {
+      postStatus("Loading cached model data: " + url.split("/").pop());
+      return cached;
+    }
+    const response = await nativeFetch(request);
+    if (response.ok && response.type !== "opaque") {
+      try {
+        await cache.put(url, response.clone());
+      } catch (error) {
+        console.warn("[Imagegen] Could not persist model cache entry:", url, error);
+      }
+    }
+    return response;
+  } catch (error) {
+    console.warn("[Imagegen] Model cache unavailable; fetching normally:", error);
+    return nativeFetch(request);
+  }
+};
 ort.env.wasm.wasmPaths = new URL("../vendor/onnxruntime-web/", import.meta.url).href;
 ort.env.wasm.numThreads = 1;
 ort.env.logLevel = "warning";
