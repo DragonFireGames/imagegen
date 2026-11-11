@@ -10,7 +10,7 @@ PyTorch, Diffusers, or an inference server.
 `.safetensors` adapter, fuses it into the model at a chosen strength using
 Diffusers' safe-fusing path, and optionally runs Optimum's SDXL ONNX exporter.
 
-Example (use a machine or notebook with enough RAM/disk for the full SDXL model):
+Example (use a machine or notebook with enough RAM/disk for the full SDXL model). The script defaults to BF16 to match the published Illustrious v0.1 weights; choose `--dtype float16` for hardware with limited BF16 support. `--device auto` chooses CUDA, then Apple MPS, then CPU.
 
 ```bash
 # Install a PyTorch build for your OS/GPU first:
@@ -35,9 +35,13 @@ intermediate in `OUTPUT/merged-diffusers`.
 
 ## Important limits
 
-- This script has not been run against the Personal Ami file yet; that file is
-  not in this repository. A successful Diffusers load and fuse is the first
-  compatibility check.
+- The user has scanned the actual Personal Ami file in the browser. Its header has
+  2,958 tensors, 986 complete rank-consistent pairs, rank 32 / alpha 16 metadata,
+  and all three SDXL groups: UNet, CLIP-L, and CLIP-bigG. The exporter now opens
+  the local file as a Safetensors state dict (rather than passing the file path
+  as a model identifier), validates the same three groups, and requires
+  Diffusers to attach all of them. Full tensor loading and fusion have not yet
+  been run because the raw adapter file is not present in this runtime.
 - The Optimum export is a **reference ONNX export**, not the optimized,
   split WebGPU package used by BLIP Studio. Do not point the browser at it
   until its graph operators, external-data layout, numerical output, and
