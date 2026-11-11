@@ -20,7 +20,7 @@ A compatible SDXL-derived ONNX/WebGPU model pack already exists:
 
 This is a promising runtime starting point, not a claim of tested compatibility. It is WAI Illustrious v17, a fine-tune derived from Illustrious v0.1—not the untouched v0.1 checkpoint. We still need to apply the Personal Ami adapter and compare output against the same LoRA loaded with Diffusers.
 
-The ONNX pack is under Fair AI Public License 1.0-SD, which contains prohibited-use and source/license notice requirements. Review the pack's LICENSE.txt before use or redistribution. The original Illustrious v0.1 repository also lists that license and provides a TERM_OF_USE.
+The ONNX pack is under Fair AI Public License 1.0-SD, which contains prohibited-use restrictions and notice/source requirements. Review the full [LICENSE.txt](https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17/blob/main/LICENSE.txt) and [NOTICE.txt](https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17/blob/main/NOTICE.txt) before use or redistribution. This experiment links to the upstream model pack and does not copy its weights into this repository. The original Illustrious v0.1 repository also lists that license and provides a TERM_OF_USE.
 
 ### Option B: ExecuTorch WebGPU export
 
@@ -44,6 +44,12 @@ This helps answer the feasibility question: browser-native SDXL is already demon
 
 For this project, the intended sequence is to export an Illustrious UNet with the Personal Ami adapter merged at a chosen strength as the first working browser model, then add runtime LoRA swapping using the WAI pack's weight-index approach if the exact tensor mapping validates. That gives us a path to a working model without pretending live adapter injection already works.
 
+### Browser LoRA format reference
+
+The same Hugging Face publisher also exposes a browser-ready [SDXL-Lightning LoRA package](https://huggingface.co/aaaaaeeeee/blip-lora-sdxl-lightning8). It repacks an ordinary Kohya-format `.safetensors` adapter into `lora.json` plus `lora.bin` (FP16 factors; the published example reports rank 64, alpha 8, and 788 UNet layers). This demonstrates the packaging pattern for browser use, but it does not supply a generic ONNX Runtime LoRA API and it is not the Personal Ami adapter.
+
+For Personal Ami, the conversion step must map its exact source tensor names to the target Illustrious graph weights. Text-encoder factors, UNet factors, fused projections, convolutional weights, rank/alpha, and any unsupported adapter variants all need explicit handling. Do not use the Lightning adapter's layer table for another LoRA.
+
 ## Runtime decision
 
 Do not try to bundle the Python Diffusers runtime into this static site. Diffusers depends on PyTorch and native/runtime facilities that are not directly compilable to browser WASM as-is.
@@ -51,7 +57,7 @@ Do not try to bundle the Python Diffusers runtime into this static site. Diffuse
 Preferred sequence:
 
 1. First try the pre-exported FP16 ONNX graphs because they already exist and have weight-index metadata for browser LoRA use.
-2. In parallel, keep a small ExecuTorch WebGPU export prototype as an alternative. Test UNet operators and memory use before committing to it.
+2. Keep ExecuTorch as a later alternative only. Its current WebGPU partitioner can select operators not implemented by the WebGPU runtime, so validate operator coverage for the exact SDXL UNet before investing in that export path.
 3. Use Python/Diffusers only as an offline export/conversion tool or reference implementation; do not require a Python inference server.
 4. Keep tokenizer, scheduler, image preprocessing, and orchestration in JavaScript where practical.
 5. Load the target .safetensors LoRA locally in the browser and validate its exact keys, tensor shapes, and supported adapter type.
