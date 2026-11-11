@@ -1,5 +1,5 @@
 import * as ort from "./vendor/ort.jspi.bundle.min.mjs";
-import { AutoTokenizer, env as transformersEnv } from "./vendor/transformers/transformers.min.js";
+import { PreTrainedTokenizer, env as transformersEnv } from "./vendor/transformers/transformers.min.js";
 import { clearModelCache, getCachedModelFile, loadModelPack } from "./model-store.js";
 
 ort.env.wasm.wasmPaths = new URL("./vendor/", import.meta.url).href;
@@ -34,24 +34,37 @@ function toBigIntIds(tokenizer, prompt) {
   });
 }
 
-async function loadTokenizers(manifest) {
+async function loadTokenizers() {
   if (!tokenizerPromise) {
-    if (!manifest.tokenizerModel || !manifest.tokenizerRevision || !Array.isArray(manifest.tokenizerSubfolders) || manifest.tokenizerSubfolders.length !== 2) {
-      throw new Error("This model pack is missing its bundled fast tokenizers. Run the notebook's 'Repair tokenizers without re-exporting' cell, then reload the model pack.");
-    }
-    const modelId = manifest.tokenizerModel;
-    const revision = manifest.tokenizerRevision;
+    const loadOne = async (folder, label) => {
+      const loadJson = async (filename) => {
+        const url = new URL(folder + "/" + filename, activePack.baseUrl);
+        status("Downloading " + label, filename);
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error("Could not load bundled " + label + " asset " + filename +
+            " (HTTP " + response.status + "): " + url);
+        }
+        try {
+          return await response.json();
+        } catch (error) {
+          throw new Error("Invalid JSON in bundled tokenizer asset " + url + ": " + error.message);
+        }
+      };
+
+      const [tokenizerJSON, tokenizerConfig] = await Promise.all([
+        loadJson("tokenizer.json"),
+        loadJson("tokenizer_config.json"),
+      ]);
+      if (!tokenizerJSON || typeof tokenizerJSON !== "object" || !tokenizerJSON.model) {
+        throw new Error("Bundled tokenizer " + folder + "/tokenizer.json has no tokenizer model.");
+      }
+      return new PreTrainedTokenizer(tokenizerJSON, tokenizerConfig);
+    };
+
     tokenizerPromise = Promise.all([
-      AutoTokenizer.from_pretrained(modelId, {
-        revision,
-        subfolder: manifest.tokenizerSubfolders[0],
-        progress_callback: (progress) => status("Downloading tokenizer 1", progress?.file || ""),
-      }),
-      AutoTokenizer.from_pretrained(modelId, {
-        revision,
-        subfolder: manifest.tokenizerSubfolders[1],
-        progress_callback: (progress) => status("Downloading tokenizer 2", progress?.file || ""),
-      }),
+      loadOne("tokenizer", "tokenizer 1"),
+      loadOne("tokenizer_2", "tokenizer 2"),
     ]).catch((error) => {
       tokenizerPromise = null;
       throw error;
@@ -321,7 +334,7 @@ async function generate(message) {
 
   const started = performance.now();
   const seed = requestedSeed < 0 ? Math.floor(Math.random() * 2147483647) : requestedSeed;
-  const tokenizers = await loadTokenizers(activePack.manifest);
+  const tokenizers = await loadTokenizers();
   const { positive, negative } = await encodePrompts(prompt, negativePrompt, tokenizers, cfgScale);
 
   const latentHeight = height / 8;
