@@ -250,7 +250,6 @@ Both routes target browser-native inference: model computation occurs inside the
 
 - index.html: separate experiment page with model/runtime research notes and a local LoRA inspection utility.
 - heavy-model-test-lock.js: page-wide lock that rejects overlapping CLIP, VAE, prompt-conditioning and UNet smoke tests before they download weights or allocate WebGPU sessions.
-- heavy-model-test-lock.js: shared page-wide lock prevents CLIP-bigG, VAE, prompt-conditioning and multi-gigabyte UNet tests from allocating GPU sessions concurrently.
 - lora-inspector.js: reads only the first safetensors header block and reports tensor names, shapes, dtypes, byte-range validity, common LoRA A/B or down/up pairs, rank-dimension mismatches, possible extended adapter tensors, and embedded training metadata. It does not upload or deserialize tensor payloads.
 - lora-weight-map-inspector.js: new local-header-only mapping test; matches Personal Ami pair stems to CLIP-L, CLIP-bigG and all three UNet FP16 weights-index maps, checks Torch-shape compatibility and transposition flags; it does not read tensor payloads or edit ONNX shards; awaits browser results.
 - tools/fuse_lora_and_export.py: validates the safetensors header, loads its tensors as a Diffusers state dict, verifies that UNet and both text encoders receive the adapter, then fuses it at the selected strength. The real Personal Ami header report is recorded above; actual full Diffusers fusion still needs to be run.
