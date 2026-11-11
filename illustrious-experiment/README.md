@@ -194,14 +194,20 @@ must be mapped and its low-rank delta oriented correctly before touching these
 weights. The counts are not yet proof that every one of the adapter's 722 UNet
 pairs has a direct one-to-one match.
 
-The new **UNET_A-only** smoke test loads A's external weight shards and runs
-one zero-input WebGPU inference at 1024². It uses the types reported in the
-graph metadata (FP16 sample/conditioning embeddings, FP32 timestep/time IDs),
-checks that all eleven expected outputs have the correct shapes and FP16 dtype,
-checks every value for finiteness, and releases the session. It does not load
-B/C. A's weights are about 2.49 GB, so this is explicitly opt-in and may fail
-on memory/driver limits even though the encoders worked. The user has not run
-this test yet.
+The **UNET_A-only** smoke test has now passed in the user's browser. It loaded
+2.32 GiB across three external-data shards, ran a zero-input inference at
+1024² in 5.6 seconds (100.5 seconds including load), and checked 26,871,040
+values across all eleven FP16 outputs. Every output had the expected shape and
+all values were finite. The session was released after the test.
+
+A new staged **UNET_A → UNET_B** test is being added. It reruns A, copies only
+the five intermediate tensors B consumes (`hidden`, `emb`, and
+`skip_6`–`skip_8`) to CPU-side FP16 arrays, releases A's session, then
+loads B and feeds those exact tensors to it. This avoids trying to keep both
+multi-gigabyte sessions resident simultaneously. B also receives zeroed FP16
+text conditioning, so this tests the partition boundary and B's operators,
+not meaningful prompt conditioning. It will verify B's `hidden_out` shape
+and finite values. It has not yet been run in the user's browser.
 
 ## Runtime decision
 
@@ -232,7 +238,8 @@ Both routes target browser-native inference: model computation occurs inside the
 - text-encoder-2-smoke-test.js: passed in the user's browser; 1.29 GiB, int64 [1, 77] input, FP16 outputs [1, 77, 1280] and [1, 1280], all 99,840 values finite, 79.1 seconds.
 - vae-smoke-test.js: passed in the user's browser; FP16 input [1, 4, 128, 128], FP16 image output [1, 3, 1024, 1024], all finite, 16.1 seconds.
 - unet-metadata-inspector.js: passed in the user's browser; verified all 6 graph/index files against manifest sizes and SHA-256, downloaded 3.61 MiB, fetched 0 UNet tensor shards. Extracted the A → B → C interfaces and weight index layout.
-- unet-a-smoke-test.js: opt-in, single-partition WebGPU inference for UNET_A at 1024², downloads only A's external weights, checks all outputs, releases the session; awaits browser validation.
+- unet-a-smoke-test.js: passed in the user's browser; 2.32 GiB across 3 shards, inference 5.6 s, total 100.5 s, 26,871,040 FP16 output values across all 11 correctly shaped and finite outputs; session released.
+- unet-ab-chain-test.js: staged A → B test; copies only A's five B-facing intermediate tensors to CPU FP16, releases A, then loads B and runs on those actual tensors with zero text conditioning. Checks B hidden_out [1,1280,64,64] FP16 finite; awaits browser validation.
 - Full image-generation inference is not wired up yet.
 
 ## Offline LoRA fusion and ONNX reference export
