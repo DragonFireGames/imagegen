@@ -41,6 +41,7 @@
     [hidden] { display: none !important; }
     .inspect-output { max-height: 680px; overflow: auto; padding: 14px; border-radius: 8px; background: #111319; color: #d5d7e0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
     .prompt-input { display: block; width: 100%; margin: 10px 0 14px; padding: 12px; border: 1px solid #4a4e59; border-radius: 8px; resize: vertical; background: #111319; color: #e5e6eb; font: inherit; }
+    .number-input { display: block; width: 110px; margin: 8px 0 14px; padding: 9px; border: 1px solid #4a4e59; border-radius: 7px; background: #111319; color: #e5e6eb; font: inherit; }
     @media (max-width: 560px) { body { padding: 18px 12px; } .panel { padding: 16px; } .data-row { grid-template-columns: 1fr; gap: 2px; } }
   </style>
 </head>
@@ -238,6 +239,19 @@
     </section>
 
     <section class="panel">
+      <p class="eyebrow">Scheduler math validation</p>
+      <h2>Euler ancestral sampler smoke test</h2>
+      <p>Load the pinned Illustrious v0.1 scheduler configuration and run a deterministic, synthetic Euler ancestral denoising loop. The test checks the scaled-linear beta schedule, leading timesteps, monotonically decreasing sigmas, sigma-up/down relationship, seeded noise, and finite results. The model pack's published default is Euler ancestral at 28 steps; this test does not run a UNet.</p>
+      <p>Base configuration: <a href="https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0/blob/b41f1c324e32e03f9e104bd9ace0992e4e135597/scheduler/scheduler_config.json" target="_blank" rel="noreferrer">Illustrious v0.1 scheduler_config.json</a> · Pack defaults: 28 steps, CFG 5.0, euler_a.</p>
+      <label for="schedulerSteps">Synthetic inference steps (1–100)</label>
+      <input class="number-input" id="schedulerSteps" type="number" min="1" max="100" step="1" value="28">
+      <button class="button" id="testSchedulerMath" type="button">Run scheduler math test</button>
+      <p class="status" id="schedulerMathStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="schedulerMathSummary" hidden></div>
+      <p class="notice">This is a scheduler-only math test over 1,024 synthetic values. It loads no ONNX models, does not allocate WebGPU, and does not generate an image.</p>
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Runtime diagnostics</p>
       <h2>Check browser and ONNX Runtime support</h2>
       <p>This local probe checks WebGPU, relevant adapter limits, the ONNX Runtime version, and the adapter API surface. ONNX Runtime's built-in LoRA adapter API is WASM-only, so it is not usable by this experiment's WebGPU execution path.</p>
@@ -266,5 +280,6 @@
   <script type="module" src="./unet-abc-chain-test.js"></script>
   <script type="module" src="./vae-encoder-smoke-test.js"></script>
   <script type="module" src="./prompt-conditioning-smoke-test.js"></script>
+  <script type="module" src="./scheduler-math-smoke-test.js"></script>
 </body>
 </html>
