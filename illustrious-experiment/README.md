@@ -295,7 +295,7 @@ Both routes target browser-native inference: model computation occurs inside the
 
 The generator keeps the two CLIP encoders sequential to limit peak memory, then creates a two-item CFG batch (negative first, positive second). At every scheduler step, the same scaled latent is duplicated into batch 2; UNET_A produces the shared embedding and skip tensors, UNET_B consumes its A intermediates, and UNET_C consumes B's hidden output plus A's remaining skips. The guided epsilon prediction is combined on the CPU and passed to the Euler ancestral update. After the last step, all three UNet sessions are released before the VAE decoder loads.
 
-The initial latent and per-step ancestral noise use a deterministic seeded PRNG. The default 1024×1024 / 28-step / CFG 5 settings match the candidate pack's published defaults. The first end-to-end browser run succeeded on the WAI v17 base weights without Personal Ami: 1024×1024, 28 Euler ancestral steps, CFG 5, seed 1337, and a 1.8 MiB PNG. All three UNet sessions were created simultaneously (4.79 GiB manifest payload), remained resident for the denoising loop, and were released before the VAE decoder loaded. CLIP conditioning completed, all 28 steps produced finite latents, and VAE decoding/canvas conversion succeeded. The supplied log reports 9,156.16 seconds total elapsed, while the 28 per-step scheduler intervals sum to about 574.27 seconds; the large gaps between some steps appear to be idle/suspension time rather than model execution. The Personal Ami LoRA is mapped but is not fused or injected.
+The initial latent and per-step ancestral noise use a deterministic seeded PRNG. The default 1024×1024 / 28-step / CFG 5 settings match the candidate pack's published defaults. The first end-to-end browser run succeeded on the WAI v17 base weights without Personal Ami: 1024×1024, 28 Euler ancestral steps, CFG 5, seed 1337, and a 1.8 MiB PNG. All three UNet sessions were created simultaneously (4.79 GiB manifest payload), remained resident for the denoising loop, and were released before the VAE decoder loaded. CLIP conditioning completed, all 28 steps produced finite latents, and VAE decoding/canvas conversion succeeded. The supplied log reports 9,156.16 seconds total elapsed, while the 28 per-step scheduler intervals sum to about 574.27 seconds; the large gaps between some steps appear to be idle/suspension time rather than model execution. The optional Personal Ami toggle now routes the local adapter through the five-component patcher; integrated browser execution remains unverified.
 
 ## Offline LoRA fusion and ONNX reference export
 
@@ -311,7 +311,7 @@ This provides a fixed-strength Diffusers reference and a first ONNX export for c
 
 ## LoRA inspection caveat
 
-The safetensors header can show adapter naming and tensor dimensions, but it does not prove a match to a specific ONNX graph or ExecuTorch export. Text-encoder adapters, UNet adapters, DoRA, LoKr, LoHa, and other variants must be identified and handled explicitly. For standard LoRA pairs, both low-rank matrices must be mapped to the corresponding graph weights. A strength slider must not be exposed until output is verified against a Diffusers reference.
+The safetensors header can show adapter naming and tensor dimensions, but it does not prove a match to a specific ONNX graph or ExecuTorch export. Text-encoder adapters, UNet adapters, DoRA, LoKr, LoHa, and other variants must be identified and handled explicitly. For standard LoRA pairs, both low-rank matrices must be mapped to the corresponding graph weights. The generator exposes the strength control as an experimental option; do not treat its visual strength calibration or numerical equivalence as verified until full-adapter output is compared with a Diffusers reference.
 
 ## Validation milestones
 
@@ -341,7 +341,8 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [ ] Validate VAE encode/decode scaling and round-trip compatibility independently; successful image generation confirms the chosen decode scale can produce a visually coherent image but is not a formal encoder/decoder round-trip test.
 - [x] Run a baseline prompt in browser WebGPU without a LoRA; first 1024×1024, 28-step, CFG 5, seed 1337 image generated successfully and saved as a 1.8 MiB PNG.
 - [ ] Match a reference image from Diffusers within expected precision differences.
-- [x] Run the single-pair CLIP-L ONNX shard patch test; the patched Blob loaded and changed the graph output.\n- [x] Run the full 66-pair CLIP-L ONNX patch test; all indexed targets were applied and the patched CLIP-L session produced a measurable output change.
+- [x] Run the single-pair CLIP-L ONNX shard patch test; the patched Blob loaded and changed the graph output.
+- [x] Run the full 66-pair CLIP-L ONNX patch test; all indexed targets were applied and the patched CLIP-L session produced a measurable output change.
 - [x] Add an optional Personal Ami adapter toggle and strength control to the generator; the shared patcher is wired for all 980 indexed targets (66 CLIP-L, 192 bigG, 722 split across UNet A/B/C), with browser end-to-end validation pending.
 - [ ] Run the integrated 980-target Personal Ami adapter in the browser at strength 0.75 and verify all five patched component sessions.
 - [ ] Compare full-adapter browser outputs at strengths 0.6, 0.75, and 0.9 against a Diffusers reference.
