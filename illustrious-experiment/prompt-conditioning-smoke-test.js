@@ -139,25 +139,33 @@ button.addEventListener("click", async () => {
       max_length: 77
     });
 
-    const idsL = encodedL.input_ids;
-    const idsG = encodedG.input_ids;
-    if (!idsL?.data || idsL.type !== "int64" ||
-        idsL.dims.length !== 2 || idsL.dims[0] !== 1 || idsL.dims[1] !== 77) {
-      throw new Error("CLIP-L tokenizer did not produce int64 input_ids [1, 77].");
-    }
-    if (!idsG?.data || idsG.type !== "int64" ||
-        idsG.dims.length !== 2 || idsG.dims[0] !== 1 || idsG.dims[1] !== 77) {
-      throw new Error("CLIP-bigG tokenizer did not produce int64 input_ids [1, 77].");
+    function makeInt64Ids(encoded, label) {
+      const tensor = encoded?.input_ids;
+      if (!tensor?.data || !Array.isArray(tensor.dims) ||
+          tensor.dims.length !== 2 || tensor.dims[0] !== 1 || tensor.dims[1] !== 77) {
+        throw new Error(label + " tokenizer did not produce input_ids [1, 77].");
+      }
+      const ids = new BigInt64Array(77);
+      for (let i = 0; i < ids.length; i++) {
+        const value = Number(tensor.data[i]);
+        if (!Number.isSafeInteger(value)) {
+          throw new Error(label + " tokenizer returned a non-integer token ID at position " + i + ".");
+        }
+        ids[i] = BigInt(value);
+      }
+      return ids;
     }
 
+    const idsL = makeInt64Ids(encodedL, "CLIP-L");
+    const idsG = makeInt64Ids(encodedG, "CLIP-bigG");
     const attentionL = encodedL.attention_mask?.data;
     const attentionG = encodedG.attention_mask?.data;
     const countL = attentionL ? Array.from(attentionL).reduce((sum, value) => sum + (Number(value) > 0 ? 1 : 0), 0) : "unavailable";
     const countG = attentionG ? Array.from(attentionG).reduce((sum, value) => sum + (Number(value) > 0 ? 1 : 0), 0) : "unavailable";
     addRow("CLIP-L tokenizer", "int64 [1, 77] · " + countL + " attended positions");
     addRow("CLIP-bigG tokenizer", "int64 [1, 77] · " + countG + " attended positions");
-    addRow("CLIP-L token IDs", Array.from(idsL.data).slice(0, 16).map(String).join(", "));
-    addRow("CLIP-bigG token IDs", Array.from(idsG.data).slice(0, 16).map(String).join(", "));
+    addRow("CLIP-L token IDs", Array.from(idsL).slice(0, 16).map(String).join(", "));
+    addRow("CLIP-bigG token IDs", Array.from(idsG).slice(0, 16).map(String).join(", "));
 
     // Stage 1: CLIP-L. Keep its small FP16 hidden-state output on CPU.
     setStatus("Loading CLIP-L and encoding the actual prompt…");
@@ -167,7 +175,7 @@ button.addEventListener("click", async () => {
       throw new Error("CLIP-L graph is missing input_ids.");
     }
     let outputL = await sessionL.run({
-      input_ids: new ort.Tensor("int64", idsL.data, [1, 77])
+      input_ids: new ort.Tensor("int64", idsL, [1, 77])
     });
     const hiddenL = finiteFp16(outputL.penultimate_hidden_state,
       "CLIP-L penultimate_hidden_state", [1, 77, 768]);
@@ -185,7 +193,7 @@ button.addEventListener("click", async () => {
       throw new Error("CLIP-bigG graph is missing input_ids.");
     }
     let outputG = await sessionG.run({
-      input_ids: new ort.Tensor("int64", idsG.data, [1, 77])
+      input_ids: new ort.Tensor("int64", idsG, [1, 77])
     });
     const hiddenG = finiteFp16(outputG.penultimate_hidden_state,
       "CLIP-bigG penultimate_hidden_state", [1, 77, 1280]);
