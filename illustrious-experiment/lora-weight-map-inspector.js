@@ -104,6 +104,107 @@ function normalizedIndexName(name) {
   return base.replaceAll(".", "_");
 }
 
+function kohyaUnetToDiffusersName(module) {
+  let key = module.replaceAll("_", ".");
+
+  // The Personal Ami UNet uses Kohya/SGM block indices. Convert those indices
+  // to the actual SDXL Diffusers module paths used by weights-index.json.
+  let match = key.match(/^input\\.blocks\\.(\\d+)\\.(\\d+)(?:\\.(.*))?$/);
+  if (match) {
+    const block = Number(match[1]);
+    const part = Number(match[2]);
+    const rest = match[3] || "";
+    if (block === 0 && part === 0) {
+      key = "conv_in" + (rest ? "." + rest : "");
+    } else if (block > 0 && block % 3 === 0 && part === 0) {
+      const stage = block / 3 - 1;
+      const suffix = rest.replace(/^op\\.?/, "");
+      key = "down_blocks." + stage + ".downsamplers.0.conv" +
+        (suffix ? "." + suffix : "");
+    } else if (block > 0) {
+      const stage = Math.floor((block - 1) / 3);
+      const layer = (block - 1) % 3;
+      if (layer > 1) return null;
+      const collection = part === 0 ? "resnets" : part === 1 ? "attentions" : null;
+      if (!collection) return null;
+      key = "down_blocks." + stage + "." + collection + "." + layer +
+        (rest ? "." + rest : "");
+    } else {
+      return null;
+    }
+  }
+
+  match = key.match(/^output\\.blocks\\.(\\d+)\\.(\\d+)(?:\\.(.*))?$/);
+  if (match) {
+    const block = Number(match[1]);
+    const part = Number(match[2]);
+    const layer = block % 3;
+    const stage = Math.floor(block / 3);
+    const rest = match[3] || "";
+    let prefix;
+    if (part === 0) prefix = "up_blocks." + stage + ".resnets." + layer;
+    else if (part === 1) prefix = "up_blocks." + stage + ".attentions." + layer;
+    else if (part === 2 && layer === 2) prefix = "up_blocks." + stage + ".upsamplers.0";
+    else return null;
+    key = prefix + (rest ? "." + rest : "");
+  }
+
+  match = key.match(/^middle\\.block\\.(\\d+)(?:\\.(.*))?$/);
+  if (match) {
+    const block = Number(match[1]);
+    const rest = match[2] || "";
+    const target = block === 0 ? "mid_block.resnets.0" :
+      block === 1 ? "mid_block.attentions.0" :
+      block === 2 ? "mid_block.resnets.1" : null;
+    if (!target) return null;
+    key = target + (rest ? "." + rest : "");
+  }
+
+  // Standalone SDXL UNet modules.
+  key = key
+    .replace(/^out\\.2(?=\\.|$)/, "conv_out")
+    .replace(/^time\\.embed\\.0(?=\\.|$)/, "time_embedding.linear_1")
+    .replace(/^time\\.embed\\.2(?=\\.|$)/, "time_embedding.linear_2")
+    .replace(/^label\\.emb\\.0\\.0(?=\\.|$)/, "add_embedding.linear_1")
+    .replace(/^label\\.emb\\.0\\.2(?=\\.|$)/, "add_embedding.linear_2");
+
+  // Convert SGM/CompVis submodule spellings to Diffusers names.
+  key = key
+    .replaceAll("input.blocks", "down_blocks")
+    .replaceAll("down.blocks", "down_blocks")
+    .replaceAll("middle.block", "mid_block")
+    .replaceAll("mid.block", "mid_block")
+    .replaceAll("output.blocks", "up_blocks")
+    .replaceAll("up.blocks", "up_blocks")
+    .replaceAll("transformer.blocks", "transformer_blocks")
+    .replaceAll("proj.in", "proj_in")
+    .replaceAll("proj.out", "proj_out")
+    .replaceAll("to.q", "to_q")
+    .replaceAll("to.k", "to_k")
+    .replaceAll("to.v", "to_v")
+    .replaceAll("to.out.0", "to_out.0")
+    .replaceAll("emb.layers.1", "time_emb_proj")
+    .replaceAll("time.emb.proj", "time_emb_proj")
+    .replaceAll("in.layers.0", "norm1")
+    .replaceAll("in.layers.2", "conv1")
+    .replaceAll("out.layers.0", "norm2")
+    .replaceAll("out.layers.3", "conv2")
+    .replaceAll("skip.connection", "conv_shortcut")
+    .replaceAll("conv.shortcut", "conv_shortcut")
+    .replaceAll("downsamplers.0.op", "downsamplers.0.conv")
+    .replaceAll("conv.in", "conv_in")
+    .replaceAll("conv.out", "conv_out");
+
+  return key;
+}
+
+function unetIndexCandidates(module) {
+  const candidates = [normalizedIndexName(module)];
+  const converted = kohyaUnetToDiffusersName(module);
+  if (converted) candidates.unshift(normalizedIndexName(converted));
+  return [...new Set(candidates)];
+}
+
 function compareShapes(down, up, entry) {
   const torch = entry.torchShape;
   if (!Array.isArray(torch) || !torch.length) return { ok: false, reason: "no torchShape in index" };
@@ -223,16 +324,23 @@ button.addEventListener("click", async () => {
       const componentNamesToTry = group.component === "unet"
         ? ["unet_a", "unet_b", "unet_c"]
         : [group.component];
-      const key = group.module;
+      const keysToTry = group.component === "unet"
+        ? unetIndexCandidates(group.module)
+        : [group.module];
       let found = null;
       let foundComponent = null;
+      let foundKey = null;
       for (const componentName of componentNamesToTry) {
-        const entry = lookup.get(componentName)?.get(key);
-        if (entry) {
-          found = entry;
-          foundComponent = componentName;
-          break;
+        for (const key of keysToTry) {
+          const entry = lookup.get(componentName)?.get(key);
+          if (entry) {
+            found = entry;
+            foundComponent = componentName;
+            foundKey = key;
+            break;
+          }
         }
+        if (found) break;
       }
       if (!found) {
         counts.missingName++;
@@ -267,6 +375,7 @@ button.addEventListener("click", async () => {
     const lines = [
       "Adapter: " + file.name,
       "Model pack: " + (manifest.packageId || "WAI Illustrious v17"),
+      "UNet naming: Kohya/SGM SDXL block paths converted to Diffusers index names",
       "Header read: " + formatBytes(adapter.headerBytes) + " · tensor payload bytes read: 0",
       "Weight-index JSON: " + formatBytes(indexBytes) + " · all listed indexes size/SHA-256 verified where hashes are provided",
       "",
