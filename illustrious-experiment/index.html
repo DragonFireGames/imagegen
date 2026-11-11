@@ -373,7 +373,7 @@
     <section class="panel">
       <p class="eyebrow">Runtime status</p>
       <h2>Full image-generation interface is wired up</h2>
-      <p>The first complete browser-side image generation has succeeded: both CLIP encoders produced real positive/negative conditioning, all three split UNet sessions remained resident together (4.79 GiB manifest payload), all 28 Euler ancestral CFG denoising steps completed, and the VAE decoded a 1024×1024 PNG. This baseline used the WAI Illustrious v17 base weights without Personal Ami; the LoRA is mapped but not applied yet. Python is export-only; no Python inference server is intended. The FLUX.2 application remains untouched.</p>
+      <p>The first complete browser-side image generation succeeded with the WAI Illustrious v17 base model. The full 66-pair CLIP-L Personal Ami patch and complete local BF16 integrity scan have also passed in-browser. The generator now has an optional Personal Ami toggle and strength control wired to a patcher for all 980 indexed CLIP-L, CLIP-bigG, and split-UNet targets; the integrated full-adapter generation still needs a browser run. The adapter stays local and is never uploaded. Python is export-only; no Python inference server is intended. The FLUX.2 application remains untouched.</p>
       <p><a href="./README.md">Technical plan and validation checklist</a> · <a href="./tools/README.md">Offline LoRA fusion / ONNX export instructions</a></p>
     </section>
   </main>
@@ -395,7 +395,6 @@
   <script type="module" src="./vae-encoder-smoke-test.js"></script>
   <script type="module" src="./prompt-conditioning-smoke-test.js"></script>
   <script type="module" src="./scheduler-math-smoke-test.js"></script>
-  <script type="module" src="./personal-ami-lora.js"></script>
   <script type="module" src="./text-to-image.js"></script>
 </body>
 </html>
