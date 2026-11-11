@@ -24,8 +24,10 @@ source .venv/bin/activate
 python -m pip install -r illustrious-experiment/tools/requirements-export.txt
 
 python illustrious-experiment/tools/fuse_lora_and_export.py \
-  --lora /path/to/personal-ami.safetensors \
+  --lora /path/to/personal_ami_style_illustrious-000006.safetensors \
   --strength 0.75 \
+  --dtype bfloat16 \
+  --device auto \
   --output /path/to/personal-ami-onnx \
   --export-onnx
 ```
