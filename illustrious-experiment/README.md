@@ -240,7 +240,7 @@ Do not try to bundle the Python Diffusers runtime into this static site. Diffuse
 Preferred sequence:
 
 1. Run the CLIP-L, CLIP-bigG, and VAE decoder component smoke tests in the browser. All three have now passed on the target machine, confirming external-data loading and real WebGPU inference for both text encoders and the decoder.
-2. The full staged A → B → C graph chain and VAE encoder have passed their isolated tests. Validate real positive/negative prompt conditioning and VAE encode/decode scaling next; then integrate the scheduler-driven iterative denoising loop.
+2. The full staged A → B → C graph chain, VAE encoder, and real positive/negative prompt conditioning have passed isolated tests. Test the integrated scheduler-driven denoising and VAE decode on the target browser, including the all-UNet memory requirement.
 3. The no-LoRA WAI v17 SDXL JavaScript pipeline is now connected to a generation interface. Run it on the target browser, validate the simultaneously resident UNet sessions, and capture a baseline image. WAI v17 is a derivative, not the original Illustrious v0.1 training checkpoint.
 4. Use Python/Diffusers offline to load the actual Personal Ami adapter, fuse it into the official Illustrious v0.1 base, and generate a reproducible reference image. Do not require a Python inference server.
 5. Inspect the WAI FP16 weight-index format and implement a converter for Personal Ami only after all 986 pairs have been mapped and shape-checked. If the derivative graph cannot be validated, export the exact base as a separate browser model instead.
