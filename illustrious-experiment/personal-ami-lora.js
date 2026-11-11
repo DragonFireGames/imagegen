@@ -336,7 +336,16 @@ async function patchLinearGpu(buffer, down, up, shape, transposed, scale, label,
 }
 
 async function patchLinear(buffer, down, up, shape, transposed, scale, label, log) {
-  const gpuPatched = await patchLinearGpu(buffer, down, up, shape, transposed, scale, label, log);
+  let gpuPatched = null;
+  try {
+    gpuPatched = await patchLinearGpu(buffer, down, up, shape, transposed, scale, label, log);
+  } catch (error) {
+    patchGpuDisabled = true;
+    if (!patchGpuFailureLogged) {
+      patchGpuFailureLogged = true;
+      log("LoRA WebGPU fusion failed; using CPU fallback · " + error.message);
+    }
+  }
   if (gpuPatched) return gpuPatched;
   const [outFeatures, inFeatures] = shape;
   const rank = down.length / inFeatures;
