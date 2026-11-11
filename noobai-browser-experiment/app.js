@@ -2,6 +2,8 @@ import { clearModelCache } from "./model-store.js";
 
 const $ = (id) => document.getElementById(id);
 const form = $("generation-form");
+const DEFAULT_MODEL_PACK_URL = "https://huggingface.co/DragonFire7z/noobai-xl-1.1-browser-onnx/tree/main/browser-pack";
+const MODEL_URL_STORAGE_KEY = "noobai-browser-model-url";
 const workerUrl = new URL("./worker.js", import.meta.url);
 let worker = null;
 let runtimeReady = false;
@@ -200,13 +202,27 @@ for (const field of [$("width"), $("height")]) {
   });
 }
 
-async function loadModel(baseUrl = $("model-url").value.trim().replace(/\/+$/, "")) {
-  if (!baseUrl.startsWith("https://")) {
-    setStatus("Enter a public HTTPS model-pack URL", "The URL should point to the uploaded browser-pack folder, ending in /resolve/main/browser-pack.", "error");
+function normalizeModelPackUrl(value) {
+  const url = new URL(value);
+  if (url.protocol !== "https:") {
+    throw new Error("Use a public HTTPS model-pack folder URL.");
+  }
+  if (url.hostname === "huggingface.co") {
+    url.pathname = url.pathname.replace(/\/tree\/([^/]+)(?=\/|$)/, "/resolve/$1");
+  }
+  return url.toString().replace(/\/+$/, "");
+}
+
+async function loadModel(inputUrl = $("model-url").value.trim()) {
+  let baseUrl;
+  try {
+    baseUrl = normalizeModelPackUrl(inputUrl);
+  } catch (error) {
+    setStatus("Enter a public HTTPS model-pack folder URL", error.message + " Paste the Hugging Face folder link ending in /tree/main/browser-pack; it is converted automatically.", "error");
     $("model-url").focus();
     return;
   }
-  localStorage.setItem("noobai-browser-model-url", baseUrl);
+  localStorage.setItem(MODEL_URL_STORAGE_KEY, inputUrl);
   modelReady = false;
   $("model-status").textContent = "Downloading / checking cache…";
   $("load-model").disabled = true;
@@ -305,7 +321,20 @@ $("clear-cache").addEventListener("click", async () => {
   }
 });
 
-$("model-url").value = localStorage.getItem("noobai-browser-model-url") || "";
+const savedModelUrl = localStorage.getItem(MODEL_URL_STORAGE_KEY);
+let initialModelUrl = savedModelUrl || DEFAULT_MODEL_PACK_URL;
+if (savedModelUrl) {
+  try {
+    const savedUrl = new URL(savedModelUrl);
+    if (savedUrl.hostname === "huggingface.co" &&
+        savedUrl.pathname.startsWith("/DragonFire7z/noobai-xl-1.1-browser-onnx/")) {
+      initialModelUrl = DEFAULT_MODEL_PACK_URL;
+    }
+  } catch {
+    initialModelUrl = DEFAULT_MODEL_PACK_URL;
+  }
+}
+$("model-url").value = initialModelUrl;
 (async () => {
   await updateStorageStatus();
   await checkRuntime();
