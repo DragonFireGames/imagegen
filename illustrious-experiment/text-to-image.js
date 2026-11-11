@@ -485,6 +485,20 @@ function validateSessionInputs(session, required, label) {
   }
 }
 
+function validateStaticShape(metadata, expected, label) {
+  const declared = metadata?.shape;
+  if (!Array.isArray(declared) || declared.length !== expected.length) return;
+  const mismatches = [];
+  for (let i = 0; i < expected.length; i++) {
+    if (typeof declared[i] === "number" && declared[i] > 0 && declared[i] !== expected[i]) {
+      mismatches.push("axis " + i + ": graph declares " + declared[i] + ", requested " + expected[i]);
+    }
+  }
+  if (mismatches.length) {
+    throw new Error(label + " has a static shape incompatible with the selected size: " + mismatches.join("; ") + ".");
+  }
+}
+
 async function runUnetStep(sessions, conditioning, scaledLatents, timestep, width, height, cfg, noiseStep) {
   const latentWidth = width / 8;
   const latentHeight = height / 8;
@@ -743,6 +757,9 @@ async function generate(options) {
     }
     const inputName = vaeSession.inputNames[0];
     if (!inputName) throw new Error("VAE decoder graph has no input.");
+    const inputIndex = vaeSession.inputNames.indexOf(inputName);
+    validateStaticShape(vaeSession.inputMetadata?.[inputIndex],
+      [1, 4, latentHeight, latentWidth], "VAE decoder input");
     const started = performance.now();
     log("Decoding latent [1,4," + latentHeight + "," + latentWidth +
       "] · VAE scaling factor " + VAE_SCALING_FACTOR + ".");
