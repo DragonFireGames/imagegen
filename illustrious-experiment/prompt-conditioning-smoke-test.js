@@ -1,6 +1,6 @@
 import * as ort from "../vendor/onnxruntime-web/ort.webgpu.min.mjs";
 import { acquireHeavyModelTest, releaseHeavyModelTest } from "./heavy-model-test-lock.js";
-import { AutoTokenizer, env } from "../vendor/transformers/transformers.min.js";
+import { PreTrainedTokenizer, env } from "../vendor/transformers/transformers.min.js";
 
 const MODEL_ID = "aaaaaeeeee/blip-sdxl-anime-wai-illustrious17";
 const MODEL_BASE = "https://huggingface.co/" + MODEL_ID + "/resolve/main/";
@@ -67,13 +67,29 @@ function finiteFp16(tensor, label, shape) {
 }
 
 async function loadTokenizer(subfolder) {
-  // Let Transformers.js append the subfolder to real filenames. Embedding
-  // "{file}" inside remotePathTemplate produced the invalid URL
-  // ".../tokenizer/{file}/tokenizer.json" in the browser.
-  return AutoTokenizer.from_pretrained(MODEL_ID, {
-    revision: "main",
-    subfolder
-  });
+  // Fetch from the exact model-pack folder URLs. This avoids relying on
+  // subfolder support or custom remotePathTemplate semantics in the vendored
+  // Transformers.js build.
+  const folderURL = MODEL_BASE + subfolder + "/";
+  async function readJSON(filename) {
+    const url = folderURL + filename;
+    const response = await fetch(url, { credentials: "omit" });
+    if (!response.ok) {
+      throw new Error("Tokenizer file request failed: " + filename +
+        " · HTTP " + response.status + " · " + url);
+    }
+    try {
+      return await response.json();
+    } catch {
+      throw new Error("Tokenizer file is not valid JSON: " + url);
+    }
+  }
+
+  const [tokenizerJSON, tokenizerConfig] = await Promise.all([
+    readJSON("tokenizer.json"),
+    readJSON("tokenizer_config.json")
+  ]);
+  return new PreTrainedTokenizer(tokenizerJSON, tokenizerConfig);
 }
 
 async function loadOnnxComponent(component, label) {
