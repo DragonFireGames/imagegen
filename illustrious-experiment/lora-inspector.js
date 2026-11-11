@@ -1,4 +1,24 @@
 const MAX_HEADER_BYTES = 64 * 1024 * 1024;
+const DTYPE_BYTES = Object.freeze({
+  BOOL: 1,
+  U8: 1,
+  I8: 1,
+  F8_E5M2: 1,
+  F8_E4M3: 1,
+  F8_E4M3FN: 1,
+  F8_E4M3FNUZ: 1,
+  F8_E5M2FNUZ: 1,
+  U16: 2,
+  I16: 2,
+  F16: 2,
+  BF16: 2,
+  U32: 4,
+  I32: 4,
+  F32: 4,
+  U64: 8,
+  I64: 8,
+  F64: 8
+});
 
 const fileInput = document.querySelector("#loraFile");
 const inspectButton = document.querySelector("#inspectLora");
@@ -96,8 +116,8 @@ function validateTensorRecord(name, info, dataBytes) {
   if (!info || typeof info !== "object" || !Array.isArray(info.shape) || !Array.isArray(info.data_offsets)) {
     throw new Error("Invalid tensor record: " + name);
   }
-  if (typeof info.dtype !== "string" || !info.dtype) {
-    throw new Error("Tensor is missing its dtype: " + name);
+  if (typeof info.dtype !== "string" || !Object.prototype.hasOwnProperty.call(DTYPE_BYTES, info.dtype)) {
+    throw new Error("Tensor has an unsupported or missing dtype: " + name);
   }
   if (!info.shape.every(dim => Number.isSafeInteger(dim) && dim >= 0)) {
     throw new Error("Tensor has an invalid shape: " + name);
@@ -112,7 +132,12 @@ function validateTensorRecord(name, info, dataBytes) {
   if (end < start || end > dataBytes) {
     throw new Error("Tensor data extends beyond the file: " + name);
   }
-  return info.shape.reduce((product, dim) => product * BigInt(dim), 1n);
+  const elements = info.shape.reduce((product, dim) => product * BigInt(dim), 1n);
+  const expectedBytes = elements * BigInt(DTYPE_BYTES[info.dtype]);
+  if (BigInt(end - start) !== expectedBytes) {
+    throw new Error("Tensor byte range does not match its shape and dtype: " + name);
+  }
+  return elements;
 }
 
 async function inspectSafetensors(file) {
@@ -168,8 +193,8 @@ async function inspectSafetensors(file) {
 
     const pair = pairInfo(name);
     if (pair) {
-      if (!pairs.has(pair.stem)) pairs.set(pair.stem, new Set());
-      pairs.get(pair.stem).add(pair.side);
+      if (!pairs.has(pair.stem)) pairs.set(pair.stem, { down: null, up: null });
+      pairs.get(pair.stem)[pair.side] = info.shape;
     }
     if (examples.length < 30) {
       examples.push({ name, shape: info.shape, dtype: info.dtype });
@@ -178,9 +203,17 @@ async function inspectSafetensors(file) {
 
   let paired = 0;
   let incomplete = 0;
-  for (const sides of pairs.values()) {
-    if (sides.has("down") && sides.has("up")) paired++;
-    else incomplete++;
+  let incompatiblePairs = 0;
+  for (const pair of pairs.values()) {
+    if (!pair.down || !pair.up) {
+      incomplete++;
+      continue;
+    }
+    paired++;
+    // Standard Linear and Conv2d LoRAs both encode rank on down[0]/up[1].
+    if (pair.down.length < 2 || pair.up.length < 2 || pair.down[0] !== pair.up[1]) {
+      incompatiblePairs++;
+    }
   }
 
   const metadataRows = readMetadata(meta);
@@ -189,6 +222,7 @@ async function inspectSafetensors(file) {
     ? "Standard low-rank A/B or down/up tensors detected"
     : "No standard LoRA tensor pairs detected";
   if (extendedTypes.length) format += "; extended adapter tensors: " + extendedTypes.join(", ");
+  if (incompatiblePairs) format += "; " + incompatiblePairs + " pair(s) have mismatched rank dimensions";
 
   const familyHint = groups.has("Text encoder 2")
     ? "SDXL-like dual text encoders (strong hint)"
@@ -204,6 +238,7 @@ async function inspectSafetensors(file) {
     groups,
     pairs: paired,
     incomplete,
+    incompatiblePairs,
     flags,
     format,
     familyHint,
@@ -222,6 +257,7 @@ function renderReport(report) {
   addRow(summary, "Tensor parameters", report.totalParameters);
   addRow(summary, "Complete LoRA pairs", String(report.pairs));
   addRow(summary, "Incomplete pairs", String(report.incomplete));
+  addRow(summary, "Rank-shape mismatches", String(report.incompatiblePairs));
   addRow(summary, "Format", report.format);
   addRow(summary, "Architecture hint", report.familyHint);
 
