@@ -200,34 +200,34 @@ The **UNET_A-only** smoke test has now passed in the user's browser. It loaded
 values across all eleven FP16 outputs. Every output had the expected shape and
 all values were finite. The session was released after the test.
 
-The **UNET_A → UNET_B** staged chain has now passed in the user's browser.
-A produced the five actual FP16 tensors B consumes; those were retained as
-8.8 MiB of CPU-side data, A's session was released, and B successfully
-returned finite FP16 `hidden_out [1,1280,64,64]`. A load + inference took
-106.5 seconds, B took 150.5 seconds, and total A→B time was 275.9 seconds.
-This confirms the actual first partition boundary and B execution with
-zero text conditioning. It is not yet a complete denoiser pass.
+The **UNET_A → UNET_B** staged chain passed in the user's browser. A's
+actual FP16 intermediates were copied to CPU memory, A was released, and B
+returned finite `hidden_out [1,1280,64,64]`. The latest recorded run retained
+8.8 MiB and completed in 187.5 seconds (A 89.7 s, B 97.8 s).
 
-A new **UNET_A → UNET_B → UNET_C** test is now available. It copies all A
-intermediates needed downstream, releases A, runs B and copies `hidden_out`,
-releases B, then loads C and combines B's `hidden_out` with A's remaining
-skip tensors. It checks C's final `out_sample [1,4,128,128]` for FP16 dtype
-and finite values. Only one GPU session is intended to be resident at a time.
-It has not yet been run.
+The **full UNET_A → UNET_B → UNET_C** chain also passed. A's required
+hidden/embedding/skip outputs were retained as 51.3 MiB of CPU-side FP16 data;
+each partition was released before the next loaded. C consumed B's actual
+`hidden_out` and A's remaining skips, returning finite FP16
+`out_sample [1,4,128,128]`. The latest recorded total was 423.6 seconds
+(A 93.1 s, B 230.3 s, C 56.6 s). This proves the full split denoiser forward
+chain with zero conditioning, not iterative denoising.
 
-The remaining isolated model component is the VAE encoder, so a separate
-VAE-encoder WebGPU smoke test is now available. It derives the input contract
-from ONNX session metadata where available, sends a zero-filled FP16 RGB image,
-and reports every output shape and dtype. It deliberately does not assume
-latent scaling or decoder compatibility.
+The **VAE encoder** smoke test passed. It loaded the 65.3 MiB component,
+accepted a zero-filled FP16 RGB tensor `image [1,3,1024,1024]`, and returned
+finite FP16 `latent_mean [1,4,128,128]`. Latent scaling and encode/decode
+round-trip equivalence remain to be tested.
 
-A real-prompt conditioning test has also been added. It uses the vendored
-Transformers.js `AutoTokenizer` with the pack's two tokenizer subfolders,
-runs CLIP-L and CLIP-bigG sequentially on the corresponding real token IDs,
-then assembles the SDXL `encoder_hidden_states [1,77,2048]` and pooled
-`text_embeds [1,1280]` CPU tensors. It does not load the UNet/VAE or generate
-an image. The tokenizer's subfolder loading through `env.remotePathTemplate`
-is a first browser validation item; the prompt test has not yet been run.
+The real-prompt conditioning test stopped before model inference because
+Transformers.js requested a malformed URL containing the literal
+`tokenizer/{file}/tokenizer.json`. The test implementation was changed to
+fetch `tokenizer.json` and `tokenizer_config.json` from each exact tokenizer
+subfolder URL and construct a `PreTrainedTokenizer` from those JSON objects.
+That direct-fetch version still needs browser verification.
+
+The synthetic Euler ancestral scheduler test passed 28 deterministic steps,
+including monotonic sigmas, the sigma-up/down identity, reproducibility, and
+finite latent output. It did not run the UNet.
 
 ## Runtime decision
 
@@ -251,9 +251,9 @@ Both routes target browser-native inference: model computation occurs inside the
 - index.html: separate experiment page with model/runtime research notes and a local LoRA inspection utility.
 - heavy-model-test-lock.js: page-wide lock that rejects overlapping CLIP, VAE, prompt-conditioning and UNet smoke tests before they download weights or allocate WebGPU sessions.
 - lora-inspector.js: reads only the first safetensors header block and reports tensor names, shapes, dtypes, byte-range validity, common LoRA A/B or down/up pairs, rank-dimension mismatches, possible extended adapter tensors, and embedded training metadata. It does not upload or deserialize tensor payloads.
-- lora-weight-map-inspector.js: new local-header-only mapping test; matches Personal Ami pair stems to CLIP-L, CLIP-bigG and all three UNet FP16 weights-index maps, checks Torch-shape compatibility and transposition flags; it does not read tensor payloads or edit ONNX shards; awaits browser results.
-- lora-payload-smoke-test.js: reads one small local CLIP-L BF16 down/up pair and scalar alpha, applies it to a deterministic test vector in FP32, and checks for a finite nonzero delta; it does not upload payload bytes or patch ONNX weights; awaits browser results.
-- lora-payload-integrity-test.js: reads the full local BF16 payload in 4 MiB chunks, verifies all tensor shapes/offsets and scans every value for NaN/Infinity without uploading or holding the entire 218 MB adapter in memory; awaits browser results.
+- lora-weight-map-inspector.js: local-header-only matcher for the five FP16 indexes. The first browser report mapped 66 CLIP-L and 192 CLIP-bigG pairs but no UNet pairs because the original matcher compared Kohya/SGM block paths directly with Diffusers index names. The current version adds explicit SDXL input/output/middle block conversion and submodule-name conversion; the corrected full mapping report is pending.
+- lora-payload-smoke-test.js: passed on one real local CLIP-L BF16 pair (layer-0 MLP fc1), decoding a rank-32 down/up pair plus alpha and producing a finite, nonzero FP32 delta; it did not patch an ONNX shard or prove model-output equivalence.
+- lora-payload-integrity-test.js: passed a 4 MiB-chunk scan of all 2,958 tensor records / 114,017,242 BF16 values (228,034,484 payload bytes); all byte ranges and values were valid, with zero non-finite values and no network upload.
 - tools/fuse_lora_and_export.py: validates the safetensors header, loads its tensors as a Diffusers state dict, verifies that UNet and both text encoders receive the adapter, then fuses it at the selected strength. The real Personal Ami header report is recorded above; actual full Diffusers fusion still needs to be run.
 - tools/README.md: isolated environment and export instructions.
 - runtime-probe.js: reports WebGPU capabilities and explicitly flags the built-in ORT LoRA API as WASM-only.
@@ -262,12 +262,12 @@ Both routes target browser-native inference: model computation occurs inside the
 - vae-smoke-test.js: passed in the user's browser; FP16 input [1, 4, 128, 128], FP16 image output [1, 3, 1024, 1024], all finite, 16.1 seconds.
 - unet-metadata-inspector.js: passed in the user's browser; verified all 6 graph/index files against manifest sizes and SHA-256, downloaded 3.61 MiB, fetched 0 UNet tensor shards. Extracted the A → B → C interfaces and weight index layout.
 - unet-a-smoke-test.js: passed in the user's browser; 2.32 GiB across 3 shards, inference 5.6 s, total 100.5 s, 26,871,040 FP16 output values across all 11 correctly shaped and finite outputs; session released.
-- unet-ab-chain-test.js: passed in the user's browser; A→B actual tensor handoff, 8.8 MiB intermediate data, A 106.5 s, B 150.5 s, total 275.9 s; B hidden_out FP16 [1,1280,64,64] finite.
-- unet-abc-chain-test.js: sequential full A→B→C chain; keeps only A's required CPU-side FP16 outputs while releasing A and B before loading the next partition; verifies final FP16 out_sample [1,4,128,128]; awaits browser validation.
+- unet-ab-chain-test.js: passed in the user's browser; A→B actual tensor handoff, 8.8 MiB CPU intermediates, latest recorded total 187.5 s (A 89.7 s, B 97.8 s); B returned finite FP16 hidden_out [1,1280,64,64].
+- unet-abc-chain-test.js: passed in the user's browser; sequential full A→B→C chain, one partition resident at a time, 51.3 MiB A intermediates, final finite FP16 out_sample [1,4,128,128], latest recorded total 423.6 s.
 - All component/UNet/prompt smoke tests acquire the same shared lock before any download or WebGPU allocation and release it in `finally`; concurrent heavy tests are refused with a visible status error.
-- vae-encoder-smoke-test.js: isolated zero-image FP16 VAE encoder inference; discovers input shape through session metadata, checks every output for finite FP16 values; awaits browser validation.
-- prompt-conditioning-smoke-test.js: positive + negative prompts through both Transformers.js tokenizer folders and CLIP encoders sequentially; assembles CFG conditioning pairs (positive/negative encoder_hidden_states [1,77,2048] and pooled text_embeds [1,1280]); awaits browser validation. The browser bundle import and int64 tensor conversion match the existing main app.
-- scheduler-math-smoke-test.js: loads the pinned Illustrious v0.1 scheduler config and runs deterministic synthetic Euler ancestral steps; checks the leading timestep schedule, sigma monotonicity, sigma-up/down identity, seeded repeatability and finite output; no ONNX or GPU allocation.
+- vae-encoder-smoke-test.js: passed in the user's browser; zero RGB input FP16 [1,3,1024,1024] produced finite latent_mean FP16 [1,4,128,128]; latent scaling and round-trip behavior remain unverified.
+- prompt-conditioning-smoke-test.js: positive + negative prompts through both tokenizer folders and CLIP encoders sequentially; the first run failed before inference on a malformed tokenizer URL. Current code directly fetches each folder's tokenizer JSON/config and constructs a PreTrainedTokenizer; browser rerun pending.
+- scheduler-math-smoke-test.js: passed 28 deterministic synthetic Euler ancestral steps; beta/timestep schedule, monotonic sigmas, sigma-up/down identity, repeatability and finite output checked; it did not run the UNet or generate an image.
 - Full image-generation inference is not wired up yet.
 
 ## Offline LoRA fusion and ONNX reference export
@@ -296,19 +296,20 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [x] Inspect all three split UNet graphs and weight-index maps: all 6 graph/index files matched manifest SHA-256 and sizes; 3.61 MiB fetched, 0 tensor shards. Interfaces establish A → B → C and expose FP16/FP32 input contracts plus transposed matrix weights.
 - [x] Run the single-partition UNET_A WebGPU smoke test at 1024²: passed; 2.32 GiB, 3 shards, 5.6 s inference, 100.5 s total, 26,871,040 FP16 output values all finite and correctly shaped.
 - [x] Run the staged UNET_A → UNET_B chain: actual A tensors consumed by B; 8.8 MiB CPU intermediates; A 106.5 s, B 150.5 s, total 275.9 s; finite FP16 hidden_out [1,1280,64,64].
-- [ ] Run the full sequential UNET_A → UNET_B → UNET_C chain and verify final out_sample [1,4,128,128].
-- [ ] Run the VAE encoder zero-image WebGPU smoke test; inspect output tensor contract before attempting encode/decode round-trip.
-- [ ] Run positive + negative prompt dual-tokenizer / dual-CLIP conditioning test; verify both CFG tensors [1,77,2048] and pooled embeddings [1,1280].
-- [ ] Run header-only Personal Ami → ONNX weights-index mapping and inspect unmatched or shape-incompatible pairs across all 5 indexed components.
-- [ ] Run one-pair local BF16 payload test; confirm BF16 decoding and low-rank delta math on a representative CLIP-L linear layer.
-- [ ] Run full local BF16 payload integrity scan over all 2,958 tensors / 114.0M parameters; verify byte ranges and all finite values.
-- [ ] Run the scheduler-only Euler ancestral math test against the Illustrious beta/timestep config; then integrate scheduler with the real three-part UNet chain after that chain passes.
+- [x] Run the full sequential UNET_A → UNET_B → UNET_C chain; C returned finite FP16 out_sample [1,4,128,128] after sequential partition loading.
+- [x] Run the VAE encoder zero-image WebGPU smoke test; FP16 image [1,3,1024,1024] produced finite latent_mean [1,4,128,128]. Latent scaling and round-trip compatibility remain pending.
+- [ ] Rerun positive + negative prompt dual-tokenizer / dual-CLIP conditioning with the direct-folder JSON loader; verify CFG tensors [1,77,2048] and pooled embeddings [1,1280].
+- [ ] Rerun header-only Personal Ami → ONNX weights-index mapping with the corrected Kohya/SGM-to-Diffusers UNet key conversion.
+- [x] Run one-pair local BF16 payload test; a real CLIP-L linear pair decoded and produced a finite, nonzero low-rank delta.
+- [x] Run full local BF16 payload integrity scan over all 2,958 tensors / 114,017,242 values; all byte ranges and BF16 values passed with zero non-finite values.
+- [x] Run the scheduler-only Euler ancestral math test against the Illustrious beta/timestep config; 28 deterministic synthetic steps passed. Integrating the scheduler with iterative real UNet denoising remains pending.
 - [x] Add an offline Diffusers fusion / generic ONNX reference export script (Python syntax and `--help` pass; synthetic BF16 Safetensors test reproduced the real scan's 2,958 keys, 986 rank-32 pairs, 986 alpha keys, and three component counts; deliberately malformed rank was rejected). Real Personal Ami loading/fusion is still pending.
 - [x] Inspect the exact Personal Ami LoRA header and tensor-key layout in the browser (actual report recorded above).
 - [ ] Load and fuse the actual Personal Ami tensors in Diffusers against the official Illustrious v0.1 base.
 - [ ] Verify the Personal Ami LoRA against the package's WAI Illustrious v17 FP16 graph (this derivative is not the exact v0.1 training checkpoint).
 - [ ] Prototype ExecuTorch WebGPU export for the SDXL UNet and verify required operator coverage.
-- [ ] Complete the staged A → B → C WebGPU denoiser chain, validate real prompt conditioning and VAE encode/decode compatibility, then connect the scheduler and iterative denoising loop.
+- [x] Complete the staged A → B → C WebGPU denoiser graph chain with zero conditioning.
+- [ ] Validate real prompt conditioning and VAE encode/decode scaling/round-trip compatibility, then connect the scheduler to iterative UNet denoising.
 - [ ] Run a baseline prompt in browser WebGPU without a LoRA.
 - [ ] Match a reference image from Diffusers within expected precision differences.
 - [ ] Apply Personal Ami LoRA at strengths 0.6, 0.75, and 0.9; compare against Diffusers.
