@@ -106,8 +106,12 @@
         <div><label for="generationCfg">CFG scale</label><input class="number-input" id="generationCfg" type="number" min="0" max="20" step="0.5" value="5"></div>
         <div><label for="generationSeed">Seed</label><input class="number-input" id="generationSeed" type="number" min="0" max="4294967295" step="1" value="1337"></div>
       </div>
-      <p class="notice">High-memory run: the three UNet sessions are kept resident together during denoising (about 4.8 GiB of model payload, before activations/runtime overhead). Start at a smaller resolution if memory is tight. The first run may spend several minutes downloading and compiling the models. Cancel is checked between graph calls; an in-flight WebGPU call must finish.</p>
-      <p class="notice">Personal Ami status: the local adapter is mapped to the ONNX weight indexes, but it is not injected into this generator yet. This first interface uses the WAI Illustrious v17 base weights; no inactive LoRA strength control is shown.</p>
+      <div class="generator-controls">
+        <div><label><input id="generationPersonalAmi" type="checkbox"> Apply Personal Ami LoRA</label></div>
+        <div><label for="generationLoraStrength">Personal Ami strength</label><input class="number-input" id="generationLoraStrength" type="number" min="0" max="2" step="0.05" value="0.75" disabled></div>
+      </div>
+      <p class="notice">Optional adapter: select your local Personal Ami .safetensors file in the inspector below, then enable the checkbox and choose a strength (suggested starting range 0.6–0.9). The browser patches all 980 indexed CLIP-L, CLIP-bigG, and UNet targets into temporary external-data Blobs. Six unindexed final CLIP-L layer-11 pairs are excluded. The adapter file is read locally and never uploaded; strength 0 leaves the original base model unchanged.</p>
+      <p class="notice">High-memory run: the three UNet sessions are kept resident together during denoising (about 4.8 GiB of model payload, before activations/runtime overhead). Enabling the adapter adds CPU patch preparation and temporary Blob storage. The first run may spend several minutes downloading and compiling the models. Cancel is checked between graph calls and patch targets; an in-flight WebGPU call must finish.</p>
       <div class="generator-actions">
         <button class="button" id="generateImage" type="button">Generate image</button>
         <button class="button secondary-button" id="cancelGeneration" type="button" disabled>Cancel</button>
@@ -391,6 +395,7 @@
   <script type="module" src="./vae-encoder-smoke-test.js"></script>
   <script type="module" src="./prompt-conditioning-smoke-test.js"></script>
   <script type="module" src="./scheduler-math-smoke-test.js"></script>
+  <script type="module" src="./personal-ami-lora.js"></script>
   <script type="module" src="./text-to-image.js"></script>
 </body>
 </html>
