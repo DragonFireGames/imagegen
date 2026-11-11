@@ -287,8 +287,23 @@ export async function preparePersonalAmiComponent(file, manifest, componentName,
   const { header, dataStart } = await readHeader(file);
   const fileMap = new Map((manifest.files || []).map(item => [item.path, item]));
   const index = await verifiedJson(component.weightsIndex, fileMap);
-  const lookup = new Map();
-  for (const [name, entry] of Object.entries(index.entries || {})) lookup.set(normalizedIndexName(name), { name, entry });
+  const componentIndexes = new Map([[componentName, index]]);
+  if (componentName.startsWith("unet_")) {
+    for (const name of ["unet_a", "unet_b", "unet_c"]) {
+      if (name === componentName) continue;
+      const other = manifest.components?.[name];
+      if (!other?.weightsIndex) throw new Error("Missing weight index for " + name + ".");
+      componentIndexes.set(name, await verifiedJson(other.weightsIndex, fileMap));
+    }
+  }
+  const lookups = new Map();
+  for (const [name, value] of componentIndexes) {
+    const lookup = new Map();
+    for (const [moduleName, entry] of Object.entries(value.entries || {})) {
+      lookup.set(normalizedIndexName(moduleName), { name: moduleName, entry });
+    }
+    lookups.set(name, lookup);
+  }
 
   const pairs = new Map();
   for (const [name, info] of Object.entries(header)) {
@@ -316,15 +331,22 @@ export async function preparePersonalAmiComponent(file, manifest, componentName,
     if (!pair.alpha) throw new Error("Missing alpha tensor for " + pair.stem + ".");
     const keys = candidatesFor(pair.group);
     let found = null;
-    for (const key of keys) {
-      found = lookup.get(key);
+    let owner = null;
+    const searchComponents = pair.group.component === "unet"
+      ? ["unet_a", "unet_b", "unet_c"]
+      : [componentName];
+    for (const name of searchComponents) {
+      for (const key of keys) {
+        found = lookups.get(name)?.get(key) || null;
+        if (found) { owner = name; break; }
+      }
       if (found) break;
     }
     if (!found) {
-      if (pair.group.component === "unet") continue;
       if (componentName === "text_encoder" && FINAL_CLIP_L.test(pair.group.module)) { skipped++; continue; }
-      throw new Error("No " + componentName + " index entry for " + pair.stem + " (tried " + keys.join(" | ") + ").");
+      throw new Error("No ONNX index entry for " + pair.stem + " (tried " + keys.join(" | ") + ").");
     }
+    if (owner !== componentName) continue;
     const entry = found.entry;
     const rank = validatePair(pair, entry, pair.stem);
     const shard = resolveShard(entry, component);
