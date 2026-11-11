@@ -362,3 +362,18 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [Diffusers Euler ancestral scheduler implementation](https://github.com/huggingface/diffusers/blob/main/src/diffusers/schedulers/scheduling_euler_ancestral_discrete.py)
 - [Illustrious XL v0.1 model card](https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0)
 - [Personal Ami Style - Illustrious](https://civitai.com/models/1309467/personal-ami-style-illustrious)
+
+## Persistent model cache and portable bundles
+
+- `model-cache.js` prepares generation assets before inference: CLIP-L, CLIP-bigG, UNET_A/B/C, VAE decoder, ONNX graphs, weight indexes, and tokenizer files. It requests persistent browser storage where supported, estimates required quota, downloads with bounded concurrency, verifies file sizes, and stores responses in Cache Storage. Existing cached files are reused on subsequent generations.
+- The generator runs the same preparation step automatically at the beginning, so downloads no longer interrupt prompt encoding or denoising. The separate **Download & cache all model files** control lets users front-load this work before generating.
+- **Export portable model bundle** creates one `.wkimodel` archive (a versioned binary container, not ZIP) containing all required model files. **Import model bundle** validates bundle metadata and file sizes, checks SHA-256 for files up to 256 MiB, then imports assets into Cache Storage. Large shard hashes remain verified by the existing LoRA patch path when those shards are patched; bundle import avoids materializing multi-gigabyte files into one ArrayBuffer.
+- The Personal Ami safetensors file is deliberately not included in the bundle. It remains a local user-provided file.
+- Browser quota, persistence grants, Cache Storage limits, and available disk space vary. Bundle export may require several GiB of free space in addition to the cached model.
+
+## Latest browser follow-up
+
+- Fixed the `ReferenceError: log is not defined` in the LoRA shard patcher by passing the generation logger through to `patchShard`.
+- Restored the dedicated Conv2D patch implementation for convolutional LoRA targets; the experimental WebGPU matrix path is used only for 2-D linear weights.
+- Added experimental WebGPU linear fusion with CPU fallback. Its numerical equivalence and speedup remain unverified in the browser.
+- The model cache and portable bundle code passes static JavaScript syntax checks. Actual multi-gigabyte download, Cache Storage quota behavior, bundle round-trip, and repeat-generation cache hits still require browser testing.
