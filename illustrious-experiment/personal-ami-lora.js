@@ -400,7 +400,7 @@ function patchConv2d(buffer, down, up, shape, scale, label) {
   return new Uint8Array(patched.buffer);
 }
 
-async function patchShard(file, dataStart, component, shard, targets, fileMap, strength, onProgress, checkCancelled) {
+async function patchShard(file, dataStart, component, shard, targets, fileMap, strength, onProgress, checkCancelled, log) {
   const record = fileMap.get(shard);
   if (!record || !Number.isSafeInteger(record.size)) throw new Error("Manifest is missing shard size for " + shard + ".");
   const response = await fetch(MODEL_BASE + shard, { credentials: "omit", cache: "force-cache" });
@@ -432,7 +432,7 @@ async function patchShard(file, dataStart, component, shard, targets, fileMap, s
     const targetBuffer = await base.slice(target.offset, target.offset + target.length).arrayBuffer();
     const patched = target.entry.torchShape.length === 2
       ? await patchLinear(targetBuffer, down, up, target.entry.torchShape, !!target.entry.transposed, scale, target.target, log)
-      : await patchLinear(targetBuffer, down, up, [target.entry.torchShape[0], target.entry.torchShape[1] * target.entry.torchShape[2] * target.entry.torchShape[3]], false, scale, target.target, log);
+      : patchConv2d(targetBuffer, down, up, target.entry.torchShape, scale, target.target);
     parts.push(patched);
     cursor = target.offset + target.length;
     onProgress(target);
@@ -552,7 +552,7 @@ export async function preparePersonalAmiComponent(file, manifest, componentName,
     }
     log(componentName + ": downloading/verifying " + shard + " and applying " + targets.length + " patches…");
     const blob = await patchShard(file, dataStart, component, shard, targets, fileMap, strength,
-      () => {}, checkCancelled);
+      () => {}, checkCancelled, log);
     patched.push({ path: shard.split("/").pop(), data: blob });
     log(componentName + ": patched " + targets.length + " initializers in " + shard + ".");
   }
