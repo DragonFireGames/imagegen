@@ -65,43 +65,88 @@ The same Hugging Face publisher also exposes a browser-ready [SDXL-Lightning LoR
 
 For Personal Ami, the conversion step must map its exact source tensor names to the target Illustrious graph weights. Text-encoder factors, UNet factors, fused projections, convolutional weights, rank/alpha, and any unsupported adapter variants all need explicit handling. Do not use the Lightning adapter's layer table for another LoRA.
 
-## ONNX Runtime's built-in LoRA API
+## ONNX Runtime's built-in LoRA API (not usable for this WebGPU path)
 
-The repository currently vendors ONNX Runtime Web **1.31.1**. That build exports
-a JavaScript `LoraAdapter` API, but this is not a direct Safetensors loader.
-The API loads an ONNX Runtime `.onnx_adapter` file and activates it for an
-inference run. The ONNX graph must already contain the corresponding adapter
-parameters and names. The Personal Ami Kohya `.safetensors` file cannot be
-passed to `LoraAdapter` as-is.
+The repository currently vendors ONNX Runtime Web **1.31.1**, and its JavaScript
+bundle exports `LoraAdapter`. That export is misleading for this use case:
+the official API documentation explicitly limits it to the **WebAssembly
+execution provider**. It cannot be activated on the WebGPU sessions used by
+this experiment. It also expects ONNX Runtime's own `.onnx_adapter` format,
+not the target Kohya `.safetensors` file.
 
-The API has meaningful runtime constraints: ONNX Runtime documents it as a
-WebAssembly-backend feature, it is not supported in WASM proxy mode, and
-`activeLoraAdapters` cannot be used with sessions using I/O binding (including
-GPU-preferred outputs and graph capture). The vendored build exports the API,
-but a complete adapter run against an SDXL WebGPU session has not been tested.
-See the [LoraAdapter API](https://onnxruntime.ai/docs/api/js/interfaces/LoraAdapter.html)
-and [RunOptions.activeLoraAdapters](https://onnxruntime.ai/docs/api/js/interfaces/InferenceSession.RunOptions.html).
+Therefore, do not use the built-in `LoraAdapter` API for the browser GPU
+pipeline. The earlier browser probe only reported that the class was present
+in the JavaScript bundle; the probe now labels it as WASM-only.
 
-Microsoft Olive's `ExtractAdapters` pass can prepare an ONNX graph by exposing
-adapter weights as model inputs or external initializers, and its adapter tools
-include the `.onnx_adapter` format. This is a possible route for a graph
-intentionally exported with LoRA branches; it does not by itself convert an
-arbitrary Diffusers SDXL graph or prove that the Personal Ami mapping matches.
-See [Olive ExtractAdapters](https://microsoft.github.io/Olive/reference/pass.html)
-and [Olive adapter commands](https://microsoft.github.io/Olive/reference/cli.html).
+Reference: [ONNX Runtime LoraAdapter API](https://onnxruntime.ai/docs/api/js/interfaces/LoraAdapter.html).
 
-The candidate WAI Illustrious v17 package documents a different mechanism:
-per-component `weights-index.json` files that map weight offsets inside ONNX
-external-data shards for its own browser-side LoRA implementation. That is a
-custom weight-index format, not the ONNX Runtime `.onnx_adapter` format. We
-must inspect and validate its exact name/shape mapping before using it with
-Personal Ami. The package is also a WAI v17 fine-tune based on Illustrious v0.1,
-not the unmodified training checkpoint.
+## Candidate package manifest and browser limits
 
-The page's **Check local runtime** probe only confirms that the browser exposes
-WebGPU and the vendored runtime exports the adapter class. It does not create
-a session, fetch model weights, test an `.onnx_adapter`, or prove that the
-Personal Ami weights fit any exported graph.
+The candidate package's actual `manifest.json` lists these FP16 components:
+
+| Component | External weight bytes (approx.) |
+|---|---:|
+| CLIP-L text encoder | 232 MB |
+| CLIP-bigG text encoder | 1.39 GB |
+| UNet A | 2.49 GB |
+| UNet B | 2.41 GB |
+| UNet C | 235 MB |
+| VAE decoder | 99 MB |
+| VAE encoder | 68 MB |
+
+The two additional INT4 UNet graphs total about 1.82 GB. The full repository
+size is 8.75 GB because it contains both FP16 and INT4 variants. The FP16
+component weights total approximately 6.93 GB. External-data shards are each
+below 1,000,000,000 bytes. The FP16 text encoders and the three FP16 UNet
+graphs have `weights-index.json` sidecars; the INT4 UNet entries do not.
+
+The user's browser-side probe reports:
+
+- ONNX Runtime Web 1.31.1
+- `Float16Array` available
+- WebGPU adapter available
+- `maxBufferSize`: 4.00 GiB
+- `maxStorageBufferBindingSize`: 4.00 GiB
+- `maxComputeWorkgroupsPerDimension`: 65,535
+
+The 4 GiB values are per-buffer/binding limits, **not** a statement that 4 GiB
+of total GPU memory is available. A session can allocate multiple buffers, and
+the full pipeline's combined CPU/GPU memory use remains unknown.
+
+## Browser-side LoRA format
+
+The WAI package's `weights-index.json` files are a publisher-specific sidecar
+format that maps model weights into external-data shards. They are distinct
+from ONNX Runtime's `.onnx_adapter` format. The model card says this sidecar
+format is used by its own browser LoRA implementation, but that does not prove
+that Personal Ami's Kohya tensor names and shapes map to the WAI graphs.
+
+The conversion still needs to:
+
+1. Map each Personal Ami `lora_te1_`, `lora_te2_`, and `lora_unet_` pair to
+   the correct graph initializer.
+2. Check orientation, fused projections, convolution kernels, and the
+   per-layer alpha/rank scaling.
+3. Convert BF16 LoRA tensors to a browser-supported representation without
+   changing their values beyond expected FP16 rounding.
+4. Compare the converted result against a Diffusers reference image.
+
+Do not use the SDXL-Lightning adapter's layer map for Personal Ami. Do not
+expose a LoRA strength slider until the converted adapter has passed a numerical
+comparison against the same base model and strength in Diffusers.
+
+## First browser model test
+
+The page now includes a **CLIP-L ONNX WebGPU smoke test** in
+`component-smoke-test.js`. It reads the candidate manifest, loads only the
+232 MB CLIP-L component and its external-data shard, creates a WebGPU session,
+and runs one dummy-token inference. It does not download the bigG encoder,
+UNet, VAE, or Personal Ami LoRA, and it does not create an image.
+
+A successful run will validate one real SDXL graph, its external-data mapping,
+and its WebGPU operator path. It does not validate the other encoders, the UNet,
+the scheduler, full-model memory use, or LoRA injection. The browser test has
+been implemented but still needs to be run in the user's browser.
 
 ## Runtime decision
 
