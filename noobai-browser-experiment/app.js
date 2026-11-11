@@ -339,7 +339,7 @@ $("model-url").value = initialModelUrl;
   await updateStorageStatus();
   await checkRuntime();
   if (runtimeReady && $("model-url").value.trim()) {
-    logLine("A previously selected model pack was found; checking its local cache.");
+    logLine("Selected model pack found; checking its local cache.");
     await loadModel();
   }
 })();
