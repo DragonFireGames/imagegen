@@ -184,7 +184,160 @@ function validatePair(pair, entry, stem) {
   return rank;
 }
 
-function patchLinear(buffer, down, up, shape, transposed, scale, label) {
+let patchGpuPromise = null;
+let patchGpuDisabled = false;
+let patchGpuFailureLogged = false;
+
+async function getPatchGpu(log) {
+  if (patchGpuDisabled || !navigator.gpu) return null;
+  if (!patchGpuPromise) {
+    patchGpuPromise = (async () => {
+      const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+      if (!adapter) throw new Error("No WebGPU adapter available for LoRA fusion.");
+      const device = await adapter.requestDevice();
+      const module = device.createShaderModule({ code: `
+        struct Params {
+          outFeatures: u32,
+          inFeatures: u32,
+          rank: u32,
+          scale: f32,
+          transposed: u32,
+          total: u32,
+          groupsX: u32,
+          padding: u32,
+        };
+        @group(0) @binding(0) var<storage, read> base: array<f32>;
+        @group(0) @binding(1) var<storage, read> down: array<f32>;
+        @group(0) @binding(2) var<storage, read> up: array<f32>;
+        @group(0) @binding(3) var<storage, read_write> output: array<f32>;
+        @group(0) @binding(4) var<uniform> params: Params;
+        @compute @workgroup_size(64, 1, 1)
+        fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+          let index = gid.x + gid.y * params.groupsX * 64u;
+          if (index >= params.total) { return; }
+          let outIndex = index / params.inFeatures;
+          let inIndex = index % params.inFeatures;
+          var delta = 0.0;
+          for (var r = 0u; r < params.rank; r = r + 1u) {
+            delta = delta + up[outIndex * params.rank + r] *
+              down[r * params.inFeatures + inIndex];
+          }
+          var storageIndex = outIndex * params.inFeatures + inIndex;
+          if (params.transposed != 0u) {
+            storageIndex = inIndex * params.outFeatures + outIndex;
+          }
+          output[storageIndex] = base[storageIndex] + delta * params.scale;
+        }
+      ` });
+      const info = await module.getCompilationInfo();
+      const errors = info.messages.filter(message => message.type === "error");
+      if (errors.length) throw new Error("LoRA WebGPU shader compilation failed: " + errors.map(message => message.message).join("; "));
+      const pipeline = device.createComputePipeline({ layout: "auto", compute: { module, entryPoint: "main" } });
+      log("LoRA fusion accelerator initialized · WebGPU compute.");
+      return { device, pipeline };
+    })().catch(error => {
+      patchGpuDisabled = true;
+      if (!patchGpuFailureLogged) {
+        patchGpuFailureLogged = true;
+        log("LoRA WebGPU fusion unavailable; using CPU fallback · " + error.message);
+      }
+      return null;
+    });
+  }
+  return patchGpuPromise;
+}
+
+function gpuInputBuffer(device, values) {
+  const buffer = device.createBuffer({
+    size: Math.max(4, values.byteLength),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+  });
+  device.queue.writeBuffer(buffer, 0, values);
+  return buffer;
+}
+
+async function patchLinearGpu(buffer, down, up, shape, transposed, scale, label, log) {
+  const gpu = await getPatchGpu(log);
+  if (!gpu) return null;
+  const [outFeatures, inFeatures] = shape;
+  const rank = down.length / inFeatures;
+  const total = outFeatures * inFeatures;
+  if (!Number.isSafeInteger(total) || !Number.isInteger(rank) ||
+      up.length !== outFeatures * rank || buffer.byteLength !== total * 2) {
+    throw new Error("Linear byte/shape mismatch for " + label + ".");
+  }
+  const base16 = new Float16Array(buffer);
+  const base32 = new Float32Array(base16.length);
+  for (let i = 0; i < base16.length; i++) base32[i] = base16[i];
+  const baseBuffer = gpuInputBuffer(gpu.device, base32);
+  const downBuffer = gpuInputBuffer(gpu.device, down);
+  const upBuffer = gpuInputBuffer(gpu.device, up);
+  const outputBuffer = gpu.device.createBuffer({
+    size: total * 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC
+  });
+  const readback = gpu.device.createBuffer({
+    size: total * 4,
+    usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST
+  });
+  const paramsBuffer = gpu.device.createBuffer({
+    size: 32,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+  });
+  const params = new ArrayBuffer(32);
+  const view = new DataView(params);
+  view.setUint32(0, outFeatures, true);
+  view.setUint32(4, inFeatures, true);
+  view.setUint32(8, rank, true);
+  view.setFloat32(12, scale, true);
+  view.setUint32(16, transposed ? 1 : 0, true);
+  view.setUint32(20, total, true);
+  const groupsX = Math.min(Math.ceil(total / 64), 65535);
+  const groupsY = Math.ceil(Math.ceil(total / 64) / groupsX);
+  view.setUint32(24, groupsX, true);
+  gpu.device.queue.writeBuffer(paramsBuffer, 0, params);
+  const bindGroup = gpu.device.createBindGroup({
+    layout: gpu.pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: baseBuffer } },
+      { binding: 1, resource: { buffer: downBuffer } },
+      { binding: 2, resource: { buffer: upBuffer } },
+      { binding: 3, resource: { buffer: outputBuffer } },
+      { binding: 4, resource: { buffer: paramsBuffer } }
+    ]
+  });
+  try {
+    const encoder = gpu.device.createCommandEncoder();
+    const pass = encoder.beginComputePass();
+    pass.setPipeline(gpu.pipeline);
+    pass.setBindGroup(0, bindGroup);
+    pass.dispatchWorkgroups(groupsX, groupsY);
+    pass.end();
+    encoder.copyBufferToBuffer(outputBuffer, 0, readback, 0, total * 4);
+    gpu.device.queue.submit([encoder.finish()]);
+    await readback.mapAsync(GPUMapMode.READ);
+    const values = new Float32Array(readback.getMappedRange().slice(0));
+    const patched = new Float16Array(values.length);
+    for (let i = 0; i < values.length; i++) {
+      if (!Number.isFinite(values[i])) throw new Error("Non-finite GPU-patched weight in " + label + ".");
+      patched[i] = values[i];
+      if (!Number.isFinite(patched[i])) throw new Error("FP16 overflow while patching " + label + ".");
+    }
+    readback.unmap();
+    return new Uint8Array(patched.buffer);
+  } finally {
+    baseBuffer.destroy();
+    downBuffer.destroy();
+    upBuffer.destroy();
+    outputBuffer.destroy();
+    readback.destroy();
+    paramsBuffer.destroy();
+  }
+}
+
+async function patchLinear(buffer, down, up, shape, transposed, scale, label, log) {
+  const gpuPatched = await patchLinearGpu(buffer, down, up, shape, transposed, scale, label, log);
+  if (gpuPatched) return gpuPatched;
   const [outFeatures, inFeatures] = shape;
   const rank = down.length / inFeatures;
   if (!Number.isInteger(rank) || up.length !== outFeatures * rank || buffer.byteLength !== outFeatures * inFeatures * 2) {
@@ -209,7 +362,6 @@ function patchLinear(buffer, down, up, shape, transposed, scale, label) {
   }
   return new Uint8Array(patched.buffer);
 }
-
 function patchConv2d(buffer, down, up, shape, scale, label) {
   const [outChannels, inChannels, height, width] = shape;
   const rank = down.length / (inChannels * height * width);
