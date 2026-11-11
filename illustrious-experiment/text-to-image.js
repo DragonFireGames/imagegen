@@ -314,8 +314,8 @@ async function encodePrompts(manifest, prompt, negativePrompt) {
   const options = { padding: "max_length", truncation: true, max_length: 77 };
   log("Loading CLIP-L and tokenizing positive/negative prompts…");
   const tokenizerL = await loadTokenizer("tokenizer");
-  const encodedL = tokenizerL(prompt, options);
-  const negativeEncodedL = tokenizerL(negativePrompt, options);
+  const encodedL = await tokenizerL(prompt, options);
+  const negativeEncodedL = await tokenizerL(negativePrompt, options);
   const idsL = tokenIds(encodedL, "CLIP-L positive");
   const negativeIdsL = tokenIds(negativeEncodedL, "CLIP-L negative");
   const startedL = performance.now();
@@ -336,8 +336,8 @@ async function encodePrompts(manifest, prompt, negativePrompt) {
 
   log("Loading CLIP-bigG and tokenizing positive/negative prompts…");
   const tokenizerG = await loadTokenizer("tokenizer_2");
-  const encodedG = tokenizerG(prompt, options);
-  const negativeEncodedG = tokenizerG(negativePrompt, options);
+  const encodedG = await tokenizerG(prompt, options);
+  const negativeEncodedG = await tokenizerG(negativePrompt, options);
   const idsG = tokenIds(encodedG, "CLIP-bigG positive");
   const negativeIdsG = tokenIds(negativeEncodedG, "CLIP-bigG negative");
   const startedG = performance.now();
@@ -505,6 +505,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
     time_ids: new ort.Tensor("float32", makeBatchTimeIds(height, width), [batch, 6])
   });
   timings.a = (performance.now() - startedA) / 1000;
+  checkCancelled();
 
   const aHidden = fp16Values(outputsA.hidden, "UNET_A hidden", shape(1280, latentHeight / 4, latentWidth / 4));
   const aEmb = fp16Values(outputsA.emb, "UNET_A emb", [batch, 1280]);
@@ -537,6 +538,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
     skip_8: new ort.Tensor("float16", skips[8], shape(1280, latentHeight / 4, latentWidth / 4))
   });
   timings.b = (performance.now() - startedB) / 1000;
+  checkCancelled();
   const hiddenOut = fp16Values(outputsB.hidden_out, "UNET_B hidden_out",
     shape(1280, latentHeight / 2, latentWidth / 2));
   outputsB = null;
