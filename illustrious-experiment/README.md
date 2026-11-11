@@ -200,14 +200,17 @@ The **UNET_A-only** smoke test has now passed in the user's browser. It loaded
 values across all eleven FP16 outputs. Every output had the expected shape and
 all values were finite. The session was released after the test.
 
-A new staged **UNET_A → UNET_B** test is being added. It reruns A, copies only
+The staged **UNET_A → UNET_B** test is now available. It reruns A, copies only
 the five intermediate tensors B consumes (`hidden`, `emb`, and
 `skip_6`–`skip_8`) to CPU-side FP16 arrays, releases A's session, then
 loads B and feeds those exact tensors to it. This avoids trying to keep both
-multi-gigabyte sessions resident simultaneously. B also receives zeroed FP16
-text conditioning, so this tests the partition boundary and B's operators,
-not meaningful prompt conditioning. It will verify B's `hidden_out` shape
-and finite values. It has not yet been run in the user's browser.
+multi-gigabyte sessions resident simultaneously. The copy preserves raw IEEE
+FP16 bytes so it works with both the browser's native `Float16Array` and
+ONNX Runtime's legacy `Uint16Array` float16 representation. B also receives
+zeroed FP16 text conditioning, so this tests the partition boundary and B's
+operators, not meaningful prompt conditioning. It verifies B's
+`hidden_out [1,1280,64,64]` shape, FP16 type, and finite values. It has not
+yet been run in the user's browser.
 
 ## Runtime decision
 
@@ -216,7 +219,7 @@ Do not try to bundle the Python Diffusers runtime into this static site. Diffuse
 Preferred sequence:
 
 1. Run the CLIP-L, CLIP-bigG, and VAE decoder component smoke tests in the browser. All three have now passed on the target machine, confirming external-data loading and real WebGPU inference for both text encoders and the decoder.
-2. Inspect all three split UNet graphs, their chaining convention, and their weight-index maps. Design a staged test instead of loading all UNet parts simultaneously.
+2. Run the staged A → B test. If it succeeds, extend the same sequential-release strategy to C; only after the full A → B → C chain works should we implement a full denoising loop.
 3. Build the no-LoRA WAI v17 SDXL pipeline in JavaScript and generate a baseline image. Keep in mind that WAI v17 is a derivative, not the original Illustrious v0.1 training checkpoint.
 4. Use Python/Diffusers offline to load the actual Personal Ami adapter, fuse it into the official Illustrious v0.1 base, and generate a reproducible reference image. Do not require a Python inference server.
 5. Inspect the WAI FP16 weight-index format and implement a converter for Personal Ami only after all 986 pairs have been mapped and shape-checked. If the derivative graph cannot be validated, export the exact base as a separate browser model instead.
@@ -239,6 +242,7 @@ Both routes target browser-native inference: model computation occurs inside the
 - vae-smoke-test.js: passed in the user's browser; FP16 input [1, 4, 128, 128], FP16 image output [1, 3, 1024, 1024], all finite, 16.1 seconds.
 - unet-metadata-inspector.js: passed in the user's browser; verified all 6 graph/index files against manifest sizes and SHA-256, downloaded 3.61 MiB, fetched 0 UNet tensor shards. Extracted the A → B → C interfaces and weight index layout.
 - unet-a-smoke-test.js: passed in the user's browser; 2.32 GiB across 3 shards, inference 5.6 s, total 100.5 s, 26,871,040 FP16 output values across all 11 correctly shaped and finite outputs; session released.
+- unet-ab-chain-test.js: staged A → B validation; holds only five CPU-side FP16 intermediate tensors between sessions, releases A before loading B, then feeds the true A outputs to B and validates FP16 hidden_out [1,1280,64,64]; awaits browser validation.
 - unet-ab-chain-test.js: staged A → B test; copies only A's five B-facing intermediate tensors to CPU FP16, releases A, then loads B and runs on those actual tensors with zero text conditioning. Checks B hidden_out [1,1280,64,64] FP16 finite; awaits browser validation.
 - Full image-generation inference is not wired up yet.
 
@@ -266,12 +270,15 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [x] Run the ~99 MB VAE decoder ONNX WebGPU smoke test: success; FP16 input `[1, 4, 128, 128]`, FP16 output `[1, 3, 1024, 1024]`, all finite, 16.1 seconds.
 - [x] Run the ~1.39 GB CLIP-bigG ONNX WebGPU smoke test: success; 1.29 GiB, int64 input [1, 77], FP16 outputs [1, 77, 1280] and [1, 1280], all finite, 79.1 seconds.
 - [x] Inspect all three split UNet graphs and weight-index maps: all 6 graph/index files matched manifest SHA-256 and sizes; 3.61 MiB fetched, 0 tensor shards. Interfaces establish A → B → C and expose FP16/FP32 input contracts plus transposed matrix weights.
+- [x] Run the single-partition UNET_A WebGPU smoke test at 1024²: passed; 2.32 GiB, 3 shards, 5.6 s inference, 100.5 s total, 26,871,040 FP16 output values all finite and correctly shaped.
+- [ ] Run the staged UNET_A → UNET_B WebGPU chain test; A's session is released before B is loaded.
+- [ ] After A → B passes, add the C stage and test the complete split denoiser.
 - [x] Add an offline Diffusers fusion / generic ONNX reference export script (Python syntax and `--help` pass; synthetic BF16 Safetensors test reproduced the real scan's 2,958 keys, 986 rank-32 pairs, 986 alpha keys, and three component counts; deliberately malformed rank was rejected). Real Personal Ami loading/fusion is still pending.
 - [x] Inspect the exact Personal Ami LoRA header and tensor-key layout in the browser (actual report recorded above).
 - [ ] Load and fuse the actual Personal Ami tensors in Diffusers against the official Illustrious v0.1 base.
 - [ ] Verify the Personal Ami LoRA against the package's WAI Illustrious v17 FP16 graph (this derivative is not the exact v0.1 training checkpoint).
 - [ ] Prototype ExecuTorch WebGPU export for the SDXL UNet and verify required operator coverage.
-- [ ] Build or adapt the ONNX Runtime WebGPU execution pipeline for the split SDXL UNet graphs.
+- [ ] Complete the staged A → B → C ONNX Runtime WebGPU denoiser chain, then add the scheduler and full text conditioning.
 - [ ] Run a baseline prompt in browser WebGPU without a LoRA.
 - [ ] Match a reference image from Diffusers within expected precision differences.
 - [ ] Apply Personal Ami LoRA at strengths 0.6, 0.75, and 0.9; compare against Diffusers.
