@@ -22,6 +22,7 @@ from diffusers import AutoencoderKL, EulerDiscreteScheduler, UNet2DConditionMode
 from diffusers.models.attention_processor import AttnProcessor
 from huggingface_hub import hf_hub_download, model_info
 from transformers import CLIPTextModel, CLIPTextModelWithProjection
+from tokenizer_pack import save_fast_tokenizers
 
 DEFAULT_MODEL = "Laxhar/noobai-XL-1.1"
 SHARD_BYTES = 1_500_000_000
@@ -286,6 +287,7 @@ def export_model(args):
         revision=source_revision,
     )
     shutil.copy2(source_card, output / "SOURCE_MODEL_README.md")
+    save_fast_tokenizers(args.model, source_revision, output)
     (output / "MODEL_TERMS.md").write_text(
         "# Source model and terms\n\n"
         f"- Source checkpoint: https://huggingface.co/{args.model}/tree/{source_revision}\n"
@@ -444,6 +446,12 @@ def export_model(args):
         "model": "NoobAI XL 1.1",
         "sourceModel": args.model,
         "sourceRevision": source_revision,
+        "tokenizerModel": args.upload_repo or args.model,
+        "tokenizerRevision": "main" if args.upload_repo else source_revision,
+        "tokenizerSubfolders": [
+            f"{args.path_in_repo}/tokenizer" if args.upload_repo else "tokenizer",
+            f"{args.path_in_repo}/tokenizer_2" if args.upload_repo else "tokenizer_2",
+        ],
         "pipeline": "StableDiffusionXLPipeline",
         "opset": OPSET,
         "weightDtype": "float16",
