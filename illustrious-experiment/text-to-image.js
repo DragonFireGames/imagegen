@@ -584,7 +584,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
 
   log("Step denoiser timing · A " + timings.a.toFixed(2) + "s · B " +
     timings.b.toFixed(2) + "s · C " + timings.c.toFixed(2) + "s · CFG " + cfg);
-  return guided;
+  return { guided, timings };
 }
 
 async function releaseSessions(sessions) {
@@ -698,6 +698,7 @@ async function generate(options) {
   log("UNet manifest payload total " + formatBytes(unetBytes) +
     " (not a direct VRAM measurement). Loading all partitions together…");
   const sessions = { a: null, b: null, c: null };
+  let totalUnetExecutionSeconds = 0;
   try {
     setProgress(8, "Loading UNet partitions");
     setStatus("Loading UNET_A, UNET_B, and UNET_C together. This requires several GiB of memory…");
@@ -716,7 +717,7 @@ async function generate(options) {
       checkCancelled();
       const stepStarted = performance.now();
       const scaled = scheduler.scaleModelInput(latents, step);
-      const epsilon = await runUnetStep(
+      const denoiser = await runUnetStep(
         sessions,
         conditioning,
         scaled,
@@ -726,6 +727,8 @@ async function generate(options) {
         options.cfg,
         step
       );
+      totalUnetExecutionSeconds += denoiser.timings.a + denoiser.timings.b + denoiser.timings.c;
+      const epsilon = denoiser.guided;
       const noise = createNormalNoise(latentSize, options.seed + step + 1);
       latents = scheduler.step(epsilon, step, latents, noise);
       for (let i = 0; i < latents.length; i++) {
@@ -742,6 +745,8 @@ async function generate(options) {
   } finally {
     await releaseSessions(sessions);
   }
+  log("Accumulated UNet execution time " + totalUnetExecutionSeconds.toFixed(2) +
+    "s across " + options.steps + " steps (sum of A + B + C inference calls).");
 
   checkCancelled();
   log("Denoising complete. Loading VAE decoder after releasing all UNet partitions.");
