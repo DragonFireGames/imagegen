@@ -40,6 +40,7 @@
     .notice { padding: 12px 14px; border-left: 3px solid #e5a64b; background: #22252d; color: #c7c9d1; }
     [hidden] { display: none !important; }
     .inspect-output { max-height: 680px; overflow: auto; padding: 14px; border-radius: 8px; background: #111319; color: #d5d7e0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .prompt-input { display: block; width: 100%; margin: 10px 0 14px; padding: 12px; border: 1px solid #4a4e59; border-radius: 8px; resize: vertical; background: #111319; color: #e5e6eb; font: inherit; }
     @media (max-width: 560px) { body { padding: 18px 12px; } .panel { padding: 16px; } .data-row { grid-template-columns: 1fr; gap: 2px; } }
   </style>
 </head>
@@ -193,6 +194,39 @@
     </section>
 
     <section class="panel">
+      <p class="eyebrow">Complete split-UNet forward pass</p>
+      <h2>UNET_A → UNET_B → UNET_C sequential WebGPU chain</h2>
+      <p>Run all three UNet partitions in order. A runs on zero latent/text/time inputs; only the A tensors needed downstream are copied to CPU memory. A is released before B loads; B consumes A's actual tensors and is released before C loads; C consumes B's actual hidden_out and A's remaining skip tensors. The final output should be FP16 [1, 4, 128, 128].</p>
+      <p class="notice">This is a long, multi-gigabyte test: each partition is loaded separately, but the browser may retain cached download data. Close memory-heavy tabs first and do not run another UNet test concurrently. This is a zero-conditioning forward pass, not an image-generation test.</p>
+      <button class="button" id="testUnetABC" type="button">Test full UNET_A → B → C chain</button>
+      <p class="status" id="unetABCStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="unetABCSummary" hidden></div>
+      <p class="notice">A successful result validates the complete split denoiser graph chain only. It does not yet test a real prompt, scheduler, repeated denoising steps, or LoRA.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Fourth VAE component test</p>
+      <h2>VAE encoder ONNX WebGPU smoke test</h2>
+      <p>Load only the candidate pack's VAE encoder and encode a zero-filled RGB input at 1024 × 1024. The test uses the graph's declared input shape/type where available and reports every output tensor's shape and dtype. It does not load the decoder or any UNet partition.</p>
+      <button class="button" id="testVaeEncoder" type="button">Test VAE encoder (about 68 MB)</button>
+      <p class="status" id="vaeEncoderStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="vaeEncoderSummary" hidden></div>
+      <p class="notice">This is an encoder-only test. It does not assume the output is already scaled for the decoder; latent scaling and encode/decode round-trip behavior need a separate check.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Real prompt conditioning</p>
+      <h2>Dual tokenizer + CLIP WebGPU conditioning test</h2>
+      <p>Tokenize one actual prompt with both tokenizer folders, then run CLIP-L and CLIP-bigG sequentially on those token IDs. The test assembles the SDXL conditioning tensors expected by the UNet: encoder_hidden_states [1, 77, 2048] and pooled text_embeds [1, 1280].</p>
+      <label for="conditioningPrompt">Prompt</label>
+      <textarea class="prompt-input" id="conditioningPrompt" rows="3">personal ami, 1girl, portrait, masterpiece, best quality</textarea>
+      <button class="button" id="testPromptConditioning" type="button">Test real prompt conditioning</button>
+      <p class="status" id="promptConditioningStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="promptConditioningSummary" hidden></div>
+      <p class="notice">This loads the two small tokenizer folders and then the two text encoders sequentially. The model weights may be requested again if the browser does not keep the earlier downloads in cache. It does not load the UNet or VAE and does not generate an image.</p>
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Runtime diagnostics</p>
       <h2>Check browser and ONNX Runtime support</h2>
       <p>This local probe checks WebGPU, relevant adapter limits, the ONNX Runtime version, and the adapter API surface. ONNX Runtime's built-in LoRA adapter API is WASM-only, so it is not usable by this experiment's WebGPU execution path.</p>
@@ -217,5 +251,8 @@
   <script type="module" src="./unet-metadata-inspector.js"></script>
   <script type="module" src="./unet-a-smoke-test.js"></script>
   <script type="module" src="./unet-ab-chain-test.js"></script>
+  <script type="module" src="./unet-abc-chain-test.js"></script>
+  <script type="module" src="./vae-encoder-smoke-test.js"></script>
+  <script type="module" src="./prompt-conditioning-smoke-test.js"></script>
 </body>
 </html>
