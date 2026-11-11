@@ -67,8 +67,13 @@ function finiteFp16(tensor, label, shape) {
 }
 
 async function loadTokenizer(subfolder) {
-  env.remotePathTemplate = "{model}/resolve/{revision}/" + subfolder + "/{file}";
-  return AutoTokenizer.from_pretrained(MODEL_ID, { revision: "main" });
+  // Let Transformers.js append the subfolder to real filenames. Embedding
+  // "{file}" inside remotePathTemplate produced the invalid URL
+  // ".../tokenizer/{file}/tokenizer.json" in the browser.
+  return AutoTokenizer.from_pretrained(MODEL_ID, {
+    revision: "main",
+    subfolder
+  });
 }
 
 async function loadOnnxComponent(component, label) {
