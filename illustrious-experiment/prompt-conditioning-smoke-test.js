@@ -113,10 +113,26 @@ async function loadTokenizer(subfolder) {
   const unkToken = getToken(specialMap.unk_token, "unk_token");
   const bosId = vocab[bosToken];
   const eosId = vocab[eosToken];
+  const padId = vocab[padToken];
   if (!Number.isSafeInteger(bosId) || !Number.isSafeInteger(eosId) ||
       bosId !== 49406 || eosId !== 49407) {
     throw new Error(subfolder + " CLIP vocabulary has unexpected BOS/EOS IDs: " +
       String(bosId) + " / " + String(eosId) + ".");
+  }
+  if (!Number.isSafeInteger(padId) || !Number.isSafeInteger(vocab[unkToken])) {
+    throw new Error(subfolder + " CLIP vocabulary is missing its configured pad/unknown token.");
+  }
+
+  function makeAddedToken(value, id, content) {
+    return {
+      id,
+      content,
+      single_word: value?.single_word ?? false,
+      lstrip: value?.lstrip ?? false,
+      rstrip: value?.rstrip ?? false,
+      normalized: value?.normalized ?? false,
+      special: true
+    };
   }
 
   const merges = mergesText.split(/\r?\n/)
@@ -158,24 +174,8 @@ async function loadTokenizer(subfolder) {
     truncation: null,
     padding: null,
     added_tokens: [
-      {
-        id: bosId,
-        content: bosToken,
-        single_word: false,
-        lstrip: false,
-        rstrip: false,
-        normalized: true,
-        special: true
-      },
-      {
-        id: eosId,
-        content: eosToken,
-        single_word: false,
-        lstrip: false,
-        rstrip: false,
-        normalized: false,
-        special: true
-      }
+      makeAddedToken(specialMap.bos_token, bosId, bosToken),
+      makeAddedToken(specialMap.eos_token, eosId, eosToken)
     ],
     normalizer,
     pre_tokenizer: preTokenizer,
