@@ -23,7 +23,7 @@ function status(label, extra = "") {
 }
 
 function toBigIntIds(tokenizer, prompt) {
-  return Promise.resolve(tokenizer(prompt, {
+  return Promise.resolve(tokenizer._call(prompt, {
     padding: "max_length",
     truncation: true,
     max_length: 77,
