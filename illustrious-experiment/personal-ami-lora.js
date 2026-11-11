@@ -136,7 +136,9 @@ function readBf16(buffer, label) {
 
 async function readTensor(file, dataStart, name, info) {
   if (!info || info.dtype !== "BF16" || !Array.isArray(info.shape) ||
-      !Array.isArray(info.data_offsets) || info.data_offsets.length !== 2) {
+      !info.shape.every(value => Number.isSafeInteger(value) && value >= 0) ||
+      !Array.isArray(info.data_offsets) || info.data_offsets.length !== 2 ||
+      !info.data_offsets.every(value => Number.isSafeInteger(value) && value >= 0)) {
     throw new Error("Missing or unsupported BF16 tensor " + name + ".");
   }
   const [start, end] = info.data_offsets;
@@ -202,6 +204,7 @@ function patchLinear(buffer, down, up, shape, transposed, scale, label) {
       const value = Number(base[index]) + row[input] * scale;
       if (!Number.isFinite(value)) throw new Error("Non-finite patched weight in " + label + ".");
       patched[index] = value;
+      if (!Number.isFinite(patched[index])) throw new Error("FP16 overflow while patching " + label + ".");
     }
   }
   return new Uint8Array(patched.buffer);
@@ -230,6 +233,7 @@ function patchConv2d(buffer, down, up, shape, scale, label) {
       const value = Number(base[outputOffset + input]) + row[input] * scale;
       if (!Number.isFinite(value)) throw new Error("Non-finite patched Conv2D weight in " + label + ".");
       patched[outputOffset + input] = value;
+      if (!Number.isFinite(patched[outputOffset + input])) throw new Error("FP16 overflow while patching " + label + ".");
     }
   }
   return new Uint8Array(patched.buffer);
