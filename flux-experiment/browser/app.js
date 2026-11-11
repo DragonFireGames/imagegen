@@ -111,7 +111,7 @@ function makeShader(dtype) {
   const type = dtype === "f16" ? "f16" : "f32";
   const cast = dtype === "f16" ? "f32(A[row * n + k]) * f32(B[k * n + col])" : "A[row * n + k] * B[k * n + col]";
   return (dtype === "f16" ? "enable f16;\n" : "") + `
-struct Params { n: u32 };
+struct Params {\n  n: u32,\n};
 @group(0) @binding(0) var<storage, read> A: array<${type}>;
 @group(0) @binding(1) var<storage, read> B: array<${type}>;
 @group(0) @binding(2) var<storage, read_write> C: array<f32>;
