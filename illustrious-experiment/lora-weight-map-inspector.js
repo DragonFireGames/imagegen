@@ -342,7 +342,7 @@ button.addEventListener("click", async () => {
       }
       if (!found) {
         counts.missingName++;
-        if (issues.length < 80) issues.push("NO INDEX MATCH " + stem + " → " + key);
+        if (issues.length < 80) issues.push("NO INDEX MATCH " + stem + " → tried: " + keysToTry.join(" | "));
         continue;
       }
       counts.matched++;
