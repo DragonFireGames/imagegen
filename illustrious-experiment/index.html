@@ -42,6 +42,18 @@
     .inspect-output { max-height: 680px; overflow: auto; padding: 14px; border-radius: 8px; background: #111319; color: #d5d7e0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
     .prompt-input { display: block; width: 100%; margin: 10px 0 14px; padding: 12px; border: 1px solid #4a4e59; border-radius: 8px; resize: vertical; background: #111319; color: #e5e6eb; font: inherit; }
     .number-input { display: block; width: 110px; margin: 8px 0 14px; padding: 9px; border: 1px solid #4a4e59; border-radius: 7px; background: #111319; color: #e5e6eb; font: inherit; }
+
+    .generator-controls { display: flex; flex-wrap: wrap; gap: 14px 22px; margin: 10px 0; }
+    .generator-controls > div { min-width: 112px; }
+    .generator-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+    .secondary-button { color: #e5e6eb; background: #393d48; }
+    #generationProgress { display: block; width: 100%; height: 12px; accent-color: #f08acb; }
+    .progress-label { margin: 4px 0 12px; font-size: 12px; }
+    .generated-result { display: grid; justify-items: start; gap: 10px; margin-top: 14px; }
+    #generatedImage { display: block; max-width: 100%; height: auto; border-radius: 8px; background: #111319; }
+    #downloadGeneratedImage { font-weight: 700; }
+    .generation-log { min-height: 120px; max-height: 420px; }
+
     @media (max-width: 560px) { body { padding: 18px 12px; } .panel { padding: 16px; } .data-row { grid-template-columns: 1fr; gap: 2px; } }
   </style>
 </head>
@@ -77,7 +89,41 @@
       <p><a href="https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0" target="_blank" rel="noreferrer">Original Illustrious XL v0.1 base</a> · <a href="https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17/blob/main/LICENSE.txt" target="_blank" rel="noreferrer">Candidate pack license</a></p>
     </section>
 
-    <section class="panel">
+        <section class="panel" id="generator">
+      <p class="eyebrow">Full browser-side inference</p>
+      <h2>Generate an image</h2>
+      <p>Text-to-image with the WAI Illustrious v17 ONNX pack, both CLIP encoders, classifier-free guidance, the three-part UNet, Euler ancestral sampling, and the VAE decoder. The prompt and generated image stay in this browser; model weights are downloaded from Hugging Face.</p>
+      <label for="generationPrompt">Prompt</label>
+      <textarea class="prompt-input" id="generationPrompt" rows="4">1girl, detailed anime illustration, expressive eyes, beautiful lighting, highly detailed background</textarea>
+      <label for="generationNegativePrompt">Negative prompt</label>
+      <textarea class="prompt-input" id="generationNegativePrompt" rows="3">worst quality, low quality, bad anatomy, extra limbs, extra fingers, blurry, watermark</textarea>
+      <label for="generationSuffix">Positive prompt suffix</label>
+      <input class="prompt-input" id="generationSuffix" type="text" value="masterpiece, best quality, absurdres, very aesthetic">
+      <div class="generator-controls">
+        <div><label for="generationWidth">Width</label><input class="number-input" id="generationWidth" type="number" min="512" max="1024" step="64" value="1024"></div>
+        <div><label for="generationHeight">Height</label><input class="number-input" id="generationHeight" type="number" min="512" max="1024" step="64" value="1024"></div>
+        <div><label for="generationSteps">Steps</label><input class="number-input" id="generationSteps" type="number" min="1" max="100" value="28"></div>
+        <div><label for="generationCfg">CFG scale</label><input class="number-input" id="generationCfg" type="number" min="0" max="20" step="0.5" value="5"></div>
+        <div><label for="generationSeed">Seed</label><input class="number-input" id="generationSeed" type="number" min="0" max="4294967295" step="1" value="1337"></div>
+      </div>
+      <p class="notice">High-memory run: the three UNet sessions are kept resident together during denoising (about 4.8 GiB of model payload, before activations/runtime overhead). Start at a smaller resolution if memory is tight. The first run may spend several minutes downloading and compiling the models. Cancel is checked between graph calls; an in-flight WebGPU call must finish.</p>
+      <p class="notice">Personal Ami status: the local adapter is mapped to the ONNX weight indexes, but it is not injected into this generator yet. This first interface uses the WAI Illustrious v17 base weights; no inactive LoRA strength control is shown.</p>
+      <div class="generator-actions">
+        <button class="button" id="generateImage" type="button">Generate image</button>
+        <button class="button secondary-button" id="cancelGeneration" type="button" disabled>Cancel</button>
+      </div>
+      <p class="status" id="generationStatus" data-type="info" aria-live="polite">Ready. Generation runs entirely in this browser and requires WebGPU.</p>
+      <progress id="generationProgress" max="100" value="0"></progress>
+      <p class="progress-label" id="generationProgressLabel">Idle</p>
+      <div class="generated-result">
+        <img id="generatedImage" alt="Generated Illustrious image" hidden>
+        <a id="downloadGeneratedImage" hidden>Save PNG</a>
+      </div>
+      <h3>Performance log</h3>
+      <pre class="inspect-output generation-log" id="generationLog" aria-live="off"></pre>
+    </section>
+
+<section class="panel">
       <p class="eyebrow">Existing implementation reference</p>
       <h2><a href="https://github.com/d0grr/generate-ai-images" target="_blank" rel="noreferrer">Browser SDXL · ONNX WebGPU</a></h2>
       <p>A separate project already runs SDXL in Chrome with a JavaScript pipeline, OPFS caching, FP16 and INT4 UNet variants. Its inpainting example fuses a specific LoRA before export; it does not demonstrate arbitrary live LoRA swapping.</p>
@@ -296,8 +342,8 @@
 
     <section class="panel">
       <p class="eyebrow">Runtime status</p>
-      <h2>Full image generation is not wired up yet</h2>
-      <p>Both CLIP encoders, both VAE directions, real positive/negative SDXL prompt conditioning, and the complete split UNET_A → B → C forward chain have now passed separate browser-side WebGPU tests. Full iterative denoising and image output are not wired up yet. The next constraint to measure is whether all three UNet sessions can remain resident together. Python is export-only; no Python inference server is intended. ExecuTorch WebGPU remains a secondary experiment. The FLUX.2 application remains untouched.</p>
+      <h2>Full image-generation interface is wired up</h2>
+      <p>Both CLIP encoders, both VAE directions, real positive/negative SDXL prompt conditioning, and the complete split UNET_A → B → C forward chain have now passed separate browser-side WebGPU tests. The browser-side generation path now connects real prompt encoding, batched classifier-free guidance, resident split-UNet denoising, Euler ancestral latent updates, and VAE decoding into one interface. The first full image run still needs to be verified on-device; this interface does not yet inject the Personal Ami LoRA. Python is export-only; no Python inference server is intended. The FLUX.2 application remains untouched.</p>
       <p><a href="./README.md">Technical plan and validation checklist</a> · <a href="./tools/README.md">Offline LoRA fusion / ONNX export instructions</a></p>
     </section>
   </main>
@@ -317,5 +363,6 @@
   <script type="module" src="./vae-encoder-smoke-test.js"></script>
   <script type="module" src="./prompt-conditioning-smoke-test.js"></script>
   <script type="module" src="./scheduler-math-smoke-test.js"></script>
+  <script type="module" src="./text-to-image.js"></script>
 </body>
 </html>
