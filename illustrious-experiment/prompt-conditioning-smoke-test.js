@@ -1,6 +1,6 @@
 import * as ort from "../vendor/onnxruntime-web/ort.webgpu.min.mjs";
 import { acquireHeavyModelTest, releaseHeavyModelTest } from "./heavy-model-test-lock.js";
-import { AutoTokenizer, env } from "../vendor/transformers/transformers.js";
+import { AutoTokenizer, env } from "../vendor/transformers/transformers.min.js";
 
 const MODEL_ID = "aaaaaeeeee/blip-sdxl-anime-wai-illustrious17";
 const MODEL_BASE = "https://huggingface.co/" + MODEL_ID + "/resolve/main/";
