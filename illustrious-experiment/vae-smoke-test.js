@@ -76,9 +76,16 @@ button.addEventListener("click", async () => {
 
     const inputName = session.inputNames[0];
     if (!inputName) throw new Error("The VAE decoder graph has no inputs.");
-    const input = new ort.Tensor("float32", new Float32Array(4 * 128 * 128), [1, 4, 128, 128]);
+    if (typeof Float16Array !== "function") {
+      throw new Error("This browser does not expose Float16Array, which this VAE decoder requires.");
+    }
 
-    setStatus("Running a zero-latent decode through the WebGPU session…");
+    // This candidate graph's latent_sample input is FP16. The VAE decoder
+    // exports its own I/O dtype; it is not interchangeable with the FP32
+    // latent input used by some other SDXL ONNX exports.
+    const input = new ort.Tensor("float16", new Float16Array(4 * 128 * 128), [1, 4, 128, 128]);
+
+    setStatus("Running a zero-latent FP16 decode through the WebGPU session…");
     const outputs = await session.run({ [inputName]: input });
     const outputName = session.outputNames[0];
     const output = outputs[outputName];
@@ -91,14 +98,14 @@ button.addEventListener("click", async () => {
       }
     }
 
-    addRow("Session input", inputName + " · " + input.dims.join(" × "));
+    addRow("Session input", inputName + " · " + input.type + " · " + input.dims.join(" × "));
     addRow("Session output", outputName);
     addRow("Output shape", output.dims.join(" × "));
     addRow("Output dtype", output.type);
     addRow("Output values", "All finite");
     addRow("Load + inference", ((performance.now() - started) / 1000).toFixed(1) + " s");
 
-    setStatus("VAE decoder loaded and completed a WebGPU test inference. This validates decoding only; it does not generate an image.", "success");
+    setStatus("VAE decoder loaded and completed a zero-latent FP16 WebGPU test inference. This validates decoding only; it does not generate an image.", "success");
   } catch (error) {
     console.error("[Illustrious] VAE decoder smoke test failed:", error);
     setStatus("VAE decoder WebGPU smoke test failed: " + (error?.message || String(error)), "error");
