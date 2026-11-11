@@ -135,6 +135,18 @@ Do not use the SDXL-Lightning adapter's layer map for Personal Ami. Do not
 expose a LoRA strength slider until the converted adapter has passed a numerical
 comparison against the same base model and strength in Diffusers.
 
+## Single-target browser LoRA patch validation
+
+`lora-clipl-patch-test.js` is the first actual ONNX weight-patching experiment. It selects one shape-compatible BF16 CLIP-L pair from the user-supplied Personal Ami file, reads the pair and its scalar alpha locally, resolves its ONNX initializer through the verified CLIP-L weights index, and applies
+
+`W' = W + strength × (alpha / rank) × (W_up × W_down)`
+
+to the appropriate FP16 weight range. When the index marks the matrix as transposed, the delta is written in the corresponding ONNX storage orientation. The original external-data shard is fetched as a Blob, size-checked and SHA-256-verified against the manifest, then represented as original Blob slices with the patched FP16 byte range inserted. ONNX Runtime receives that patched Blob through its documented `externalData` option.
+
+The test loads the original CLIP-L session and the patched CLIP-L session separately, runs the same deterministic token IDs through both, and compares their `penultimate_hidden_state` outputs. This is deliberately only one matrix: it verifies a real data path before the 980-pair adapter is applied. It does not yet establish full-adapter compatibility, all-pair runtime, or Diffusers equivalence. The actual .safetensors file remains local to the browser.
+
+The current archive snapshot is preserved on branch `archive/pre-personal-ami-lora-2026-11-11`; ongoing LoRA changes are being made on `main`.
+
 ## First browser model test
 
 The page now includes a **CLIP-L ONNX WebGPU smoke test** in
@@ -257,7 +269,7 @@ Both routes target browser-native inference: model computation occurs inside the
 - heavy-model-test-lock.js: page-wide lock that rejects overlapping CLIP, VAE, prompt-conditioning and UNet smoke tests before they download weights or allocate WebGPU sessions.
 - lora-inspector.js: reads only the first safetensors header block and reports tensor names, shapes, dtypes, byte-range validity, common LoRA A/B or down/up pairs, rank-dimension mismatches, possible extended adapter tensors, and embedded training metadata. It does not upload or deserialize tensor payloads.
 - lora-weight-map-inspector.js: local-header-only matcher for the five FP16 indexes. The corrected browser report matched 980/986 names, with all 980 shape-compatible: 66 CLIP-L, 192 CLIP-bigG, 350 UNET_A, 306 UNET_B, and 66 UNET_C. All 980 targets require ONNX matrix-delta transposition. The six unmatched pairs are exactly CLIP-L layer 11's two MLP and four attention projections; the tested CLIP-L graph exposes `penultimate_hidden_state`, consistent with that final block being absent from the graph index. The mapper now classifies these six separately from unexpected misses. No LoRA tensor payloads were read.
-- lora-payload-smoke-test.js: passed on one real local CLIP-L BF16 pair (layer-0 MLP fc1), decoding a rank-32 down/up pair plus alpha and producing a finite, nonzero FP32 delta; it did not patch an ONNX shard or prove model-output equivalence.
+- lora-payload-smoke-test.js: passed on one real local CLIP-L BF16 pair (layer-0 MLP fc1), decoding a rank-32 down/up pair plus alpha and producing a finite, nonzero FP32 delta; it did not patch an ONNX shard or prove model-output equivalence.\n- lora-clipl-patch-test.js: new, pending browser validation. It patches that representative local BF16 pair into the indexed FP16 CLIP-L initializer, verifies the source shard hash, supplies the modified external-data shard as a Blob, and compares baseline versus patched ONNX output on identical token IDs.
 - lora-payload-integrity-test.js: passed a 4 MiB-chunk scan of all 2,958 tensor records / 114,017,242 BF16 values (228,034,484 payload bytes); all byte ranges and values were valid, with zero non-finite values and no network upload.
 - tools/fuse_lora_and_export.py: validates the safetensors header, loads its tensors as a Diffusers state dict, verifies that UNet and both text encoders receive the adapter, then fuses it at the selected strength. The real Personal Ami header report is recorded above; actual full Diffusers fusion still needs to be run.
 - tools/README.md: isolated environment and export instructions.
@@ -326,7 +338,7 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [ ] Validate VAE encode/decode scaling and round-trip compatibility independently; successful image generation confirms the chosen decode scale can produce a visually coherent image but is not a formal encoder/decoder round-trip test.
 - [x] Run a baseline prompt in browser WebGPU without a LoRA; first 1024×1024, 28-step, CFG 5, seed 1337 image generated successfully and saved as a 1.8 MiB PNG.
 - [ ] Match a reference image from Diffusers within expected precision differences.
-- [ ] Apply Personal Ami LoRA at strengths 0.6, 0.75, and 0.9; compare against Diffusers.
+- [ ] Run the single-pair CLIP-L ONNX shard patch test and verify that the patched Blob loads and changes the graph output.\n- [ ] Extend the validated patcher to all 980 mapped targets, including both text encoders and the three UNet partitions.\n- [ ] Compare full-adapter browser outputs at strengths 0.6, 0.75, and 0.9 against a Diffusers reference.
 - [ ] Investigate quantized UNet execution and adapter application.
 - [x] Add dimension controls (512–1024 multiples of 64), negative prompt, CFG, Euler ancestral steps, seed, progress, cancellation, performance logs, and PNG output.
 - [x] Verify basic end-to-end generation on the target Mac/browser: all three UNet sessions resident, 28 denoising steps, VAE decode, and PNG output succeeded. Full performance/memory profiling and LoRA validation remain open.
