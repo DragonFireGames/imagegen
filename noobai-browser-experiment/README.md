@@ -10,7 +10,7 @@ The intended user flow is:
 2. On the first visit, enter the published browser-model-pack URL and download its ONNX files.
 3. The browser stores model graphs and weight shards in its Origin Private File System (OPFS).
 4. Generate images locally. Later visits reuse the OPFS copy instead of downloading the multi-gigabyte model again.
-5. The app shell/runtime is cached by a service worker; both fast CLIP tokenizer assets are hosted in the browser pack and cached by Transformers.js.
+5. The app shell/runtime is cached by a service worker; both fast CLIP tokenizers are bundled in the browser pack and loaded directly from its tokenizer JSON/config files.
 
 No Node server, Python inference server, native executable, or local installation is part of the end-user flow. Python is used only by the offline conversion/publishing step.
 
@@ -58,13 +58,13 @@ python noobai-browser-experiment/tools/export_noobai_onnx.py \
   --path-in-repo browser-pack
 ```
 
-After the upload, the notebook prints a model-pack URL in this format:
+After the upload, open the folder link in this format (the app accepts it directly):
 
 ```
-https://huggingface.co/YOUR_ACCOUNT/noobai-xl-1.1-browser-onnx/resolve/main/browser-pack
+https://huggingface.co/YOUR_ACCOUNT/noobai-xl-1.1-browser-onnx/tree/main/browser-pack
 ```
 
-Enter that URL in the app and select **Load and cache model**. The manifest points Transformers.js to the two bundled fast tokenizers in the same Hugging Face repository. If you already exported a pack before this tokenizer fix, reopen the Colab notebook and run only the **Repair tokenizer assets on an existing pack (no GPU export)** cell; it patches the existing pack without repeating ONNX conversion.
+Enter that folder URL in the app and select **Load and cache model**. The app converts Hugging Face `/tree/` links to `/resolve/` file URLs, then loads `tokenizer/tokenizer.json`, `tokenizer/tokenizer_config.json`, and the matching files in `tokenizer_2/` directly from the pack. It does not ask the original model repository to resolve tokenizer metadata. If you already exported a pack before this tokenizer fix, reopen the Colab notebook and run only the **Repair tokenizer assets on an existing pack (no GPU export)** cell; it patches the existing pack without repeating ONNX conversion.
 
 Do not upload the multi-gigabyte model files to this GitHub Pages repository. GitHub Pages has a published-site size limit; keep the application/runtime here and host the ONNX model pack separately.
 
@@ -75,7 +75,7 @@ Do not upload the multi-gigabyte model files to this GitHub Pages repository. Gi
 - OPFS support and enough free disk space for the model pack.
 - The model components are downloaded by URL into OPFS. Incomplete files are resumed with HTTP Range requests where the host supports them.
 - The app requests persistent browser storage, but the browser can deny the request or later evict best-effort storage.
-- The page/runtime are cached by the service worker. Tokenizer files are small and are cached separately by Transformers.js.
+- The page/runtime are cached by the service worker. Tokenizer JSON and config files are fetched directly from the selected pack URL.
 
 The initial pack is a large SDXL model. The U-Net weights alone are about 5.14 GB in FP16. The browser loads each text encoder one at a time, releases both, then loads the U-Net; it releases the U-Net before loading the VAE. This reduces overlapping model-weight allocations. Your 16 GB Mac gives us a more realistic chance than the prior 9 GB setup, but it is not a guarantee: Chrome, GPU allocations, and working activations also consume memory. Start at 768×768. Resolution reduces activations, not the U-Net weights. A quantized U-Net remains a future optimization, not part of this first FP16 pack.
 
