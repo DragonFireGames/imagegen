@@ -879,6 +879,10 @@ button.addEventListener("click", async () => {
   }
 });
 
+fields.personalAmi.addEventListener("change", () => {
+  fields.loraStrength.disabled = !fields.personalAmi.checked;
+});
+
 cancelButton.addEventListener("click", () => {
   cancelRequested = true;
   cancelButton.disabled = true;
