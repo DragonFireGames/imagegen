@@ -197,10 +197,11 @@ pairs has a direct one-to-one match.
 The new **UNET_A-only** smoke test loads A's external weight shards and runs
 one zero-input WebGPU inference at 1024². It uses the types reported in the
 graph metadata (FP16 sample/conditioning embeddings, FP32 timestep/time IDs),
-checks every output for finite values, and releases the session. It does not
-load B/C. A's weights are about 2.49 GB, so this is explicitly opt-in and may
-fail on memory/driver limits even though the encoders worked. The user has not
-run this test yet.
+checks that all eleven expected outputs have the correct shapes and FP16 dtype,
+checks every value for finiteness, and releases the session. It does not load
+B/C. A's weights are about 2.49 GB, so this is explicitly opt-in and may fail
+on memory/driver limits even though the encoders worked. The user has not run
+this test yet.
 
 ## Runtime decision
 
