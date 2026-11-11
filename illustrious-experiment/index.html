@@ -7,38 +7,99 @@
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; padding: 32px 16px; background: #111319; color: #e5e6eb; font: 15px/1.6 system-ui, sans-serif; }
-    main { width: min(900px, 100%); margin: 16px auto; }
+    main { width: min(980px, 100%); margin: 16px auto; }
     a { color: #f08acb; }
-    .panel { padding: 24px; border: 1px solid #343740; border-radius: 12px; background: #191b21; }
-    .status { display: inline-flex; align-items: center; gap: 8px; color: #e5a64b; }
-    .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-    code { color: #f3b6dc; }
-    li { margin: 10px 0; }
+    h1, h2, h3 { line-height: 1.2; }
+    h1 { font-size: clamp(28px, 5vw, 38px); }
+    h2 { font-size: 20px; margin: 0 0 12px; }
+    h3 { font-size: 15px; margin: 22px 0 8px; }
+    p { color: #bfc1ca; }
+    code { color: #f3b6dc; overflow-wrap: anywhere; }
+    .panel { padding: 22px; margin: 18px 0; border: 1px solid #343740; border-radius: 12px; background: #191b21; }
+    .eyebrow { color: #e5a64b; font-size: 12px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+    .status { margin: 12px 0; color: #bfc1ca; }
+    .status[data-type="success"] { color: #9bd8ae; }
+    .status[data-type="error"] { color: #ff9b9b; }
+    .model-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 14px 0; }
+    .fact { padding: 12px; border-radius: 8px; background: #22252d; }
+    .fact span { display: block; color: #9b9eaa; font-size: 12px; }
+    .fact strong { display: block; margin-top: 3px; }
+    .button { appearance: none; border: 0; border-radius: 7px; padding: 10px 16px; color: #17131a; background: #f08acb; font: inherit; font-weight: 700; cursor: pointer; }
+    .button:disabled { opacity: .55; cursor: wait; }
+    .drop-zone { margin: 14px 0; padding: 22px; border: 1px dashed #656978; border-radius: 9px; text-align: center; background: #20232b; }
+    .drop-zone.dragging { border-color: #f08acb; background: #2a2230; }
+    input[type="file"] { display: block; width: 100%; margin: 10px 0; color: #bfc1ca; }
+    .file-name { color: #e5e6eb; overflow-wrap: anywhere; }
+    .data-list { display: grid; gap: 6px; }
+    .data-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(0, 2fr); gap: 14px; padding: 7px 0; border-bottom: 1px solid #30333c; }
+    .data-label { color: #9b9eaa; overflow-wrap: anywhere; }
+    .data-value { overflow-wrap: anywhere; }
+    .shape { color: #9b9eaa; margin-left: 12px; font-size: 12px; }
+    .tensor-list { max-height: 360px; overflow: auto; padding-left: 22px; }
+    .tensor-list li { margin: 7px 0; overflow-wrap: anywhere; }
+    .notice { padding: 12px 14px; border-left: 3px solid #e5a64b; background: #22252d; color: #c7c9d1; }
+    [hidden] { display: none !important; }
+    @media (max-width: 560px) { body { padding: 18px 12px; } .panel { padding: 16px; } .data-row { grid-template-columns: 1fr; gap: 2px; } }
   </style>
 </head>
 <body>
   <main>
     <p><a href="../">← Back to FLUX.2 generator</a></p>
-    <h1>Illustrious Experiment</h1>
+    <p class="eyebrow">Separate browser-side experiment</p>
+    <h1>Illustrious / SDXL</h1>
     <section class="panel">
-      <p class="status">Browser runtime under development</p>
-      <p>This is a separate SDXL/Illustrious experiment. The existing FLUX.2 generator is not modified by this page.</p>
-      <h2>Target adapter</h2>
-      <p><a href="https://civitai.com/models/1309467/personal-ami-style-illustrious" target="_blank" rel="noreferrer">Personal Ami Style – Illustrious</a></p>
-      <ul>
-        <li>Base family: Illustrious / SDXL</li>
-        <li>Trigger word: <code>personal ami</code></li>
-        <li>Suggested LoRA strength: <code>0.6–0.9</code></li>
-      </ul>
-      <h2>Execution plan</h2>
-      <ol>
-        <li>Export the SDXL pipeline to ONNX once, using Python only as a conversion tool.</li>
-        <li>Run the exported components locally in this browser with ONNX Runtime WebGPU.</li>
-        <li>Load the LoRA locally and validate its effect against a Diffusers reference before exposing generation controls.</li>
-      </ol>
-      <p><strong>No Python inference server is intended.</strong> This page is a research scaffold; generation is not wired up yet.</p>
-      <p><a href="./README.md">Read the technical plan and validation checklist</a></p>
+      <p class="eyebrow">Target adapter</p>
+      <h2><a href="https://civitai.com/models/1309467/personal-ami-style-illustrious" target="_blank" rel="noreferrer">Personal Ami Style – Illustrious</a></h2>
+      <div class="model-facts">
+        <div class="fact"><span>Training base</span><strong>Illustrious XL v0.1</strong></div>
+        <div class="fact"><span>Trigger</span><strong><code>personal ami</code></strong></div>
+        <div class="fact"><span>Suggested LoRA strength</span><strong>0.6–0.9</strong></div>
+      </div>
+      <button class="button" id="copyTrigger" type="button">Copy trigger phrase</button>
+      <p>Adapter listing information is mirrored by TensorHub; the original Civitai page is linked above. Exact tensor compatibility still needs inspection.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Candidate browser model pack</p>
+      <h2><a href="https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17" target="_blank" rel="noreferrer">WAI Illustrious v17 · ONNX WebGPU</a></h2>
+      <div class="model-facts">
+        <div class="fact"><span>Declared base</span><strong>Illustrious XL early-release v0</strong></div>
+        <div class="fact"><span>Repository size</span><strong>8.75 GB</strong></div>
+        <div class="fact"><span>Graph layout</span><strong>Split SDXL UNet</strong></div>
+        <div class="fact"><span>Adapter maps</span><strong>FP16 weights-index files</strong></div>
+      </div>
+      <p class="notice">This is WAI Illustrious v17, a fine-tune based on Illustrious v0.1—not the untouched base checkpoint. Its card documents weight indexes for applying LoRAs to the FP16 graphs. INT4 UNet variants are also present, but their manifest entries do not include those weight-index maps. We need to verify adapter behavior on FP16 first.</p>
+      <p><a href="https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0" target="_blank" rel="noreferrer">Original Illustrious XL v0.1 base</a> · <a href="https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17/blob/main/LICENSE.txt" target="_blank" rel="noreferrer">Candidate pack license</a></p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Local-only utility</p>
+      <h2>Inspect a LoRA file</h2>
+      <p>Choose the Personal Ami .safetensors file. This reads only the file header; tensor payloads are not uploaded, downloaded, or loaded into memory.</p>
+      <div class="drop-zone" id="dropZone">
+        <strong>Drop a .safetensors file here</strong>
+        <input id="loraFile" type="file" accept=".safetensors">
+        <div class="file-name" id="fileName">No file selected</div>
+      </div>
+      <button class="button" id="inspectLora" type="button">Inspect header</button>
+      <p class="status" id="inspectStatus" data-type="info" aria-live="polite">No file inspected yet.</p>
+      <div id="loraResult" hidden>
+        <h3>Tensor summary</h3>
+        <div class="data-list" id="loraSummary"></div>
+        <h3>Training metadata</h3>
+        <div class="data-list" id="loraMetadata"></div>
+        <h3>Example tensor names and shapes</h3>
+        <ol class="tensor-list" id="tensorList"></ol>
+      </div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Runtime status</p>
+      <h2>Inference is not wired up yet</h2>
+      <p>Target architecture: offline Python/Diffusers conversion, then ONNX Runtime WebGPU inference in this page. Python would be used for export only; no Python inference server is intended. The FLUX.2 application remains untouched.</p>
+      <p><a href="./README.md">Technical plan and validation checklist</a></p>
     </section>
   </main>
+  <script type="module" src="./lora-inspector.js"></script>
 </body>
 </html>
