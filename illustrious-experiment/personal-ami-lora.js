@@ -317,7 +317,8 @@ export async function preparePersonalAmiComponent(file, manifest, componentName,
     }
     if (!side) continue;
     const group = groupForStem(stem);
-    if (!group || (group.component !== "unet" && group.component !== componentName)) continue;
+    if (!group) continue;
+    if (group.component === "unet" ? !componentName.startsWith("unet_") : group.component !== componentName) continue;
     if (!pairs.has(stem)) pairs.set(stem, { stem, group });
     const pair = pairs.get(stem);
     pair[side] = info;
