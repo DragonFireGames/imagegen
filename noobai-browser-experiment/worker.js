@@ -36,17 +36,20 @@ function toBigIntIds(tokenizer, prompt) {
 
 async function loadTokenizers(manifest) {
   if (!tokenizerPromise) {
-    const modelId = manifest.sourceModel;
-    const revision = manifest.sourceRevision || "main";
+    if (!manifest.tokenizerModel || !manifest.tokenizerRevision || !Array.isArray(manifest.tokenizerSubfolders) || manifest.tokenizerSubfolders.length !== 2) {
+      throw new Error("This model pack is missing its bundled fast tokenizers. Run the notebook's 'Repair tokenizers without re-exporting' cell, then reload the model pack.");
+    }
+    const modelId = manifest.tokenizerModel;
+    const revision = manifest.tokenizerRevision;
     tokenizerPromise = Promise.all([
       AutoTokenizer.from_pretrained(modelId, {
         revision,
-        subfolder: "tokenizer",
+        subfolder: manifest.tokenizerSubfolders[0],
         progress_callback: (progress) => status("Downloading tokenizer 1", progress?.file || ""),
       }),
       AutoTokenizer.from_pretrained(modelId, {
         revision,
-        subfolder: "tokenizer_2",
+        subfolder: manifest.tokenizerSubfolders[1],
         progress_callback: (progress) => status("Downloading tokenizer 2", progress?.file || ""),
       }),
     ]).catch((error) => {
