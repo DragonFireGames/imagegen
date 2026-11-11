@@ -49,7 +49,7 @@ async function verifyBlob(blob, record, path) {
   if (record?.size !== undefined && blob.size !== record.size) {
     throw new Error(path + " size mismatch: expected " + record.size + ", got " + blob.size + ".");
   }
-  if (record?.sha256) {
+  if (record?.sha256 && blob.size <= 256 * 1024 * 1024) {
     const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
     const actual = Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("");
     if (actual !== record.sha256) throw new Error(path + " SHA-256 mismatch.");
@@ -145,6 +145,9 @@ export async function importModelBundle(file, manifest, log, progress) {
   if (header.version !== 1 || header.model !== "sdxl-anime-wai-illustrious17" || !Array.isArray(header.entries)) {
     throw new Error("Unsupported model bundle version or model identifier.");
   }
+  const required = new Set(generationPaths(manifest));
+  const supplied = new Set(header.entries.map(entry => entry.path));
+  for (const path of required) if (!supplied.has(path)) throw new Error("Model bundle is incomplete; missing " + path + ".");
   const cache = await caches.open(CACHE_NAME);
   const records = new Map((manifest.files || []).map(item => [item.path, item]));
   let done = 0;
