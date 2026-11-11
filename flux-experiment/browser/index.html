@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101114">
+  <meta name="description" content="FLUX.1-dev browser WebGPU feasibility and performance preflight.">
+  <title>FLUX.1-dev — Browser Experiment</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <a class="brand" href="../../" aria-label="Back to Imagegen">
+        <span class="brand-mark">✳</span>
+        <span><span class="eyebrow">Separate browser experiment</span><strong>FLUX.1-dev</strong></span>
+      </a>
+      <div class="connection"><span class="dot" id="gpu-dot"></span><span id="gpu-status">Checking WebGPU…</span></div>
+    </header>
+    <main>
+      <section class="intro">
+        <div>
+          <span class="eyebrow">12B rectified-flow transformer · WebGPU</span>
+          <h1>Browser feasibility test</h1>
+          <p>This first stage measures the actual Chrome/WebGPU device and runs a small GPU matrix benchmark. It does not download model weights or pretend to measure full FLUX generation speed.</p>
+        </div>
+        <div class="model-stats">
+          <div><strong>FLUX.1-dev</strong><span>Target base model</span></div>
+          <div><strong>4-bit / FP8</strong><span>Quantized export candidates</span></div>
+          <div><strong>Local</strong><span>All benchmark work stays in this tab</span></div>
+        </div>
+      </section>
+
+      <section class="notice">
+        <strong>Why preflight first?</strong>
+        <p>FLUX.1-dev is a different architecture from FLUX.2 Klein and NoobAI/SDXL. We'll check WebGPU limits and FP16 support before choosing an ONNX or custom low-bit runtime. The official ONNX exports are gated and require accepting their Hugging Face conditions.</p>
+        <p><a href="https://huggingface.co/black-forest-labs/FLUX.1-dev-onnx" target="_blank" rel="noreferrer">Official FLUX.1-dev ONNX exports</a> · <a href="https://onnxruntime.ai/docs/tutorials/web/ep-webgpu.html" target="_blank" rel="noreferrer">ONNX Runtime WebGPU documentation</a></p>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <div class="panel-title"><h2>Device report</h2><span class="pill">READ-ONLY</span></div>
+          <div id="device-report" class="report"><p>Requesting a WebGPU adapter…</p></div>
+          <button id="refresh" class="secondary full">Refresh device report</button>
+        </article>
+
+        <article class="panel">
+          <div class="panel-title"><h2>Compute benchmark</h2><span class="pill">GPU ONLY</span></div>
+          <p class="hint">Runs square matrix multiplication using the best available storage type. One warm-up plus three measured runs at each size. This is a device microbenchmark, not an end-to-end FLUX timing.</p>
+          <div class="bench-row"><span>Precision</span><strong id="bench-precision">Not tested</strong></div>
+          <div class="bench-row"><span>256 × 256</span><strong id="bench-256">—</strong></div>
+          <div class="bench-row"><span>512 × 512</span><strong id="bench-512">—</strong></div>
+          <button id="run-benchmark" class="generate" disabled>Run WebGPU benchmark</button>
+          <p class="hint" id="bench-status">Waiting for WebGPU initialization.</p>
+        </article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title"><h2>Runtime log</h2><button id="clear-log" class="text-button">Clear log</button></div>
+        <pre id="log" aria-live="polite"></pre>
+        <div class="actions"><button id="copy-report" class="secondary">Copy diagnostic report</button><span id="copy-status" class="hint"></span></div>
+      </section>
+
+      <section class="panel roadmap">
+        <h2>Implementation gates</h2>
+        <ol>
+          <li><strong>Browser hardware preflight</strong><span class="state complete">This page</span><p>Adapter limits, FP16 shader support, and matrix throughput.</p></li>
+          <li><strong>FLUX.1 ONNX graph compatibility</strong><span class="state pending">Next</span><p>Inspect the official transformer graph, external weight shards, data types, and operator domains against ONNX Runtime WebGPU.</p></li>
+          <li><strong>Single transformer block in Chrome</strong><span class="state pending">Not started</span><p>Run a small extracted block with real FLUX weights and compare it numerically against the Colab/PyTorch reference.</p></li>
+          <li><strong>Full text-to-image pipeline + LoRA</strong><span class="state pending">Not started</span><p>Only after the transformer block is correct: text encoders, scheduler, VAE, and merged or separately applied LoRA weights.</p></li>
+        </ol>
+      </section>
+    </main>
+    <footer>
+      <span>FLUX.1-dev browser preflight · WebGPU</span>
+      <span><a href="../">FLUX experiment home</a> · <a href="../../noobai-browser-experiment/">NoobAI browser experiment</a> · <a href="../../">Imagegen</a></span>
+    </footer>
+  </div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
