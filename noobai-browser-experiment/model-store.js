@@ -22,8 +22,8 @@ async function urlKey(url) {
   return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
-async function downloadFile(url, expectedBytes, onProgress, signal) {
-  const directory = await cacheDirectory(await urlKey(url));
+async function downloadFile(url, expectedBytes, onProgress, signal, cacheIdentity = url) {
+  const directory = await cacheDirectory(await urlKey(cacheIdentity));
   const filename = "asset.bin";
   const handle = await directory.getFileHandle(filename, { create: true });
   let existing = await handle.getFile();
@@ -97,14 +97,34 @@ async function downloadFile(url, expectedBytes, onProgress, signal) {
 export async function loadModelPack(baseUrl, onProgress, signal) {
   const normalizedBase = baseUrl.replace(/\/+$/, "") + "/";
   const manifestUrl = joinUrl(normalizedBase, "manifest.json");
-  const manifestResponse = await fetch(manifestUrl, { cache: "no-store", signal });
-  if (!manifestResponse.ok) {
-    throw new Error("Could not read model manifest " + manifestUrl + " (HTTP " + manifestResponse.status + ").");
+  const manifestDirectory = await cacheDirectory(await urlKey("manifest:" + normalizedBase));
+  const manifestHandle = await manifestDirectory.getFileHandle("manifest.json", { create: true });
+  let manifest;
+  try {
+    const manifestResponse = await fetch(manifestUrl, { cache: "no-store", signal });
+    if (!manifestResponse.ok) {
+      throw new Error("Could not read model manifest " + manifestUrl + " (HTTP " + manifestResponse.status + ").");
+    }
+    manifest = await manifestResponse.json();
+    const writer = await manifestHandle.createWritable();
+    await writer.write(JSON.stringify(manifest));
+    await writer.close();
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    const cachedManifest = await manifestHandle.getFile();
+    if (!cachedManifest.size) throw error;
+    manifest = JSON.parse(await cachedManifest.text());
+    onProgress?.({
+      phase: "cache",
+      file: "manifest.json",
+      loaded: cachedManifest.size,
+      total: cachedManifest.size,
+    });
   }
-  const manifest = await manifestResponse.json();
   if (manifest.format !== "noobai-sdxl-browser-onnx-v1" || !manifest.components) {
     throw new Error("This is not a supported NoobAI browser ONNX pack (manifest format mismatch).");
   }
+  const packVersion = manifest.packId || manifest.sourceRevision || "unversioned";
 
   const assets = [];
   for (const component of Object.values(manifest.components)) {
@@ -124,6 +144,7 @@ export async function loadModelPack(baseUrl, onProgress, signal) {
   for (const asset of files) {
     if (signal?.aborted) throw new Error("Model download cancelled.");
     const url = joinUrl(normalizedBase, asset.path);
+    const cacheIdentity = normalizedBase + "|" + packVersion + "|" + asset.path;
     const file = await downloadFile(url, asset.bytes || 0, (progress) => {
       const overall = completedBytes + progress.loaded;
       onProgress?.({
@@ -134,7 +155,7 @@ export async function loadModelPack(baseUrl, onProgress, signal) {
         fileLoaded: progress.loaded,
         fileTotal: progress.total,
       });
-    }, signal);
+    }, signal, cacheIdentity);
     completedBytes += file.size;
   }
 
@@ -146,9 +167,11 @@ export async function loadModelPack(baseUrl, onProgress, signal) {
   };
 }
 
-export async function getCachedModelFile(baseUrl, assetPath) {
-  const url = joinUrl(baseUrl, assetPath);
-  const directory = await cacheDirectory(await urlKey(url));
+export async function getCachedModelFile(baseUrl, assetPath, packVersion = "unversioned") {
+  const normalizedBase = baseUrl.endsWith("/") ? baseUrl : baseUrl + "/";
+  const url = joinUrl(normalizedBase, assetPath);
+  const cacheIdentity = normalizedBase + "|" + packVersion + "|" + assetPath;
+  const directory = await cacheDirectory(await urlKey(cacheIdentity));
   const handle = await directory.getFileHandle("asset.bin");
   return handle.getFile();
 }

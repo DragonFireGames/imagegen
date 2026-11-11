@@ -60,10 +60,11 @@ async function loadTokenizers(manifest) {
 async function createSession(componentName, provider) {
   const component = activePack.manifest.components[componentName];
   if (!component) throw new Error("The model manifest is missing component: " + componentName);
-  const graphFile = await getCachedModelFile(activePack.baseUrl, component.graphBytesAsset);
+  const packVersion = activePack.manifest.packId || activePack.manifest.sourceRevision || "unversioned";
+  const graphFile = await getCachedModelFile(activePack.baseUrl, component.graphBytesAsset, packVersion);
   const externalData = [];
   for (const shard of component.externalData || []) {
-    const data = await getCachedModelFile(activePack.baseUrl, shard.asset);
+    const data = await getCachedModelFile(activePack.baseUrl, shard.asset, packVersion);
     externalData.push({ path: shard.path, data });
   }
   status("Preparing " + componentName.replaceAll("_", " "), provider === "webgpu" ? "WebGPU" : "WebAssembly");
@@ -334,17 +335,11 @@ async function generate(message) {
         }
       }
 
-      const sigmaSquared = sigma * sigma;
-      const nextSquared = nextSigma * nextSigma;
-      const sigmaUp = nextSigma === 0 || sigma === 0
-        ? 0
-        : Math.min(nextSigma, Math.sqrt(Math.max(0, nextSquared * (sigmaSquared - nextSquared) / sigmaSquared)));
-      const sigmaDown = Math.sqrt(Math.max(0, nextSquared - sigmaUp * sigmaUp));
-      const dt = sigmaDown - sigma;
-      const noise = sigmaUp > 0 ? makeNoise(latentSize, rng) : null;
+      // Match the checkpoint's EulerDiscreteScheduler (epsilon prediction):
+      // d(sample)/d(sigma) = predicted noise, with no ancestral noise injection.
+      const dt = nextSigma - sigma;
       for (let i = 0; i < latentSize; i++) {
         latents[i] += prediction[i] * dt;
-        if (noise) latents[i] += noise[i] * sigmaUp;
       }
       post("step", { step: step + 1, total: steps, seed });
     }

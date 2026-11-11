@@ -11,6 +11,7 @@ import argparse
 import gc
 import json
 import os
+import uuid
 from pathlib import Path
 
 import onnx
@@ -375,6 +376,7 @@ def export_model(args):
 
     manifest = {
         "format": "noobai-sdxl-browser-onnx-v1",
+        "packId": f"{source_revision[:12]}-{uuid.uuid4().hex[:8]}",
         "model": "NoobAI XL 1.1",
         "sourceModel": args.model,
         "sourceRevision": source_revision,

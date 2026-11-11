@@ -34,7 +34,7 @@ The exporter targets the NoobAI Diffusers components. It emits four ONNX compone
 - SDXL U-Net noise prediction
 - VAE decoder
 
-The graph external weights are split into files no larger than 1.5 GB. The browser passes OPFS-backed `File` objects to ONNX Runtime Web's JSPI Blob-backed external-data loader so it does not create one giant JavaScript weight buffer. The text encoders are loaded through WASM; the U-Net and VAE decoder use WebGPU. The browser sampler applies classifier-free guidance and an Euler ancestral update.
+The graph external weights are split into files no larger than 1.5 GB. The browser passes OPFS-backed `File` objects to ONNX Runtime Web's JSPI Blob-backed external-data loader so it does not create one giant JavaScript weight buffer. The text encoders are loaded through WASM one at a time; the U-Net and VAE decoder use WebGPU. The browser sampler applies classifier-free guidance and the checkpoint's EulerDiscreteScheduler update.
 
 ## Convert and publish the browser pack
 
