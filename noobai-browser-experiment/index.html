@@ -45,8 +45,8 @@
           <div class="panel-title"><h2>Generation</h2><span class="pill">LOCAL INFERENCE</span></div>
 
           <label for="model-url">Published ONNX model-pack URL</label>
-          <input id="model-url" type="url" inputmode="url" placeholder="https://huggingface.co/OWNER/REPO/resolve/main/browser-pack" autocomplete="off">
-          <p class="hint">First create the pack with the <a href="https://colab.research.google.com/github/DragonFireGames/imagegen/blob/main/noobai-browser-experiment/tools/Export_NoobAI_XL_1.1_to_browser_ONNX.ipynb" target="_blank" rel="noreferrer">one-click Google Colab exporter</a>. This is the converted browser pack, not the original .safetensors checkpoint. The browser downloads its graphs and shards once, then caches them locally.</p>
+          <input id="model-url" type="url" inputmode="url" value="https://huggingface.co/DragonFire7z/noobai-xl-1.1-browser-onnx/tree/main/browser-pack" placeholder="https://huggingface.co/DragonFire7z/noobai-xl-1.1-browser-onnx/tree/main/browser-pack" autocomplete="off">
+          <p class="hint">This is the published browser pack, not the original .safetensors checkpoint. Hugging Face folder links (/tree/...) are converted to direct file URLs automatically. The browser downloads its graphs and shards once, then caches them locally. Use the <a href="https://colab.research.google.com/github/DragonFireGames/imagegen/blob/main/noobai-browser-experiment/tools/Export_NoobAI_XL_1.1_to_browser_ONNX.ipynb" target="_blank" rel="noreferrer">Colab exporter</a> only to create or repair a pack.</p>
           <button class="secondary full" id="load-model" type="button" disabled>Load and cache model</button>
 
           <div class="storage-row">
