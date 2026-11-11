@@ -162,13 +162,13 @@ button.addEventListener("click", async () => {
     if (!sessionL.inputNames.includes("input_ids")) {
       throw new Error("CLIP-L graph is missing input_ids.");
     }
-    const outputL = await sessionL.run({
+    let outputL = await sessionL.run({
       input_ids: new ort.Tensor("int64", idsL.data, [1, 77])
     });
     const hiddenL = finiteFp16(outputL.penultimate_hidden_state,
       "CLIP-L penultimate_hidden_state", [1, 77, 768]);
     addRow("CLIP-L inference", ((performance.now() - loadL) / 1000).toFixed(1) + " s · FP16 [1, 77, 768]");
-    outputL.penultimate_hidden_state = null;
+    outputL = null;
     await sessionL.release();
     sessionL = null;
     await waitFrame();
@@ -180,13 +180,14 @@ button.addEventListener("click", async () => {
     if (!sessionG.inputNames.includes("input_ids")) {
       throw new Error("CLIP-bigG graph is missing input_ids.");
     }
-    const outputG = await sessionG.run({
+    let outputG = await sessionG.run({
       input_ids: new ort.Tensor("int64", idsG.data, [1, 77])
     });
     const hiddenG = finiteFp16(outputG.penultimate_hidden_state,
       "CLIP-bigG penultimate_hidden_state", [1, 77, 1280]);
     const pooledG = finiteFp16(outputG.text_embeds, "CLIP-bigG text_embeds", [1, 1280]);
     addRow("CLIP-bigG inference", ((performance.now() - loadG) / 1000).toFixed(1) + " s · FP16 [1, 77, 1280] + [1, 1280]");
+    outputG = null;
     await sessionG.release();
     sessionG = null;
     await waitFrame();
