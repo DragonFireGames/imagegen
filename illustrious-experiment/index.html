@@ -141,6 +141,16 @@
 
     <section class="panel">
       <p class="eyebrow">Second model component test</p>
+      <h2>CLIP-bigG ONNX WebGPU smoke test</h2>
+      <p>Load only the candidate pack's second SDXL text encoder and run one dummy-token inference. This downloads about 1.39 GB of graph and external weights. It is needed for full SDXL text conditioning, but is a much larger allocation than CLIP-L; close memory-heavy tabs before starting. It does not download the UNet, VAE, or LoRA.</p>
+      <button class="button" id="testClipBigG" type="button">Test CLIP-bigG (about 1.39 GB)</button>
+      <p class="status" id="clipBigGStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="clipBigGSummary" hidden></div>
+      <p class="notice">The test checks every graph output for finite values. It does not validate the UNet, full-model memory use, or Personal Ami LoRA compatibility.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Third model component test</p>
       <h2>VAE decoder ONNX WebGPU smoke test</h2>
       <p>Load only the candidate pack's VAE decoder and run a zero-latent FP16 decode (the graph expects a float16 latent input). This downloads about 99 MB of graph and weights. It does not download the UNet, bigG encoder, VAE encoder, or LoRA, and it does not generate a meaningful image.</p>
       <button class="button" id="testVaeDecoder" type="button">Test VAE decoder (about 99 MB)</button>
@@ -169,6 +179,7 @@
   <script type="module" src="./lora-inspector.js"></script>
   <script type="module" src="./runtime-probe.js"></script>
   <script type="module" src="./component-smoke-test.js"></script>
+  <script type="module" src="./text-encoder-2-smoke-test.js"></script>
   <script type="module" src="./vae-smoke-test.js"></script>
 </body>
 </html>
