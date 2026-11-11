@@ -148,6 +148,16 @@
     </section>
 
     <section class="panel">
+      <p class="eyebrow">Full local adapter integrity check</p>
+      <h2>Verify all Personal Ami BF16 payload values</h2>
+      <p>Stream the entire selected .safetensors data block in 4 MiB chunks, validate every tensor's shape and byte range, and scan all BF16 values for NaN/Infinity. This checks the actual 218 MB adapter payload rather than just its JSON header.</p>
+      <p class="notice">All reads come directly from the local file selected above. The script does not upload the LoRA, does not fetch model weights, and does not allocate WebGPU. It scans in small chunks instead of loading the complete tensor payload into memory.</p>
+      <button class="button" id="verifyAllLoraPayloads" type="button">Verify all local BF16 payloads (about 218 MB)</button>
+      <p class="status" id="loraIntegrityStatus" data-type="info" aria-live="polite">Choose the Personal Ami .safetensors file above first.</p>
+      <div class="data-list" id="loraIntegritySummary" hidden></div>
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Browser-side LoRA format reference</p>
       <h2><a href="https://huggingface.co/aaaaaeeeee/blip-lora-sdxl-lightning8" target="_blank" rel="noreferrer">SDXL LoRA browser package</a></h2>
       <p>The same publisher repacks a standard Kohya .safetensors LoRA into <code>lora.json</code> plus <code>lora.bin</code> for its browser runtime (FP16 factors; its example has 788 UNet layers). This is a custom format, not built-in ONNX Runtime support, and its layer map cannot be reused for Personal Ami.</p>
@@ -284,6 +294,7 @@
   <script type="module" src="./lora-inspector.js"></script>
   <script type="module" src="./lora-weight-map-inspector.js"></script>
   <script type="module" src="./lora-payload-smoke-test.js"></script>
+  <script type="module" src="./lora-payload-integrity-test.js"></script>
   <script type="module" src="./runtime-probe.js"></script>
   <script type="module" src="./component-smoke-test.js"></script>
   <script type="module" src="./text-encoder-2-smoke-test.js"></script>
