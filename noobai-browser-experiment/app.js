@@ -39,6 +39,7 @@ function setBusy(value) {
 }
 
 async function checkRuntime() {
+  const runtimeStarted = performance.now();
   const issues = [];
   let adapter = null;
   if (!navigator.gpu) issues.push("WebGPU is unavailable.");
@@ -69,9 +70,12 @@ async function checkRuntime() {
   $("load-model").disabled = false;
   setStatus("Browser runtime ready", "WebGPU, OPFS and JSPI are available. Enter the published ONNX model-pack URL to download it into this browser.", "ready");
   setProgress("Ready for model pack", 0, adapter?.limits?.maxBufferSize ? (adapter.limits.maxBufferSize / 1024 ** 3).toFixed(1) + " GiB max GPU buffer" : "");
+  logLine("PERF · browser runtime checks — " + (performance.now() - runtimeStarted).toFixed(1) + " ms" +
+    (adapter?.limits?.maxBufferSize ? " · max GPU buffer " + (adapter.limits.maxBufferSize / 1024 ** 3).toFixed(2) + " GiB" : ""));
 }
 
 async function updateStorageStatus() {
+  const storageStarted = performance.now();
   try {
     const estimate = await navigator.storage.estimate();
     const persisted = await navigator.storage.persisted?.();
@@ -79,6 +83,8 @@ async function updateStorageStatus() {
     const quota = Number(estimate.quota || 0) / 1024 ** 3;
     $("storage-status").textContent = (persisted ? "Persistent · " : "Best-effort · ") +
       used.toFixed(1) + " / " + quota.toFixed(1) + " GB";
+    logLine("PERF · storage estimate — " + (performance.now() - storageStarted).toFixed(1) + " ms · " +
+      used.toFixed(2) + " / " + quota.toFixed(2) + " GiB used");
   } catch {
     $("storage-status").textContent = "Unavailable";
   }
@@ -154,6 +160,7 @@ function ensureWorker() {
 }
 
 function renderImage(buffer, dims) {
+  const renderStarted = performance.now();
   if (!Array.isArray(dims) || dims.length !== 4 || dims[0] !== 1 || dims[1] !== 3) {
     throw new Error("Unexpected VAE output shape: " + (dims || []).join(" × "));
   }
@@ -178,6 +185,8 @@ function renderImage(buffer, dims) {
   canvas.hidden = false;
   $("placeholder").hidden = true;
   $("download").hidden = false;
+  logLine("PERF · image conversion + canvas upload — " + (performance.now() - renderStarted).toFixed(1) +
+    " ms · " + width + " × " + height + " · " + (buffer.byteLength / 1024 ** 2).toFixed(1) + " MiB input");
 }
 
 $("cfg").addEventListener("input", () => {
