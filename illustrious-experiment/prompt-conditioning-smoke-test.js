@@ -1,6 +1,6 @@
 import * as ort from "../vendor/onnxruntime-web/ort.webgpu.min.mjs";
 import { acquireHeavyModelTest, releaseHeavyModelTest } from "./heavy-model-test-lock.js";
-import { PreTrainedTokenizer, env } from "../vendor/transformers/transformers.min.js";
+import { CLIPTokenizer } from "../vendor/transformers/transformers.min.js";
 
 const MODEL_ID = "aaaaaeeeee/blip-sdxl-anime-wai-illustrious17";
 const MODEL_BASE = "https://huggingface.co/" + MODEL_ID + "/resolve/main/";
@@ -10,12 +10,9 @@ ort.env.wasm.wasmPaths = new URL("../vendor/onnxruntime-web/", import.meta.url).
 ort.env.wasm.numThreads = 1;
 ort.env.logLevel = "warning";
 
-// The pack stores its two CLIP tokenizers in different subdirectories.
-// Transformers.js supports a configurable remote path template, so load
-// each tokenizer from its own subfolder without copying files into the app.
-env.allowRemoteModels = true;
-env.useBrowserCache = true;
-
+// The pack provides the original CLIP BPE assets, not tokenizer.json or
+// tokenizer_config.json. Build the equivalent Transformers.js CLIP tokenizer
+// directly from its vocab, merges, and special-token map.
 const button = document.querySelector("#testPromptConditioning");
 const status = document.querySelector("#promptConditioningStatus");
 const results = document.querySelector("#promptConditioningSummary");
@@ -67,10 +64,8 @@ function finiteFp16(tensor, label, shape) {
 }
 
 async function loadTokenizer(subfolder) {
-  // Fetch from the exact model-pack folder URLs. This avoids relying on
-  // subfolder support or custom remotePathTemplate semantics in the vendored
-  // Transformers.js build.
   const folderURL = MODEL_BASE + subfolder + "/";
+
   async function readJSON(filename) {
     const url = folderURL + filename;
     const response = await fetch(url, { credentials: "omit" });
@@ -85,11 +80,139 @@ async function loadTokenizer(subfolder) {
     }
   }
 
-  const [tokenizerJSON, tokenizerConfig] = await Promise.all([
-    readJSON("tokenizer.json"),
-    readJSON("tokenizer_config.json")
+  async function readText(filename) {
+    const url = folderURL + filename;
+    const response = await fetch(url, { credentials: "omit" });
+    if (!response.ok) {
+      throw new Error("Tokenizer file request failed: " + filename +
+        " · HTTP " + response.status + " · " + url);
+    }
+    return response.text();
+  }
+
+  const [vocab, mergesText, specialMap] = await Promise.all([
+    readJSON("vocab.json"),
+    readText("merges.txt"),
+    readJSON("special_tokens_map.json")
   ]);
-  return new PreTrainedTokenizer(tokenizerJSON, tokenizerConfig);
+  if (!vocab || typeof vocab !== "object" || Array.isArray(vocab)) {
+    throw new Error(subfolder + "/vocab.json is not a token-to-ID object.");
+  }
+
+  function getToken(value, name) {
+    const token = typeof value === "string" ? value : value?.content;
+    if (typeof token !== "string" || !token.length) {
+      throw new Error(subfolder + "/special_tokens_map.json is missing " + name + ".");
+    }
+    return token;
+  }
+
+  const bosToken = getToken(specialMap.bos_token, "bos_token");
+  const eosToken = getToken(specialMap.eos_token, "eos_token");
+  const padToken = getToken(specialMap.pad_token, "pad_token");
+  const unkToken = getToken(specialMap.unk_token, "unk_token");
+  const bosId = vocab[bosToken];
+  const eosId = vocab[eosToken];
+  if (!Number.isSafeInteger(bosId) || !Number.isSafeInteger(eosId) ||
+      bosId !== 49406 || eosId !== 49407) {
+    throw new Error(subfolder + " CLIP vocabulary has unexpected BOS/EOS IDs: " +
+      String(bosId) + " / " + String(eosId) + ".");
+  }
+
+  const merges = mergesText.split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line && !line.startsWith("#"))
+    .map((line, index) => {
+      const pair = line.split(/\s+/);
+      if (pair.length !== 2) {
+        throw new Error(subfolder + "/merges.txt has an invalid pair on line " + (index + 2) + ".");
+      }
+      return pair;
+    });
+  if (!merges.length) throw new Error(subfolder + "/merges.txt contains no BPE merges.");
+
+  const normalizer = {
+    type: "Sequence",
+    normalizers: [
+      { type: "NFC" },
+      { type: "Replace", pattern: { Regex: "\\s+" }, content: " " },
+      { type: "Lowercase" }
+    ]
+  };
+  const preTokenizer = {
+    type: "Sequence",
+    pretokenizers: [
+      {
+        type: "Split",
+        pattern: {
+          Regex: "'s|'t|'re|'ve|'m|'ll|'d|[\\p{L}]+|[\\p{N}]|[^\\s\\p{L}\\p{N}]+"
+        },
+        behavior: "Removed",
+        invert: true
+      },
+      { type: "ByteLevel", add_prefix_space: false, trim_offsets: true }
+    ]
+  };
+  const tokenizerJSON = {
+    version: "1.0",
+    truncation: null,
+    padding: null,
+    added_tokens: [
+      {
+        id: bosId,
+        content: bosToken,
+        single_word: false,
+        lstrip: false,
+        rstrip: false,
+        normalized: true,
+        special: true
+      },
+      {
+        id: eosId,
+        content: eosToken,
+        single_word: false,
+        lstrip: false,
+        rstrip: false,
+        normalized: false,
+        special: true
+      }
+    ],
+    normalizer,
+    pre_tokenizer: preTokenizer,
+    post_processor: {
+      type: "RobertaProcessing",
+      sep: [eosToken, eosId],
+      cls: [bosToken, bosId],
+      trim_offsets: false,
+      add_prefix_space: false
+    },
+    decoder: { type: "ByteLevel", add_prefix_space: true, trim_offsets: true },
+    model: {
+      type: "BPE",
+      dropout: null,
+      unk_token: unkToken,
+      continuing_subword_prefix: "",
+      end_of_word_suffix: "</w>",
+      fuse_unk: false,
+      vocab,
+      merges
+    }
+  };
+  const tokenizerConfig = {
+    tokenizer_class: "CLIPTokenizer",
+    model_max_length: 77,
+    bos_token: bosToken,
+    eos_token: eosToken,
+    pad_token: padToken,
+    unk_token: unkToken,
+    clean_up_tokenization_spaces: false
+  };
+
+  const tokenizer = new CLIPTokenizer(tokenizerJSON, tokenizerConfig);
+  if (tokenizer.bos_token_id !== bosId || tokenizer.eos_token_id !== eosId) {
+    throw new Error(subfolder + " CLIP tokenizer special-token IDs did not initialize correctly.");
+  }
+  return tokenizer;
 }
 
 async function loadOnnxComponent(component, label) {
@@ -146,7 +269,7 @@ button.addEventListener("click", async () => {
     addRow("CLIP-bigG component", ((manifest.components?.text_encoder_2?.bytes || 0) / 1024 / 1024).toFixed(1) + " MiB");
     addRow("Execution provider", "WebGPU · one text encoder session at a time");
 
-    setStatus("Loading tokenizer 1 from tokenizer/…");
+    setStatus("Loading CLIP-L tokenizer from vocab.json, merges.txt, and special_tokens_map.json…");
     const started = performance.now();
     tokenizerL = await loadTokenizer("tokenizer");
     const encodeOptions = {
@@ -157,7 +280,7 @@ button.addEventListener("click", async () => {
     const encodedL = await tokenizerL(prompt, encodeOptions);
     const negativeEncodedL = await tokenizerL(negativePrompt, encodeOptions);
 
-    setStatus("Loading tokenizer 2 from tokenizer_2/…");
+    setStatus("Loading CLIP-bigG tokenizer from vocab.json, merges.txt, and special_tokens_map.json…");
     tokenizerG = await loadTokenizer("tokenizer_2");
     const encodedG = await tokenizerG(prompt, encodeOptions);
     const negativeEncodedG = await tokenizerG(negativePrompt, encodeOptions);
