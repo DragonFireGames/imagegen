@@ -109,7 +109,7 @@ function kohyaUnetToDiffusersName(module) {
 
   // The Personal Ami UNet uses Kohya/SGM block indices. Convert those indices
   // to the actual SDXL Diffusers module paths used by weights-index.json.
-  let match = key.match(/^input\\.blocks\\.(\\d+)\\.(\\d+)(?:\\.(.*))?$/);
+  let match = key.match(/^input\.blocks\.(\d+)\.(\d+)(?:\.(.*))?$/);
   if (match) {
     const block = Number(match[1]);
     const part = Number(match[2]);
@@ -118,7 +118,7 @@ function kohyaUnetToDiffusersName(module) {
       key = "conv_in" + (rest ? "." + rest : "");
     } else if (block > 0 && block % 3 === 0 && part === 0) {
       const stage = block / 3 - 1;
-      const suffix = rest.replace(/^op\\.?/, "");
+      const suffix = rest.replace(/^op\.?/, "");
       key = "down_blocks." + stage + ".downsamplers.0.conv" +
         (suffix ? "." + suffix : "");
     } else if (block > 0) {
@@ -134,7 +134,7 @@ function kohyaUnetToDiffusersName(module) {
     }
   }
 
-  match = key.match(/^output\\.blocks\\.(\\d+)\\.(\\d+)(?:\\.(.*))?$/);
+  match = key.match(/^output\.blocks\.(\d+)\.(\d+)(?:\.(.*))?$/);
   if (match) {
     const block = Number(match[1]);
     const part = Number(match[2]);
@@ -149,7 +149,7 @@ function kohyaUnetToDiffusersName(module) {
     key = prefix + (rest ? "." + rest : "");
   }
 
-  match = key.match(/^middle\\.block\\.(\\d+)(?:\\.(.*))?$/);
+  match = key.match(/^middle\.block\.(\d+)(?:\.(.*))?$/);
   if (match) {
     const block = Number(match[1]);
     const rest = match[2] || "";
@@ -162,11 +162,11 @@ function kohyaUnetToDiffusersName(module) {
 
   // Standalone SDXL UNet modules.
   key = key
-    .replace(/^out\\.2(?=\\.|$)/, "conv_out")
-    .replace(/^time\\.embed\\.0(?=\\.|$)/, "time_embedding.linear_1")
-    .replace(/^time\\.embed\\.2(?=\\.|$)/, "time_embedding.linear_2")
-    .replace(/^label\\.emb\\.0\\.0(?=\\.|$)/, "add_embedding.linear_1")
-    .replace(/^label\\.emb\\.0\\.2(?=\\.|$)/, "add_embedding.linear_2");
+    .replace(/^out\.2(?=\.|$)/, "conv_out")
+    .replace(/^time\.embed\.0(?=\.|$)/, "time_embedding.linear_1")
+    .replace(/^time\.embed\.2(?=\.|$)/, "time_embedding.linear_2")
+    .replace(/^label\.emb\.0\.0(?=\.|$)/, "add_embedding.linear_1")
+    .replace(/^label\.emb\.0\.2(?=\.|$)/, "add_embedding.linear_2");
 
   // Convert SGM/CompVis submodule spellings to Diffusers names.
   key = key
@@ -329,14 +329,12 @@ button.addEventListener("click", async () => {
         : [group.module];
       let found = null;
       let foundComponent = null;
-      let foundKey = null;
       for (const componentName of componentNamesToTry) {
         for (const key of keysToTry) {
           const entry = lookup.get(componentName)?.get(key);
           if (entry) {
             found = entry;
             foundComponent = componentName;
-            foundKey = key;
             break;
           }
         }
