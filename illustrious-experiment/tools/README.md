@@ -56,11 +56,14 @@ intermediate in `OUTPUT/merged-diffusers`.
 - Model output files are multi-gigabyte artifacts. Store them outside this
   repository; they are not meant to be committed to Git.
 - The official Illustrious base is distributed under Fair AI Public License
-  1.0-SD. Read its license and terms before using or publishing merged
-  derivatives: https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0
+  1.0-SD, which the issuer explicitly says is not a free-software license.
+  Its prohibited-use and network-source obligations apply to derivatives.
+  Read https://freedevproject.org/faipl-1.0-sd/ and the base model's terms
+  before publishing a fused derivative.
 - The Personal Ami adapter's own license must be checked at its original
   Civitai model/version page. The base-model license does not grant rights to
-  the adapter.
+  the adapter. The workflow deliberately leaves the adapter user-supplied and
+  does not upload or redistribute it.
 
 ## Why this is useful
 
