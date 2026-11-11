@@ -1,6 +1,8 @@
 const MODEL_BASE = "https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17/resolve/main/";
 const COMPONENTS = ["text_encoder", "text_encoder_2", "unet_a", "unet_b", "unet_c"];
 const EXPECTED = { text_encoder: 66, text_encoder_2: 192, unet_a: 350, unet_b: 306, unet_c: 66 };
+import { fetchModelResource } from "./model-cache.js";
+
 const FINAL_CLIP_L = /^text_model_encoder_layers_11_(?:mlp_fc1|mlp_fc2|self_attn_(?:k_proj|out_proj|q_proj|v_proj))$/;
 
 function groupForStem(stem) {
@@ -94,7 +96,7 @@ function candidatesFor(group) {
 async function verifiedJson(path, fileMap) {
   const record = fileMap.get(path);
   if (!record) throw new Error("Manifest is missing " + path + ".");
-  const response = await fetch(MODEL_BASE + path, { credentials: "omit", cache: "force-cache" });
+  const response = await fetchModelResource(MODEL_BASE + path, { credentials: "omit", cache: "force-cache" });
   if (!response.ok) throw new Error(path + " returned HTTP " + response.status + ".");
   const buffer = await response.arrayBuffer();
   if (record.size !== undefined && buffer.byteLength !== record.size) throw new Error(path + " size mismatch.");
@@ -403,7 +405,7 @@ function patchConv2d(buffer, down, up, shape, scale, label) {
 async function patchShard(file, dataStart, component, shard, targets, fileMap, strength, onProgress, checkCancelled, log) {
   const record = fileMap.get(shard);
   if (!record || !Number.isSafeInteger(record.size)) throw new Error("Manifest is missing shard size for " + shard + ".");
-  const response = await fetch(MODEL_BASE + shard, { credentials: "omit", cache: "force-cache" });
+  const response = await fetchModelResource(MODEL_BASE + shard, { credentials: "omit", cache: "force-cache" });
   if (!response.ok) throw new Error("Shard download failed: " + shard + " · HTTP " + response.status);
   const base = await response.blob();
   if (base.size !== record.size) throw new Error("Shard size mismatch for " + shard + ".");
