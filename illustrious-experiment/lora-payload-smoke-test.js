@@ -218,7 +218,7 @@ button.addEventListener("click", async () => {
     addRow("Adapter down/up", "[" + pair.down.shape.join(", ") + "] / [" + pair.up.shape.join(", ") + "]");
     addRow("ONNX transposed flag", String(!!target.entry.transposed));
     addRow("Rank / alpha / scale", rank + " / " + alpha.toFixed(4) + " / " + scale.toFixed(6));
-    addRow("Local payload bytes read", (down.byteLength + up.byteLength + alphaValues.byteLength).toLocaleString());
+    addRow("Local payload bytes read", (down.length * 2 + up.length * 2 + 2).toLocaleString());
     addRow("Synthetic input/output", input.length.toLocaleString() + " → " + result.result.length.toLocaleString() + " FP32 values");
     addRow("Computed delta max |value|", maxAbs.toExponential(4));
     addRow("Computed delta L2 norm", Math.sqrt(sumSquares).toExponential(4));
