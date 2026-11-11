@@ -73,6 +73,13 @@
     </section>
 
     <section class="panel">
+      <p class="eyebrow">Existing implementation reference</p>
+      <h2><a href="https://github.com/d0grr/generate-ai-images" target="_blank" rel="noreferrer">Browser SDXL · ONNX WebGPU</a></h2>
+      <p>A separate project already runs SDXL in Chrome with a JavaScript pipeline, OPFS caching, FP16 and INT4 UNet variants. Its inpainting example fuses a specific LoRA before export; it does not demonstrate arbitrary live LoRA swapping.</p>
+      <p>We can adapt its SDXL pipeline architecture, then validate the Personal Ami LoRA against Illustrious. This is a reference implementation, not a dependency.</p>
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Local-only utility</p>
       <h2>Inspect a LoRA file</h2>
       <p>Choose the Personal Ami .safetensors file. This reads only the file header; tensor payloads are not uploaded, downloaded, or loaded into memory.</p>
