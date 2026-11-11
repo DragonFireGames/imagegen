@@ -154,12 +154,14 @@ Do not try to bundle the Python Diffusers runtime into this static site. Diffuse
 
 Preferred sequence:
 
-1. Use the pre-exported FP16 ONNX graphs to study and validate the split-SDXL browser runtime and its weight-index mechanism. Keep in mind that WAI v17 is not the original Illustrious v0.1 checkpoint.
-2. Keep ExecuTorch as a later alternative only. Its current WebGPU partitioner can select operators not implemented by the WebGPU runtime, so validate operator coverage for the exact SDXL UNet before investing in that export path.
-3. Use Python/Diffusers offline to fuse Personal Ami into the official Illustrious v0.1 base and create a reproducible reference model. The new exporter can optionally create a generic Optimum ONNX export; that export is not WebGPU-ready until validated. Do not require a Python inference server.
-4. Keep tokenizer, scheduler, image preprocessing, and orchestration in JavaScript where practical.
-5. Load the target .safetensors LoRA locally in the browser and validate its exact keys, tensor shapes, and supported adapter type.
-6. Keep model weights out of Git and load them from local files or a configurable Hugging Face source.
+1. Run the 232 MB CLIP-L component smoke test in the browser. Confirm that the manifest's external-data mapping and the WebGPU execution provider work on the actual target machine.
+2. Inspect the I/O metadata of all split UNet graphs and test the CLIP-bigG and VAE components individually. Do not download every component until the preceding stage works.
+3. Build the no-LoRA WAI v17 SDXL pipeline in JavaScript and generate a baseline image. Keep in mind that WAI v17 is a derivative, not the original Illustrious v0.1 training checkpoint.
+4. Use Python/Diffusers offline to load the actual Personal Ami adapter, fuse it into the official Illustrious v0.1 base, and generate a reproducible reference image. Do not require a Python inference server.
+5. Inspect the WAI FP16 weight-index format and implement a converter for Personal Ami only after all 986 pairs have been mapped and shape-checked. If the derivative graph cannot be validated, export the exact base as a separate browser model instead.
+6. Compare browser outputs with Diffusers at strengths 0.6, 0.75, and 0.9 before adding a LoRA-strength control.
+7. Keep ExecuTorch as a secondary route until the ONNX baseline is measured; its current WebGPU partitioner can select operators not implemented by the runtime.
+8. Keep tokenizer, scheduler, image preprocessing, orchestration, and caching in JavaScript where practical. Keep generated model weights out of Git and load them from local files or a configurable Hugging Face source.
 
 Both routes target browser-native inference: model computation occurs inside the browser tab, not on a Python inference server.
 
@@ -170,7 +172,9 @@ Both routes target browser-native inference: model computation occurs inside the
 - tools/fuse_lora_and_export.py: validates the safetensors header, loads its tensors as a Diffusers state dict, verifies that UNet and both text encoders receive the adapter, then fuses it at the selected strength. The real Personal Ami header report is recorded above; actual full Diffusers fusion still needs to be run.
 - tools/fuse_lora_and_export.py: offline Diffusers LoRA fusion with optional Optimum SDXL ONNX export. It has not been run against the real Personal Ami weights.
 - tools/README.md: isolated environment and export instructions.
-- No image-generation inference is wired up yet.
+- runtime-probe.js: reports WebGPU capabilities and explicitly flags the built-in ORT LoRA API as WASM-only.
+- component-smoke-test.js: loads the candidate pack's CLIP-L graph and runs one dummy-token WebGPU inference; this has not yet been run in the user's browser.
+- Full image-generation inference is not wired up yet.
 
 ## Offline LoRA fusion and ONNX reference export
 
@@ -190,7 +194,9 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 
 ## Validation milestones
 
-- [x] Identify an Illustrious v0.1-derived browser ONNX package with FP16 graph weights-index metadata.
+- [x] Identify an Illustrious v0.1-derived browser ONNX package with FP16 graph weights-index metadata and inspect its current manifest.
+- [x] Run the browser capability probe: the user's browser reports WebGPU, Float16Array, ONNX Runtime Web 1.31.1, and 4 GiB maximum buffer/binding limits.
+- [ ] Run the 232 MB CLIP-L ONNX WebGPU smoke test and verify its external-data shard mapping.
 - [x] Add an offline Diffusers fusion / generic ONNX reference export script (Python syntax and `--help` pass; synthetic BF16 Safetensors test reproduced the real scan's 2,958 keys, 986 rank-32 pairs, 986 alpha keys, and three component counts; deliberately malformed rank was rejected). Real Personal Ami loading/fusion is still pending.
 - [x] Inspect the exact Personal Ami LoRA header and tensor-key layout in the browser (actual report recorded above).
 - [ ] Load and fuse the actual Personal Ami tensors in Diffusers against the official Illustrious v0.1 base.
