@@ -233,7 +233,8 @@ button.addEventListener("click", async () => {
       const offset = Number(entry.offset), length = Number(entry.length);
       const [outFeatures, inFeatures] = entry.torchShape;
       if (!record || !Number.isSafeInteger(offset) || offset < 0 ||
-          length !== outFeatures * inFeatures * 2 || offset + length > record.size) {
+          !Number.isSafeInteger(length) || length !== outFeatures * inFeatures * 2 ||
+          offset + length > record.size) {
         throw new Error("Invalid indexed byte range for " + target.name + ".");
       }
       const down = await readTensor(file, dataStart, pair.downName, pair.down);
