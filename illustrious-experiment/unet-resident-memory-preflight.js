@@ -139,9 +139,11 @@ button.addEventListener("click", async () => {
         externalData
       });
 
-      validateInterface(session, part.inputs, part.outputs, part.label);
+      // Track the session immediately so even an interface-check failure
+      // releases the newly created allocation in the finally block.
       sessions.push({ label: part.label, session });
       loadedBytes += Number(part.component.bytes || 0);
+      validateInterface(session, part.inputs, part.outputs, part.label);
       addRow(part.label + " session", "Created; " + formatBytes(part.component.bytes) +
         " · " + part.component.shards.length + " external-data shards · required interface present");
       addRow(part.label + " create time", ((performance.now() - stageStarted) / 1000).toFixed(1) + " s");
