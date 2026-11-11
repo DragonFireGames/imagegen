@@ -220,9 +220,10 @@ async function runOneMatmul(n, dtype) {
   const samples = [];
   for (let i = 0; i < 3; i++) {
     const started = performance.now();
-    await run(i === 2);
+    await run(false);
     samples.push(performance.now() - started);
   }
+  await run(true);
   samples.sort((x, y) => x - y);
   const medianMs = samples[1];
   const gflops = (2 * n * n * n) / (medianMs / 1000) / 1e9;
