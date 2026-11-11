@@ -3,3 +3,6 @@ dist/
 .DS_Store
 Thumbs.db
 *.log
+.local/
+uncensored-experiment/config.local.json
+uncensored-experiment/outputs/

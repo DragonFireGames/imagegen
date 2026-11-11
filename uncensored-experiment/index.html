@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101114">
+  <meta name="description" content="Local Qwen-Image-2.1 generation with true classifier-free guidance and negative prompts.">
+  <title>Unfiltered Lab — Imagegen</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <a class="brand" href="../" aria-label="Back to Imagegen">
+        <span class="brand-mark" aria-hidden="true">✳</span>
+        <span><span class="eyebrow">Separate local model experiment</span><strong>Unfiltered Lab</strong></span>
+      </a>
+      <div class="connection"><span id="connection-dot" class="dot"></span><span id="connection-label">Checking local engine…</span></div>
+    </header>
+
+    <main>
+      <section class="intro">
+        <div>
+          <span class="eyebrow">Qwen-Image-2.1 · 7B · local inference</span>
+          <h1>More control, fewer layers.</h1>
+          <p>Independent model and runtime from the FLUX.2 Klein page. Positive and negative prompts are both passed to the sampler. No app-side prompt blacklist or hosted generation service.</p>
+        </div>
+        <div class="model-stats">
+          <div><strong>Top open weights</strong><span>Current text-to-image leaderboard</span></div>
+          <div><strong>True CFG</strong><span>Negative prompt + guidance scale</span></div>
+          <div><strong>Local native</strong><span>Metal via stable-diffusion.cpp</span></div>
+        </div>
+      </section>
+
+      <section class="setup-banner" id="setup-banner">
+        <div>
+          <strong id="setup-title">Local engine not detected</strong>
+          <p id="setup-detail">The hosted GitHub Pages copy is informational. Start the local server to generate on this machine.</p>
+        </div>
+        <a class="button secondary" href="./README.md" target="_blank" rel="noreferrer">Setup guide</a>
+      </section>
+
+      <section class="workspace">
+        <form class="panel controls" id="generation-form">
+          <div class="panel-title"><h2>Prompt</h2><span class="pill">NO APP FILTER</span></div>
+
+          <label for="prompt">Positive prompt</label>
+          <textarea id="prompt" maxlength="6000" required>A cinematic editorial photograph of a red fox sitting on a moss-covered stone in an ancient forest, shafts of warm morning light, natural fur detail, 50mm lens, realistic colors.</textarea>
+          <p class="hint">Describe the scene, subject, composition, lighting, and visual medium.</p>
+
+          <div class="label-row">
+            <label for="negative-prompt">Negative prompt</label>
+            <span class="hint">True classifier-free guidance</span>
+          </div>
+          <textarea id="negative-prompt" class="negative" maxlength="4000">blurry, low resolution, jpeg artifacts, distorted anatomy, extra fingers, duplicate subjects, text, watermark</textarea>
+          <p class="hint">This is not just metadata: it is passed to Qwen's negative-conditioning branch when guidance is above 1.</p>
+
+          <div class="two-col">
+            <div>
+              <label for="width">Width</label>
+              <select id="width">
+                <option value="512">512</option>
+                <option value="768" selected>768</option>
+                <option value="1024">1024</option>
+                <option value="1152">1152</option>
+                <option value="1280">1280</option>
+                <option value="1536">1536</option>
+                <option value="2048">2048</option>
+              </select>
+            </div>
+            <div>
+              <label for="height">Height</label>
+              <select id="height">
+                <option value="512">512</option>
+                <option value="768" selected>768</option>
+                <option value="1024">1024</option>
+                <option value="1280">1280</option>
+                <option value="1536">1536</option>
+                <option value="2048">2048</option>
+              </select>
+            </div>
+          </div>
+          <div class="presets">
+            <button type="button" class="preset active" data-size="768">768²</button>
+            <button type="button" class="preset" data-size="1024">1024²</button>
+            <button type="button" class="preset" data-size="1536">1536²</button>
+            <button type="button" class="preset" data-width="1152" data-height="2048">1152 × 2048</button>
+          </div>
+          <p class="hint">Dimensions must be multiples of 32. Start at 512² or 768² if memory is tight.</p>
+
+          <div class="two-col">
+            <div>
+              <label for="steps">Sampling steps</label>
+              <input id="steps" type="number" min="10" max="80" step="1" value="30">
+            </div>
+            <div>
+              <label for="seed">Seed <span class="hint inline">(-1 = random)</span></label>
+              <input id="seed" type="number" min="-1" max="2147483647" value="-1">
+            </div>
+          </div>
+
+          <div class="guidance-header">
+            <label for="cfg">Guidance scale</label>
+            <output id="cfg-value" for="cfg">6.0</output>
+          </div>
+          <input id="cfg" type="range" min="1" max="10" step="0.1" value="6">
+          <div class="range-ends"><span>1 · negative prompt off</span><span>10 · stronger guidance</span></div>
+
+          <button class="generate" id="generate" type="submit" disabled>Checking local engine…</button>
+          <div class="fine-print">
+            <strong>Memory note</strong>
+            <p>The recommended Q4 model files total about 10.3 GB before inference buffers. A 9 GB memory budget may require the low-memory Q2 profile and smaller images; heavier quantization can reduce fidelity.</p>
+            <p>Qwen's image weights and VAE use the Qwen Research License (non-commercial/research only). The separate Qwen3-VL text encoder is Apache-2.0. Read the model terms before use.</p>
+          </div>
+        </form>
+
+        <section class="panel stage">
+          <div class="stage-head">
+            <div><h2>Result</h2><div class="hint" id="result-info">Waiting for generation</div></div>
+            <div class="result-actions"><span class="stage-meta" id="seed-info"></span><a class="secondary" id="download" hidden download="qwen-image.png">Download PNG</a></div>
+          </div>
+          <div class="preview">
+            <div class="placeholder" id="placeholder"><div class="placeholder-icon">✳</div><h3>Your image appears here</h3><p>The model runs locally through the native engine. Generated images are written to this experiment's ignored outputs folder.</p></div>
+            <img id="rendered" alt="Generated image" hidden>
+          </div>
+          <div class="progress-wrap">
+            <div class="progress-top"><span id="progress-label">Local engine status</span><span id="progress-extra">—</span></div>
+            <div class="progress"><div id="progress-bar"></div></div>
+          </div>
+          <details class="log-panel">
+            <summary>Inference log</summary>
+            <pre id="log">No generation has run.</pre>
+          </details>
+        </section>
+      </section>
+    </main>
+    <footer>
+      <span>Qwen-Image-2.1 · stable-diffusion.cpp · Metal</span>
+      <span><a href="https://huggingface.co/YueFong/Qwen-Image-2.1-Uncensored-GGUF" target="_blank" rel="noreferrer">Image weights</a> · <a href="https://github.com/leejet/stable-diffusion.cpp" target="_blank" rel="noreferrer">Runtime source</a> · <a href="../">Back to FLUX.2</a></span>
+    </footer>
+  </div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
