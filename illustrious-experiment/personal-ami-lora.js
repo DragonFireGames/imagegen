@@ -422,8 +422,8 @@ async function patchShard(file, dataStart, component, shard, targets, fileMap, s
     const scale = alpha[0] / rank * strength;
     const targetBuffer = await base.slice(target.offset, target.offset + target.length).arrayBuffer();
     const patched = target.entry.torchShape.length === 2
-      ? patchLinear(targetBuffer, down, up, target.entry.torchShape, !!target.entry.transposed, scale, target.target)
-      : patchConv2d(targetBuffer, down, up, target.entry.torchShape, scale, target.target);
+      ? await patchLinear(targetBuffer, down, up, target.entry.torchShape, !!target.entry.transposed, scale, target.target, log)
+      : await patchLinear(targetBuffer, down, up, [target.entry.torchShape[0], target.entry.torchShape[1] * target.entry.torchShape[2] * target.entry.torchShape[3]], false, scale, target.target, log);
     parts.push(patched);
     cursor = target.offset + target.length;
     onProgress(target);
