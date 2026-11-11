@@ -65,7 +65,7 @@ If you already have a suitable sd-cli build and model files, create `uncensored-
 {
   "sdCli": ".local/stable-diffusion.cpp/build/bin/sd-cli",
   "diffusionModel": ".local/qwen-image-2.1/qwen-image-2.1-UC-Q4_K_M.gguf",
-  "textEncoder": ".local/qwen-image-2.1/Qwen3VL-8B-Instruct-Q4_K_M.gguf",
+  "textEncoder": ".local/qwen-image-2.1/Qwen3-VL-8B-Instruct-Q4_K_M.gguf",
   "vae": ".local/qwen-image-2.1/qwen_image_2.1_vae_bf16.safetensors",
   "offloadToCpu": true
 }

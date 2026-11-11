@@ -66,7 +66,7 @@ if [[ "${MODEL_PROFILE:-quality}" == "low-memory" ]]; then
   echo "Using Q2_K diffusion and text-encoder weights. This saves memory but reduces image/prompt fidelity."
 else
   DIFFUSION_FILE="qwen-image-2.1-UC-Q4_K_M.gguf"
-  TEXT_FILE="Qwen3VL-8B-Instruct-Q4_K_M.gguf"
+  TEXT_FILE="Qwen3-VL-8B-Instruct-Q4_K_M.gguf"
   DIFFUSION_URL="https://huggingface.co/YueFong/Qwen-Image-2.1-Uncensored-GGUF/resolve/main/$DIFFUSION_FILE"
   TEXT_URL="https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/$TEXT_FILE"
   echo "Using Q4_K_M diffusion and text-encoder weights for better fidelity."
