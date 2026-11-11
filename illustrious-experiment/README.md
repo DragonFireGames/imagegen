@@ -218,12 +218,16 @@ accepted a zero-filled FP16 RGB tensor `image [1,3,1024,1024]`, and returned
 finite FP16 `latent_mean [1,4,128,128]`. Latent scaling and encode/decode
 round-trip equivalence remain to be tested.
 
-The real-prompt conditioning test stopped before model inference because
-Transformers.js requested a malformed URL containing the literal
-`tokenizer/{file}/tokenizer.json`. The test implementation was changed to
-fetch `tokenizer.json` and `tokenizer_config.json` from each exact tokenizer
-subfolder URL and construct a `PreTrainedTokenizer` from those JSON objects.
-That direct-fetch version still needs browser verification.
+The real-prompt conditioning test has not yet reached model inference.
+The first loader tried a `{file}` URL template, and a second attempt requested
+`tokenizer.json` and `tokenizer_config.json`; both were incorrect because
+the candidate pack's tokenizer folders contain only `vocab.json`,
+`merges.txt`, and `special_tokens_map.json`. The current loader fetches
+those three actual files and constructs a Transformers.js `CLIPTokenizer`
+using the CLIP BPE normalizer, pre-tokenizer, merges, and post-processor.
+It preserves each folder's actual special-token settings, including the
+different CLIP-bigG pad token. The corrected implementation still requires
+a browser run.
 
 The synthetic Euler ancestral scheduler test passed 28 deterministic steps,
 including monotonic sigmas, the sigma-up/down identity, reproducibility, and
@@ -236,7 +240,7 @@ Do not try to bundle the Python Diffusers runtime into this static site. Diffuse
 Preferred sequence:
 
 1. Run the CLIP-L, CLIP-bigG, and VAE decoder component smoke tests in the browser. All three have now passed on the target machine, confirming external-data loading and real WebGPU inference for both text encoders and the decoder.
-2. Run the full staged A → B → C test, the VAE encoder test, and the real-prompt dual-CLIP conditioning test. Only after these component paths pass should we implement scheduler-driven iterative denoising.
+2. The full staged A → B → C graph chain and VAE encoder have passed their isolated tests. Validate real positive/negative prompt conditioning and VAE encode/decode scaling next; then integrate the scheduler-driven iterative denoising loop.
 3. Build the no-LoRA WAI v17 SDXL pipeline in JavaScript and generate a baseline image. Keep in mind that WAI v17 is a derivative, not the original Illustrious v0.1 training checkpoint.
 4. Use Python/Diffusers offline to load the actual Personal Ami adapter, fuse it into the official Illustrious v0.1 base, and generate a reproducible reference image. Do not require a Python inference server.
 5. Inspect the WAI FP16 weight-index format and implement a converter for Personal Ami only after all 986 pairs have been mapped and shape-checked. If the derivative graph cannot be validated, export the exact base as a separate browser model instead.
@@ -251,7 +255,7 @@ Both routes target browser-native inference: model computation occurs inside the
 - index.html: separate experiment page with model/runtime research notes and a local LoRA inspection utility.
 - heavy-model-test-lock.js: page-wide lock that rejects overlapping CLIP, VAE, prompt-conditioning and UNet smoke tests before they download weights or allocate WebGPU sessions.
 - lora-inspector.js: reads only the first safetensors header block and reports tensor names, shapes, dtypes, byte-range validity, common LoRA A/B or down/up pairs, rank-dimension mismatches, possible extended adapter tensors, and embedded training metadata. It does not upload or deserialize tensor payloads.
-- lora-weight-map-inspector.js: local-header-only matcher for the five FP16 indexes. The first browser report mapped 66 CLIP-L and 192 CLIP-bigG pairs but no UNet pairs because the original matcher compared Kohya/SGM block paths directly with Diffusers index names. The current version adds explicit SDXL input/output/middle block conversion and submodule-name conversion; the corrected full mapping report is pending.
+- lora-weight-map-inspector.js: local-header-only matcher for the five FP16 indexes. The first browser report mapped 66 CLIP-L and 192 CLIP-bigG pairs but 0 UNet pairs because Kohya/SGM block paths were not converted to Diffusers index names. Current code adds SDXL block-path conversion and reports all candidate names on a miss; the stale diagnostic `key` reference was fixed after the latest browser run. Corrected mapping results are still pending.
 - lora-payload-smoke-test.js: passed on one real local CLIP-L BF16 pair (layer-0 MLP fc1), decoding a rank-32 down/up pair plus alpha and producing a finite, nonzero FP32 delta; it did not patch an ONNX shard or prove model-output equivalence.
 - lora-payload-integrity-test.js: passed a 4 MiB-chunk scan of all 2,958 tensor records / 114,017,242 BF16 values (228,034,484 payload bytes); all byte ranges and values were valid, with zero non-finite values and no network upload.
 - tools/fuse_lora_and_export.py: validates the safetensors header, loads its tensors as a Diffusers state dict, verifies that UNet and both text encoders receive the adapter, then fuses it at the selected strength. The real Personal Ami header report is recorded above; actual full Diffusers fusion still needs to be run.
@@ -266,7 +270,7 @@ Both routes target browser-native inference: model computation occurs inside the
 - unet-abc-chain-test.js: passed in the user's browser; sequential full A→B→C chain, one partition resident at a time, 51.3 MiB A intermediates, final finite FP16 out_sample [1,4,128,128], latest recorded total 423.6 s.
 - All component/UNet/prompt smoke tests acquire the same shared lock before any download or WebGPU allocation and release it in `finally`; concurrent heavy tests are refused with a visible status error.
 - vae-encoder-smoke-test.js: passed in the user's browser; zero RGB input FP16 [1,3,1024,1024] produced finite latent_mean FP16 [1,4,128,128]; latent scaling and round-trip behavior remain unverified.
-- prompt-conditioning-smoke-test.js: positive + negative prompts through both tokenizer folders and CLIP encoders sequentially; the first run failed before inference on a malformed tokenizer URL. Current code directly fetches each folder's tokenizer JSON/config and constructs a PreTrainedTokenizer; browser rerun pending.
+- prompt-conditioning-smoke-test.js: positive + negative prompts through both CLIP encoders sequentially; current code builds each CLIPTokenizer from the pack's actual `vocab.json`, `merges.txt`, and `special_tokens_map.json`. It does not request nonexistent `tokenizer.json` or `tokenizer_config.json`; browser rerun pending.
 - scheduler-math-smoke-test.js: passed 28 deterministic synthetic Euler ancestral steps; beta/timestep schedule, monotonic sigmas, sigma-up/down identity, repeatability and finite output checked; it did not run the UNet or generate an image.
 - Full image-generation inference is not wired up yet.
 
@@ -298,8 +302,8 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [x] Run the staged UNET_A → UNET_B chain: actual A tensors consumed by B; 8.8 MiB CPU intermediates; A 106.5 s, B 150.5 s, total 275.9 s; finite FP16 hidden_out [1,1280,64,64].
 - [x] Run the full sequential UNET_A → UNET_B → UNET_C chain; C returned finite FP16 out_sample [1,4,128,128] after sequential partition loading.
 - [x] Run the VAE encoder zero-image WebGPU smoke test; FP16 image [1,3,1024,1024] produced finite latent_mean [1,4,128,128]. Latent scaling and round-trip compatibility remain pending.
-- [ ] Rerun positive + negative prompt dual-tokenizer / dual-CLIP conditioning with the direct-folder JSON loader; verify CFG tensors [1,77,2048] and pooled embeddings [1,1280].
-- [ ] Rerun header-only Personal Ami → ONNX weights-index mapping with the corrected Kohya/SGM-to-Diffusers UNet key conversion.
+- [ ] Rerun positive + negative prompt dual-tokenizer / dual-CLIP conditioning with the CLIP BPE asset loader; verify CFG tensors [1,77,2048] and pooled embeddings [1,1280].
+- [ ] Rerun header-only Personal Ami → ONNX weights-index mapping after fixing the missing-name diagnostic and using the Kohya/SGM-to-Diffusers UNet key conversion.
 - [x] Run one-pair local BF16 payload test; a real CLIP-L linear pair decoded and produced a finite, nonzero low-rank delta.
 - [x] Run full local BF16 payload integrity scan over all 2,958 tensors / 114,017,242 values; all byte ranges and BF16 values passed with zero non-finite values.
 - [x] Run the scheduler-only Euler ancestral math test against the Illustrious beta/timestep config; 28 deterministic synthetic steps passed. Integrating the scheduler with iterative real UNet denoising remains pending.
