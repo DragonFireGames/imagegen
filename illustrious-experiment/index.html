@@ -142,7 +142,7 @@
     <section class="panel">
       <p class="eyebrow">Second model component test</p>
       <h2>VAE decoder ONNX WebGPU smoke test</h2>
-      <p>Load only the candidate pack's VAE decoder and run a zero-latent decode. This downloads about 99 MB of graph and weights. It does not download the UNet, bigG encoder, VAE encoder, or LoRA, and it does not generate a meaningful image.</p>
+      <p>Load only the candidate pack's VAE decoder and run a zero-latent FP16 decode (the graph expects a float16 latent input). This downloads about 99 MB of graph and weights. It does not download the UNet, bigG encoder, VAE encoder, or LoRA, and it does not generate a meaningful image.</p>
       <button class="button" id="testVaeDecoder" type="button">Test VAE decoder (about 99 MB)</button>
       <p class="status" id="vaeSmokeStatus" data-type="info" aria-live="polite">Not tested yet.</p>
       <div class="data-list" id="vaeSmokeSummary" hidden></div>
