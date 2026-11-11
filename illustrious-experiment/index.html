@@ -128,6 +128,16 @@
     </section>
 
     <section class="panel">
+      <p class="eyebrow">Runtime diagnostics</p>
+      <h2>Check browser and ONNX Runtime support</h2>
+      <p>This local probe checks whether the page can access WebGPU, reports relevant adapter memory limits, and confirms whether the vendored ONNX Runtime build exports its LoRA adapter API. It does not download model weights or run inference.</p>
+      <button class="button" id="probeRuntime" type="button">Check local runtime</button>
+      <p class="status" id="probeStatus" data-type="info" aria-live="polite">Not checked yet.</p>
+      <div class="data-list" id="runtimeProbeSummary" hidden></div>
+      <p class="notice">The ONNX Runtime LoRA API requires an ONNX Runtime <code>.onnx_adapter</code> and a graph prepared with matching adapter parameters. It cannot load a Kohya <code>.safetensors</code> file directly. Actual adapter + WebGPU session compatibility remains untested.</p>
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Runtime status</p>
       <h2>Inference is not wired up yet</h2>
       <p>Target architecture: offline Python/Diffusers conversion, then ONNX Runtime WebGPU inference in this page. Python would be used for export only; no Python inference server is intended. ExecuTorch WebGPU is a second experimental route being evaluated. The FLUX.2 application remains untouched.</p>
@@ -135,5 +145,6 @@
     </section>
   </main>
   <script type="module" src="./lora-inspector.js"></script>
+  <script type="module" src="./runtime-probe.js"></script>
 </body>
 </html>
