@@ -68,7 +68,7 @@ Both routes target browser-native inference: model computation occurs inside the
 ## Current implementation
 
 - index.html: separate experiment page with model/runtime research notes and a local LoRA inspection utility.
-- lora-inspector.js: reads only the first safetensors header block and reports tensor names, shapes, common LoRA A/B or down/up pairs, possible extended adapter tensors, and embedded training metadata. It does not upload or deserialize tensor payloads.
+- lora-inspector.js: reads only the first safetensors header block and reports tensor names, shapes, dtypes, byte-range validity, common LoRA A/B or down/up pairs, rank-dimension mismatches, possible extended adapter tensors, and embedded training metadata. It does not upload or deserialize tensor payloads.
 - tools/fuse_lora_and_export.py: offline Diffusers LoRA fusion with optional Optimum SDXL ONNX export. It has not been run against the real Personal Ami weights.
 - tools/README.md: isolated environment and export instructions.
 - No image-generation inference is wired up yet.
@@ -92,7 +92,7 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 ## Validation milestones
 
 - [x] Identify an Illustrious v0.1-derived browser ONNX package with FP16 graph weights-index metadata.
-- [x] Add an offline Diffusers fusion / generic ONNX reference export script (syntax/help checked; real-model execution pending).
+- [x] Add an offline Diffusers fusion / generic ONNX reference export script (Python syntax/help and mocked end-to-end control flow checked; real-model execution pending).
 - [ ] Inspect the exact Civitai LoRA version and tensor keys.
 - [ ] Verify the Personal Ami LoRA against the package's WAI Illustrious v17 FP16 graph.
 - [ ] Prototype ExecuTorch WebGPU export for the SDXL UNet and verify required operator coverage.
