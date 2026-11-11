@@ -129,7 +129,7 @@
       <p class="eyebrow">Local adapter compatibility inspection</p>
       <h2>Personal Ami → ONNX weight-index mapping</h2>
       <p>Select the Personal Ami file in the local inspector above, then compare its LoRA pair names and matrix shapes against the candidate pack's CLIP-L, CLIP-bigG, and three UNet weight indexes. This reads only the safetensors header and downloads only the small index JSON files.</p>
-      <p class="notice">No LoRA tensor payloads, ONNX graph files, or multi-gigabyte weight shards are read. The report can identify matching target names, shape compatibility, and ONNX-transposed weights. It cannot calculate A×B deltas or prove numerical equivalence.</p>
+      <p class="notice">No LoRA tensor payloads, ONNX graph files, or multi-gigabyte weight shards are read. The report identifies target names, shape compatibility, and ONNX transpose requirements. It separately flags six CLIP-L layer-11 pairs absent from this graph index, consistent with the graph exposing a penultimate hidden state. It cannot calculate A×B deltas or prove numerical equivalence.</p>
       <button class="button" id="mapLoraWeights" type="button">Map local LoRA to ONNX weights</button>
       <p class="status" id="loraMapStatus" data-type="info" aria-live="polite">Choose the local .safetensors file above first.</p>
       <div class="data-list" id="loraMapSummary" hidden></div>
@@ -234,7 +234,17 @@
       <button class="button" id="testUnetABC" type="button">Test full UNET_A → B → C chain</button>
       <p class="status" id="unetABCStatus" data-type="info" aria-live="polite">Not tested yet.</p>
       <div class="data-list" id="unetABCSummary" hidden></div>
-      <p class="notice">A successful result validates the complete split denoiser graph chain only. It does not yet test a real prompt, scheduler, repeated denoising steps, or LoRA.</p>
+      <p class="notice">The zero-conditioning A → B → C chain has passed. This does not yet test repeated denoising steps, latent scheduler updates, or LoRA application.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Next: check whether all UNet weights can stay loaded</p>
+      <h2>Simultaneous UNET_A + UNET_B + UNET_C session preflight</h2>
+      <p>Create all three WebGPU sessions while keeping earlier sessions resident. The model payload totals approximately 4.8 GiB before activations and runtime overhead. This is required for an efficient multi-step denoising loop because reloading partitions for every step would be prohibitively expensive.</p>
+      <p class="notice">This is a high-memory test. It may fail or cause the browser/GPU process to run out of memory. Close other model tabs first. It does not run inference. Any sessions created before a failure are released in the test's cleanup path.</p>
+      <button class="button" id="testUnetResident" type="button">Test simultaneous UNet residency (about 4.8 GiB)</button>
+      <p class="status" id="unetResidentStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="unetResidentSummary" hidden></div>
     </section>
 
     <section class="panel">
@@ -287,7 +297,7 @@
     <section class="panel">
       <p class="eyebrow">Runtime status</p>
       <h2>Full image generation is not wired up yet</h2>
-      <p>The first CLIP-L component smoke test is now available above. The target remains offline Python/Diffusers conversion, then ONNX Runtime WebGPU inference in this page. Python is export-only; no Python inference server is intended. ExecuTorch WebGPU remains a secondary experiment. The FLUX.2 application remains untouched.</p>
+      <p>Both CLIP encoders, both VAE directions, real positive/negative SDXL prompt conditioning, and the complete split UNET_A → B → C forward chain have now passed separate browser-side WebGPU tests. Full iterative denoising and image output are not wired up yet. The next constraint to measure is whether all three UNet sessions can remain resident together. Python is export-only; no Python inference server is intended. ExecuTorch WebGPU remains a secondary experiment. The FLUX.2 application remains untouched.</p>
       <p><a href="./README.md">Technical plan and validation checklist</a> · <a href="./tools/README.md">Offline LoRA fusion / ONNX export instructions</a></p>
     </section>
   </main>
@@ -303,6 +313,7 @@
   <script type="module" src="./unet-a-smoke-test.js"></script>
   <script type="module" src="./unet-ab-chain-test.js"></script>
   <script type="module" src="./unet-abc-chain-test.js"></script>
+  <script type="module" src="./unet-resident-memory-preflight.js"></script>
   <script type="module" src="./vae-encoder-smoke-test.js"></script>
   <script type="module" src="./prompt-conditioning-smoke-test.js"></script>
   <script type="module" src="./scheduler-math-smoke-test.js"></script>
