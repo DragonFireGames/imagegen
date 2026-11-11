@@ -298,6 +298,7 @@ button.addEventListener("click", async () => {
       matched: 0,
       shapeValid: 0,
       missingName: 0,
+      unindexedFinalClipL: 0,
       missingPair: 0,
       shapeMismatch: 0,
       unsupportedGroup: 0,
@@ -341,8 +342,21 @@ button.addEventListener("click", async () => {
         if (found) break;
       }
       if (!found) {
-        counts.missingName++;
-        if (issues.length < 80) issues.push("NO INDEX MATCH " + stem + " → tried: " + keysToTry.join(" | "));
+        const isUnindexedFinalClipLBlock =
+          group.component === "text_encoder" &&
+          /^text_model_encoder_layers_11_(?:mlp_fc1|mlp_fc2|self_attn_(?:k_proj|out_proj|q_proj|v_proj))$/.test(group.module);
+        if (isUnindexedFinalClipLBlock) {
+          counts.unindexedFinalClipL++;
+          if (issues.length < 80) {
+            issues.push("UNINDEXED FINAL CLIP-L BLOCK " + stem +
+              " · not present in the graph index; consistent with the graph exposing penultimate_hidden_state");
+          }
+        } else {
+          counts.missingName++;
+          if (issues.length < 80) {
+            issues.push("NO INDEX MATCH " + stem + " → tried: " + keysToTry.join(" | "));
+          }
+        }
         continue;
       }
       counts.matched++;
@@ -381,7 +395,8 @@ button.addEventListener("click", async () => {
       "  Pairs found in header: " + counts.total,
       "  Matching index names: " + counts.matched,
       "  Matching names + shape-compatible: " + counts.shapeValid,
-      "  Missing index name: " + counts.missingName,
+      "  Expected unindexed CLIP-L layer-11 pairs: " + counts.unindexedFinalClipL,
+      "  Unexpected missing index name: " + counts.missingName,
       "  Incomplete down/up pair: " + counts.missingPair,
       "  Shape mismatches: " + counts.shapeMismatch,
       "  Unsupported prefixes: " + counts.unsupportedGroup,
@@ -415,7 +430,8 @@ button.addEventListener("click", async () => {
     addRow("Pairs found", String(counts.total));
     addRow("Matching index names", String(counts.matched));
     addRow("Shape-compatible pairs", String(counts.shapeValid));
-    addRow("Missing names / shape mismatches", counts.missingName + " / " + counts.shapeMismatch);
+    addRow("Unindexed final CLIP-L layer-11 pairs", String(counts.unindexedFinalClipL));
+    addRow("Unexpected missing names / shape mismatches", counts.missingName + " / " + counts.shapeMismatch);
     addRow("Transpose-required targets", String(counts.transposed));
     addRow("Index JSON downloaded", formatBytes(indexBytes));
     addRow("Adapter tensor payload downloaded/read", "0 bytes");
