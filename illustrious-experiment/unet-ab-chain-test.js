@@ -63,7 +63,18 @@ function copyFp16(tensor, name, expectedShape) {
       "], expected [" + expectedShape.join(", ") + "].");
   }
   finiteTensor(tensor, "A." + name);
-  return new Float16Array(tensor.data);
+  if (!(tensor.data instanceof Float16Array) && !(tensor.data instanceof Uint16Array)) {
+    throw new Error("A." + name + " data is " + tensor.data.constructor.name +
+      "; expected a 16-bit float backing array.");
+  }
+  // ONNX Runtime Web may expose float16 CPU data as either Float16Array
+  // (when supported) or Uint16Array containing raw IEEE-754 half bits.
+  // Copy the bytes, not numeric values, so both representations survive intact.
+  const bytes = tensor.data.buffer.slice(
+    tensor.data.byteOffset,
+    tensor.data.byteOffset + tensor.data.byteLength
+  );
+  return new Float16Array(bytes);
 }
 
 function validateOutput(output, name, shape) {
