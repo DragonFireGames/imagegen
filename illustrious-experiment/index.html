@@ -68,7 +68,7 @@
         <div class="fact"><span>Graph layout</span><strong>Split SDXL UNet</strong></div>
         <div class="fact"><span>Adapter maps</span><strong>FP16 weights-index files</strong></div>
       </div>
-      <p class="notice">This is WAI Illustrious v17, a fine-tune based on Illustrious v0.1—not the untouched base checkpoint. Its card documents weight indexes for applying LoRAs to the FP16 graphs. INT4 UNet variants are also present, but their manifest entries do not include those weight-index maps. We need to verify adapter behavior on FP16 first.</p>
+      <p class="notice">This is WAI Illustrious v17, a fine-tune based on Illustrious v0.1—not the untouched v0.1 base. Its card documents weight indexes for applying LoRAs to the FP16 graphs. INT4 UNet variants are also present, but their manifest entries do not include those weight-index maps. We need to verify adapter behavior on FP16 first.</p>
       <p><a href="https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0" target="_blank" rel="noreferrer">Original Illustrious XL v0.1 base</a> · <a href="https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17/blob/main/LICENSE.txt" target="_blank" rel="noreferrer">Candidate pack license</a></p>
     </section>
 
@@ -96,7 +96,7 @@
     <section class="panel">
       <p class="eyebrow">Runtime status</p>
       <h2>Inference is not wired up yet</h2>
-      <p>Target architecture: offline Python/Diffusers conversion, then ONNX Runtime WebGPU inference in this page. Python would be used for export only; no Python inference server is intended. The FLUX.2 application remains untouched.</p>
+      <p>Target architecture: offline Python/Diffusers conversion, then ONNX Runtime WebGPU inference in this page. Python would be used for export only; no Python inference server is intended. ExecuTorch WebGPU is a second experimental route being evaluated. The FLUX.2 application remains untouched.</p>
       <p><a href="./README.md">Technical plan and validation checklist</a></p>
     </section>
   </main>
