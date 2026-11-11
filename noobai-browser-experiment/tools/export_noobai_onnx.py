@@ -474,7 +474,7 @@ def export_model(args):
             "Text encoders expose penultimate hidden states; encoder 2 also exposes pooled text_embeds.",
             "U-Net inputs and outputs use float16. Text encoder outputs and VAE input/output use float32.",
             "The VAE scaling factor is applied in the JavaScript sampler before decoding.",
-            "Tokenizer assets are fetched from sourceModel at sourceRevision.",
+            "Fast tokenizer JSON and config files are bundled in tokenizer/ and tokenizer_2/ and loaded directly from this browser pack.",
             "Only the VAE decoder is included; this pack targets text-to-image generation.",
         ],
     }
