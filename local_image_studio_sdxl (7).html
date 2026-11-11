@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Local Image Studio — SDXL Lightning</title>
+<style>
+:root{color-scheme:dark;--bg:#111214;--panel:#1b1c20;--line:#34363d;--text:#f2f2f4;--muted:#a7a9b2;--pink:#ff668e;--green:#71d9a1}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+header{padding:24px clamp(16px,4vw,44px);border-bottom:1px solid var(--line);background:#17181b}
+h1{font-size:22px;margin:0 0 4px}header p{margin:0;color:var(--muted);max-width:850px}
+main{display:grid;grid-template-columns:minmax(280px,390px) minmax(0,1fr);gap:18px;padding:20px clamp(12px,3vw,32px);max-width:1500px;margin:auto}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;min-width:0}
+h2{font-size:16px;margin:0 0 14px}label{display:block;font-weight:600;margin:14px 0 6px}
+textarea,input,select{width:100%;background:#111215;color:var(--text);border:1px solid #42444c;border-radius:8px;padding:10px;font:inherit}
+textarea{resize:vertical;min-height:100px}input[type=number]{padding:8px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.grid label{margin-top:12px}
+button{border:0;border-radius:9px;background:var(--pink);color:#1b1014;font-weight:750;padding:12px 15px;font:inherit;cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}.secondary{background:#30323a;color:var(--text);border:1px solid #4a4c55}
+.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:18px}.note{font-size:12px;color:var(--muted);margin-top:8px}
+#status{white-space:pre-wrap;background:#121316;border:1px solid var(--line);padding:12px;border-radius:9px;margin-top:14px;color:var(--muted);min-height:72px}
+#status.error{color:#ff9baf}#status.good{color:var(--green)}
+.preview{display:flex;align-items:center;justify-content:center;min-height:420px;background:#101114;border:1px dashed #454751;border-radius:10px;overflow:hidden}
+#output{max-width:100%;max-height:75vh;object-fit:contain;display:none}.placeholder{text-align:center;color:var(--muted);padding:24px}
+.previewTools{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap}
+progress{width:100%;height:7px;margin-top:12px;accent-color:var(--pink)}
+a{color:#ff9db7}.warn{border-left:3px solid #d8a45c;padding:9px 12px;color:#e2d0b6;background:#28231c;border-radius:4px;font-size:13px;margin-top:12px}
+@media(max-width:850px){main{grid-template-columns:1fr}.preview{min-height:280px}}
+</style>
+</head>
+<body>
+<header><h1>Local Image Studio <span style="color:var(--pink)">/ SDXL Lightning</span></h1>
+<p>A separate browser-only SDXL experiment. Generation runs on your device through WebGPU; the model files are fetched from Hugging Face and cached by the browser where possible.</p></header>
+<main>
+<section class="panel">
+<h2>Generation</h2>
+<label for="prompt">Prompt</label><textarea id="prompt" placeholder="A cinematic photograph of a tiny greenhouse on a rainy evening, warm lights, intricate details">A cinematic photograph of a tiny greenhouse on a rainy evening, warm lights glowing through glass, lush plants, intricate details, natural colors, beautiful composition</textarea>
+<label for="negative">Negative prompt <span style="font-weight:400;color:var(--muted)">(kept for convenience; Lightning uses CFG 1)</span></label>
+<textarea id="negative" placeholder="What to avoid">blurry, low quality, distorted, text, watermark</textarea>
+<div class="grid">
+<div><label for="width">Width</label><select id="width"><option>768</option><option>640</option><option>512</option><option>1024</option></select></div>
+<div><label for="height">Height</label><select id="height"><option>512</option><option>640</option><option>768</option><option>1024</option></select></div>
+<div><label for="seed">Seed (−1 = random)</label><input id="seed" type="number" value="-1" min="-1" max="2147483647"></div>
+<div><label for="steps">Steps</label><select id="steps" disabled><option>4</option></select></div>
+</div>
+<div class="note">SDXL-Lightning is distilled for exactly 4 steps and guidance scale 1. Output dimensions should be divisible by 8. Start with 768 × 512.</div>
+<div class="actions"><button id="generate">Load model &amp; generate</button><button id="stop" class="secondary" disabled>Cancel after current step</button></div>
+<progress id="progress" value="0" max="4" hidden></progress>
+<div id="status">Ready. The first run downloads roughly 6.9 GB of model data. Keep this tab open and avoid running other GPU-heavy apps.</div>
+<div class="warn">Memory warning: model files are about 6.9 GB, and peak RAM/GPU memory is higher. On a 16 GB Mac this may still fail depending on the model and other apps. The first load can take a long time.</div>
+<p class="note">Model: <a href="https://huggingface.co/Cyronius/sdxl-lightning-4step-onnx-web-fp16-3shard" target="_blank" rel="noreferrer">Cyronius SDXL-Lightning 4-step ONNX</a>. This is a text-to-image prototype; image-to-image and inpainting are not included.</p>
+</section>
+<section class="panel">
+<h2>Output</h2>
+<div class="preview"><div id="placeholder" class="placeholder">Your generated image will appear here.<br><br>Nothing is uploaded to an image-generation server.</div><img id="output" alt="Generated image"></div>
+<div class="previewTools"><span id="details" class="note">No image generated yet.</span><button id="save" class="secondary" disabled>Save PNG</button></div>
+</section>
+</main>
+<script type="module">
+const MODEL = 'Cyronius/sdxl-lightning-4step-onnx-web-fp16-3shard';
+const $ = id => document.getElementById(id);
+const status = $('status'), progress = $('progress'), generateBtn = $('generate'), stopBtn = $('stop');
+let cancelRequested = false, running = false, outputUrl = null, lastSeed = null;
+function say(msg, cls=''){status.textContent=msg;status.className=cls}
+function seededRandom(seed){let s=seed>>>0;return()=>{s+=0x6D2B79F5;let t=s;t=Math.imul(t^(t>>>15),t|1);t^=t+Math.imul(t^(t>>>7),t|61);return ((t^(t>>>14))>>>0)/4294967296}}
+function randn(rng){let u=0,v=0;while(!u)u=rng();while(!v)v=rng();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)}
+function tensor(Tensor, data, dims, type='float32'){return new Tensor(type,data,dims)}
+function arrayOf(t){return t?.data ? t.data : t}
+async function run(){
+ if(running)return;
+ if(!navigator.gpu){say('WebGPU is unavailable in this browser. Try a current version of Chrome or Edge on macOS.','error');return}
+ const prompt=$('prompt').value.trim(); if(!prompt){say('Enter a prompt first.','error');return}
+ const width=Number($('width').value),height=Number($('height').value);
+ if(width%8||height%8){say('Width and height must be divisible by 8.','error');return}
+ running=true;cancelRequested=false;generateBtn.disabled=true;stopBtn.disabled=false;progress.hidden=false;progress.value=0;
+ try{
+   say('Importing browser inference libraries…');
+   const {AutoTokenizer,AutoModel,AutoConfig,Tensor} = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.2');
+   const modelOpts={device:'webgpu',dtype:'fp32',use_external_data_format:true};
+   say('Loading tokenizers and text encoders. Large model downloads begin now; keep the tab open.');
+   const [tok1,tok2] = await Promise.all([
+    AutoTokenizer.from_pretrained('Xenova/clip-vit-base-patch32'),
+    AutoTokenizer.from_pretrained('laion/CLIP-ViT-bigG-14-laion2B-39B-b160k')
+   ]);
+   // Load model configs from explicit subfolder URLs to avoid Transformers.js
+   // resolving config.json at the repository root when subfolder is ignored.
+   const loadJson = async path => {
+     const r=await fetch(`https://huggingface.co/${MODEL}/resolve/main/${path}`);
+     if(!r.ok) throw new Error(`Could not load ${path} (${r.status})`);
+     return r.json();
+   };
+   const [cfg1,cfg2] = await Promise.all([loadJson('text_encoder/config.json'),loadJson('text_encoder_2/config.json')]);
+   const [enc1,enc2] = await Promise.all([
+    AutoModel.from_pretrained(MODEL,{...modelOpts,subfolder:'text_encoder',model_file_name:'model',config:cfg1}),
+    AutoModel.from_pretrained(MODEL,{...modelOpts,subfolder:'text_encoder_2',model_file_name:'model',config:cfg2})
+   ]);
+   say('Loading SDXL-Lightning UNet (three large weight shards)… this is the heaviest part of the load.');
+   const unetConfig=await loadJson('unet/config.json');
+   const unet=await AutoModel.from_pretrained(MODEL,{...modelOpts,subfolder:'unet',model_file_name:'model',use_external_data_format:3,config:unetConfig});
+   say('Loading VAE decoder…');
+   const vaeConfig=await loadJson('vae_decoder/config.json');
+   const vae=await AutoModel.from_pretrained(MODEL,{...modelOpts,subfolder:'vae_decoder',model_file_name:'model',config:vaeConfig});
+   const tokenized=tok1(prompt,{padding:'max_length',max_length:77,truncation:true});
+   const tokenized2=tok2(prompt,{padding:'max_length',max_length:77,truncation:true});
+   say('Encoding prompt with both SDXL text encoders…');
+   const out1=await enc1({input_ids:tokenized.input_ids});
+   const out2=await enc2({input_ids:tokenized2.input_ids});
+   const h1=out1.last_hidden_state || out1[0];
+   const h2=out2.last_hidden_state || out2[0];
+   const pooled=out2.text_embeds || out2.pooler_output || out2[1];
+   if(!h1||!h2||!pooled) throw new Error('Could not read the expected SDXL text-encoder outputs.');
+   const a=arrayOf(h1),b=arrayOf(h2);
+   const seq=77, dim1=a.length/seq,dim2=b.length/seq;
+   const combined=new Float32Array(seq*(dim1+dim2));
+   for(let i=0;i<seq;i++){combined.set(a.subarray(i*dim1,(i+1)*dim1),i*(dim1+dim2));combined.set(b.subarray(i*dim2,(i+1)*dim2),i*(dim1+dim2)+dim1)}
+   const pooledData=arrayOf(pooled);
+   // EulerDiscreteScheduler with trailing timestep spacing, 4-step Lightning schedule.
+   say('Preparing latent noise…');
+   let seed=Number($('seed').value);if(!Number.isFinite(seed)||seed<0)seed=Math.floor(Math.random()*2147483646)+1;lastSeed=seed;
+   const rng=seededRandom(seed),lh=height/8,lw=width/8,latentSize=4*lh*lw;
+   const latents=new Float32Array(latentSize);for(let i=0;i<latentSize;i++)latents[i]=randn(rng);
+   // SDXL's standard scaled-linear beta schedule and trailing 4-step timesteps.
+   const betaStart=.00085,betaEnd=.012,trainSteps=1000;
+   const alphas=new Float64Array(trainSteps);let prod=1;
+   for(let i=0;i<trainSteps;i++){const f=i/(trainSteps-1),beta=(Math.sqrt(betaStart)*(1-f)+Math.sqrt(betaEnd)*f)**2;prod*=1-beta;alphas[i]=prod}
+   const sigmas=[];for(let i=0;i<trainSteps;i++)sigmas.push(Math.sqrt((1-alphas[i])/alphas[i]));
+   const times=[999,749,499,249];const steps=$('steps').valueAsNumber||4;
+   // Build sigma sequence by indexing the scheduler's training grid, with final sigma 0.
+   const ss=times.map(t=>sigmas[t]);ss.push(0);
+   for(let i=0;i<latents.length;i++)latents[i]*=ss[0];
+   const addTimeIds=Float32Array.from([height,width,0,0,height,width]);
+   const hiddenTensor=tensor(Tensor,combined,[1,seq,dim1+dim2]);
+   const pooledTensor=tensor(Tensor,new Float32Array(pooledData),[1,pooledData.length]);
+   for(let step=0;step<4;step++){
+     if(cancelRequested)throw new Error('Cancelled by user.');
+     progress.value=step;
+     say(`Generating image — denoising step ${step+1} of 4…\nSeed: ${seed}\nThe browser may become briefly unresponsive during GPU inference.`);
+     const sigma=ss[step], nextSigma=ss[step+1];
+     const scaled=new Float32Array(latents.length);const denom=Math.sqrt(sigma*sigma+1);
+     for(let i=0;i<latents.length;i++)scaled[i]=latents[i]/denom;
+     const inputs={
+       sample:tensor(Tensor,scaled,[1,4,lh,lw]),
+       timestep:tensor(Tensor,new Float32Array([times[step]]),[1]),
+       encoder_hidden_states:hiddenTensor,
+       text_embeds:pooledTensor,
+       time_ids:tensor(Tensor,addTimeIds,[1,6])
+     };
+     const prediction=await unet(inputs);
+     const noise=prediction.out_sample||prediction.sample||prediction[0];
+     if(!noise)throw new Error('UNet did not return its noise prediction. Output keys: '+Object.keys(prediction).join(', '));
+     const n=arrayOf(noise),dt=nextSigma-sigma;
+     for(let i=0;i<latents.length;i++)latents[i]+=n[i]*dt;
+     progress.value=step+1;
+   }
+   if(cancelRequested)throw new Error('Cancelled by user.');
+   say('Decoding final latent into pixels…');
+   const decoded=await vae({latent_sample:tensor(Tensor,Float32Array.from(latents,x=>x/0.13025),[1,4,lh,lw])});
+   const imageTensor=decoded.sample||decoded[0];
+   if(!imageTensor)throw new Error('VAE did not return image pixels. Output keys: '+Object.keys(decoded).join(', '));
+   const px=arrayOf(imageTensor),canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;
+   const ctx=canvas.getContext('2d'),img=ctx.createImageData(width,height);
+   // VAE output is NCHW and normally in [-1, 1].
+   const plane=width*height;
+   for(let i=0;i<plane;i++){img.data[i*4]=Math.max(0,Math.min(255,Math.round((px[i]+1)*127.5)));img.data[i*4+1]=Math.max(0,Math.min(255,Math.round((px[plane+i]+1)*127.5)));img.data[i*4+2]=Math.max(0,Math.min(255,Math.round((px[2*plane+i]+1)*127.5)));img.data[i*4+3]=255}
+   ctx.putImageData(img,0,0);
+   const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));
+   if(!blob)throw new Error('Could not encode PNG.');
+   if(outputUrl)URL.revokeObjectURL(outputUrl);outputUrl=URL.createObjectURL(blob);
+   $('output').src=outputUrl;$('output').style.display='block';$('placeholder').style.display='none';$('save').disabled=false;
+   $('details').textContent=`${width} × ${height} · SDXL-Lightning 4-step · seed ${seed}`;
+   say('Generation complete. Save the image or change the prompt and generate again.','good');
+ }catch(e){console.error(e);say((e?.message||String(e))+'\n\nIf this is a model-loading or WebGPU error, the model may exceed available memory or the browser may not support one of its ONNX operators. Reload the page before retrying to release GPU resources.','error')}
+ finally{running=false;generateBtn.disabled=false;stopBtn.disabled=true;progress.hidden=true}
+}
+generateBtn.addEventListener('click',run);
+stopBtn.addEventListener('click',()=>{cancelRequested=true;stopBtn.disabled=true;say('Cancellation requested. Waiting for the current model operation to finish…')});
+$('save').addEventListener('click',()=>{if(!outputUrl)return;const a=document.createElement('a');a.href=outputUrl;a.download=`sdxl-lightning-${lastSeed||'image'}.png`;a.click()});
+</script>
+</body></html>

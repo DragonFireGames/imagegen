@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Local Image Studio</title>
+<style>
+:root{color-scheme:dark;--bg:#101116;--panel:#191b23;--line:#303440;--text:#f4f5f8;--muted:#a7abba;--pink:#ff4778;--green:#00c23a}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 10% 0,#29202d,transparent 40%),var(--bg);color:var(--text);font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif}main{max-width:1120px;margin:auto;padding:26px 18px 60px}.head{display:flex;align-items:center;gap:13px;margin-bottom:20px}.logo{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,var(--pink),#8d5cff);font-size:23px}.eyebrow{font-size:11px;letter-spacing:.15em;text-transform:uppercase;color:#ff9ab4;font-weight:800}.title{font-size:27px;line-height:1.2;font-weight:850;letter-spacing:-.04em}.sub{color:var(--muted);font-size:13px;margin-top:4px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:15px;padding:17px;margin-bottom:15px}.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.badge{border:1px solid var(--line);border-radius:999px;padding:5px 10px;font-size:12px;color:var(--muted)}.status-badge{font-size:11px;font-weight:800;border-radius:999px;padding:5px 9px;background:#242633;color:#c5c8d5}.status-badge.loading{color:#ffd166}.status-badge.success{color:#6ff0a0}.status-badge.error{color:#ff8181}.status-msg{color:var(--muted);flex:1}.backend-badge{font-size:11px;color:#a7e8cf}.backend-toggle,.cache-clear,button{cursor:pointer;border:1px solid var(--line);border-radius:9px;background:#262936;color:var(--text);padding:9px 12px;font:inherit;font-weight:700}.backend-toggle:hover,.cache-clear:hover,button:hover{border-color:#666b7c}.btn-primary{background:linear-gradient(135deg,var(--pink),#ce3e95);border:0;color:white}.btn-primary:disabled{opacity:.45;cursor:not-allowed}.progress-wrap{margin-top:14px}.progress-meta{display:flex;justify-content:space-between;gap:10px;color:var(--muted);font-size:12px;margin-bottom:6px}.progress-track{height:7px;background:#303340;border-radius:9px;overflow:hidden}.progress-fill{height:100%;background:linear-gradient(90deg,var(--pink),#8b5cff);width:0%}.hidden{display:none!important}.model-list{display:flex;gap:18px;flex-wrap:wrap;margin-top:13px;color:var(--muted);font-size:12px}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#555;margin-right:6px}.dot.loading{background:#ffd166}.dot.done{background:#4ade80}.dot.error{background:#ff7171}.note{color:#d2d4de;font-size:13px}.note strong{color:#fff}.note a{color:#ff9ab4}.section-title{font-size:12px;text-transform:uppercase;letter-spacing:.1em;font-weight:800;color:#b7bac8;margin-bottom:12px}label{display:block;color:var(--muted);font-size:12px;font-weight:700;margin-bottom:6px}textarea,input[type=number],select,input[type=file]{width:100%;border:1px solid var(--line);border-radius:9px;background:#11131a;color:var(--text);padding:10px;font:inherit}textarea{resize:vertical;min-height:86px;margin-bottom:13px}textarea:focus,input:focus,select:focus{outline:1px solid var(--pink)}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.mode-row{display:flex;gap:9px;flex-wrap:wrap;margin-bottom:15px}.mode-option{display:flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:9px;padding:8px 10px;margin:0;color:var(--text);cursor:pointer}.mode-option:has(input:checked){border-color:var(--pink);background:#ff477815}.parameter-layout{display:grid;grid-template-columns:1fr 180px;gap:16px;align-items:end}.parameter-action button{width:100%;min-height:45px}.image-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px}.canvas-frame,.source-frame{display:grid;place-items:center;width:100%;aspect-ratio:1;background:#101116;border:1px solid var(--line);border-radius:10px;overflow:hidden;position:relative}.canvas-frame canvas,.source-frame canvas{width:100%;height:100%;object-fit:contain}.source-frame canvas{position:absolute;inset:0}.source-placeholder{position:relative;z-index:2;color:#767b8c;font-size:13px;pointer-events:none}.source-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:10px}.source-toolbar input{flex:1;min-width:60px}.source-toolbar button{padding:6px 9px;font-size:12px}input[type=range]{accent-color:var(--pink);width:100%}.stage-hint{font-size:11px;color:var(--muted);margin:8px 0}.log{white-space:pre-wrap;word-break:break-word;max-height:170px;overflow:auto;background:#101116;border-radius:9px;padding:12px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#b8bdcc}.fine{font-size:11px;color:#8d92a2;margin-top:10px}a{color:#ff9ab4}@media(max-width:760px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.parameter-layout{grid-template-columns:1fr}.image-grid{grid-template-columns:1fr}.title{font-size:23px}}@media(max-width:430px){.grid{grid-template-columns:1fr 1fr}main{padding:18px 11px 35px}.panel{padding:13px}}
+</style>
+</head>
+<body>
+<main>
+<header class="head"><div class="logo">✦</div><div><div class="eyebrow">Local browser inference</div><div class="title">Local Image Studio</div><div class="sub">Stable Diffusion 1.5 · WebGPU · prompts stay on your device during inference</div></div></header>
+
+<section class="panel">
+  <div class="row"><span class="status-badge info" id="statusBadge">INFO</span><span class="status-msg" id="readyState">Idle</span><span class="backend-badge" id="cacheState">model not loaded</span><button type="button" class="backend-toggle" id="loadModels">Load models</button><button type="button" class="cache-clear" id="clearCache">Clear cache</button></div>
+  <div class="progress-wrap hidden" id="progressWrap"><div class="progress-meta"><span id="progressLabel">Preparing model…</span><span id="progressMeta">--</span></div><div class="progress-track"><div class="progress-fill" id="progressFill"></div></div></div>
+  <div class="model-list"><span><i class="dot pending" id="dot-runtime"></i>ONNX Runtime</span><span><i class="dot pending" id="dot-model"></i>Model weights</span><span><i class="dot pending" id="dot-generate"></i>Image output</span></div>
+</section>
+
+<section class="panel note">
+  <strong>Experimental standalone build.</strong> This page has its own interface and runs inference in the browser; it does not embed another website. To make the first test practical, it currently uses a known-compatible SD 1.5 ONNX checkpoint. It does <strong>not</strong> download a safety-checker model. The requested Zhare repository's UNet file appears unusually small in its published file listing, so its compatibility needs a separate test before swapping it in.
+  <div class="fine">First load downloads several gigabytes. Use a recent Chrome or Edge build with WebGPU enabled and enough free memory. Model/runtime files are fetched from their upstream hosts; generated prompts and images are not uploaded by this page's inference code.</div>
+</section>
+
+<section class="panel">
+  <div class="section-title">Prompt</div>
+  <label for="prompt">Positive prompt</label><textarea id="prompt" rows="4">a small glass greenhouse on a rainy city rooftop, cinematic light</textarea>
+  <label for="negative">Negative prompt</label><textarea id="negative" rows="2">low quality, blurry, distorted</textarea>
+</section>
+
+<section class="panel">
+  <div class="section-title">Generation settings</div>
+  <div class="mode-row" role="radiogroup" aria-label="Generation mode">
+    <label class="mode-option"><input type="radio" name="mode" value="txt2img" checked> Text to image</label>
+    <label class="mode-option"><input type="radio" name="mode" value="img2img"> Image to image</label>
+    <label class="mode-option"><input type="radio" name="mode" value="inpaint"> Inpaint mask</label>
+  </div>
+  <div class="parameter-layout"><div class="grid">
+    <div><label for="seed">Seed (-1 random)</label><input id="seed" type="number" value="-1"></div>
+    <div><label for="sampler">Sampler</label><select id="sampler"><option value="ddim" selected>DDIM</option></select></div>
+    <div><label for="steps">Steps</label><input id="steps" type="number" min="8" max="60" value="20"></div>
+    <div><label for="width">Width</label><input id="width" type="number" min="128" max="768" step="64" value="512"></div>
+    <div><label for="height">Height</label><input id="height" type="number" min="128" max="768" step="64" value="512"></div>
+    <div><label for="guidance">CFG scale</label><input id="guidance" type="number" min="1" max="12" step="0.5" value="7.5"></div>
+    <div><label for="strength">Denoise strength</label><input id="strength" type="number" min="0.05" max="1" step="0.05" value="0.65"></div>
+    <div><label for="batchCount">Batch count</label><input id="batchCount" type="number" min="1" max="4" value="1"></div>
+    <div><label for="sourceFit">Source fit</label><select id="sourceFit"><option value="pad" selected>Padding</option><option value="crop">Crop center</option><option value="edge">Edge pixel</option></select></div>
+    <div><label for="maskBlur">Mask blur</label><input id="maskBlur" type="number" min="0" max="32" value="0"></div>
+    <div><label for="brushSize">Mask brush</label><input id="brushSize" type="range" min="6" max="96" step="2" value="32"></div>
+    <div style="display:flex;align-items:end;padding-bottom:9px"><label style="margin:0;color:var(--text)"><input id="invertMask" type="checkbox"> Invert mask</label></div>
+  </div><div class="parameter-action"><button class="btn-primary" id="generate" type="button" disabled>Generate image</button></div></div>
+</section>
+
+<section class="image-grid">
+  <div class="panel"><div class="section-title">Source image / mask</div><div class="source-toolbar"><button id="clearMask" type="button">Clear mask</button></div><div class="source-frame" id="sourceFrame"><canvas id="sourceCanvas" width="512" height="512"></canvas><canvas id="maskCanvas" width="512" height="512"></canvas><div class="source-placeholder" id="sourcePlaceholder">Optional: choose a source image below</div></div><div style="margin-top:10px"><input id="sourceImage" type="file" accept="image/*"></div><p class="stage-hint">For inpainting, paint the area to regenerate. Right-click erases mask strokes.</p></div>
+  <div class="panel"><div class="section-title">Generated image</div><div class="canvas-frame"><canvas id="canvas" width="512" height="512"></canvas></div><div class="row" style="margin-top:10px"><button id="saveImage" type="button">Save PNG</button><span class="fine">Images remain in this tab unless you save them.</span></div></div>
+</section>
+
+<section class="panel"><div class="section-title">Run log</div><pre id="status" class="log">Ready. Load the model to begin; the first download may take a while.</pre></section>
+</main>
+<script type="module">
+const RAW = "https://raw.githubusercontent.com/endman100/web-stable-diffusion-onnx-webgpu/main/";
+const sidecars = [
+  ['"./tokenizer/vocab.json"', JSON.stringify(RAW + "tokenizer/vocab.json")],
+  ['"./tokenizer/merges.txt"', JSON.stringify(RAW + "tokenizer/merges.txt")],
+  ['"./scheduler_config.json"', JSON.stringify(RAW + "scheduler_config.json")]
+];
+const sourceUrl = RAW + "index.js";
+const status = document.querySelector("#status");
+function bootError(error) {
+  status.textContent += "\nBOOT ERROR: " + (error?.stack || error);
+  document.querySelector("#statusBadge").className = "status-badge error";
+  document.querySelector("#statusBadge").textContent = "ERROR";
+  document.querySelector("#readyState").textContent = "Could not initialize";
+}
+try {
+  const response = await fetch(sourceUrl, {cache:"no-cache"});
+  if (!response.ok) throw new Error("Could not fetch inference engine: HTTP " + response.status);
+  let source = await response.text();
+  for (const [from, to] of sidecars) {
+    if (!source.includes(from)) throw new Error("Expected tokenizer/scheduler path not found: " + from);
+    source = source.replace(from, to);
+  }
+  // Import the upstream inference module as executable code, without embedding its UI.
+  // The model files themselves are downloaded only when the user asks to load/generate.
+  const blobUrl = URL.createObjectURL(new Blob([source + "\n//# sourceURL=local-image-studio-engine.js"], {type:"text/javascript"}));
+  await import(blobUrl);
+  URL.revokeObjectURL(blobUrl);
+  document.querySelector("#saveImage").addEventListener("click", () => {
+    const canvas = document.querySelector("#canvas");
+    const a = document.createElement("a");
+    a.download = "generated-image.png";
+    a.href = canvas.toDataURL("image/png");
+    a.click();
+  });
+} catch (error) { bootError(error); }
+</script>
+</body>
+</html>

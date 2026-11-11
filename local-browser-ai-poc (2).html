@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local Browser AI — Proof of Concept</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --bg: #101018;
+      --panel: #181824;
+      --panel-2: #202031;
+      --border: #343448;
+      --text: #f2f2f7;
+      --muted: #aaaabd;
+      --accent: #ff8fcf;
+      --accent-2: #9eb7ff;
+      --danger: #ff8b8b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 20% 0%, rgba(255,143,207,.10), transparent 30%),
+        radial-gradient(circle at 90% 100%, rgba(158,183,255,.08), transparent 30%),
+        var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+    }
+    .app { width: min(900px, 100%); padding: 24px; display: flex; flex-direction: column; min-height: 100vh; gap: 16px; }
+    header {
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      padding: 18px 20px; background: rgba(24,24,36,.88); border: 1px solid var(--border);
+      border-radius: 18px; backdrop-filter: blur(10px);
+    }
+    h1 { margin: 0 0 5px; font-size: 1.3rem; }
+    .subtitle { margin: 0; color: var(--muted); font-size: .9rem; }
+    .status { text-align: right; color: var(--muted); font-size: .82rem; max-width: 50%; }
+    .status strong { color: var(--text); }
+    .model-controls {
+      display: grid; grid-template-columns: auto minmax(260px, 1fr) auto; gap: 10px;
+      align-items: center; margin-top: 14px;
+    }
+    .model-controls label { color: var(--muted); font-size: .86rem; }
+    select, input[type="text"] {
+      width: 100%; min-height: 42px; border: 1px solid var(--border); border-radius: 10px;
+      padding: 8px 10px; color: var(--text); background: var(--panel-2); font: inherit; outline: none;
+    }
+    select:focus, input[type="text"]:focus { border-color: #65587b; }
+    .model-meta {
+      margin-top: 7px; color: var(--muted); font-size: .77rem;
+      overflow-wrap: anywhere;
+    }
+    .progress { height: 7px; margin-top: 7px; overflow: hidden; border-radius: 999px; background: #2b2b3b; }
+    .progress > div { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .15s; }
+    .chat {
+      flex: 1; min-height: 450px; max-height: calc(100vh - 300px); overflow: auto;
+      padding: 18px; background: rgba(16,16,24,.75); border: 1px solid var(--border); border-radius: 18px;
+    }
+    .empty {
+      min-height: 410px; display: grid; place-items: center; text-align: center; color: var(--muted); padding: 30px;
+    }
+    .empty strong { color: var(--text); }
+    .message { display: flex; margin: 12px 0; }
+    .message.user { justify-content: flex-end; }
+    .bubble {
+      white-space: pre-wrap; overflow-wrap: anywhere; max-width: min(78%, 720px);
+      padding: 12px 14px; border-radius: 16px; line-height: 1.45;
+      border: 1px solid var(--border); background: var(--panel);
+    }
+    .user .bubble { background: #30233b; border-color: #584066; }
+    .assistant .bubble { background: #1b2631; border-color: #33475a; }
+    .composer {
+      display: grid; grid-template-columns: 1fr auto; gap: 10px;
+      padding: 12px; background: rgba(24,24,36,.88); border: 1px solid var(--border); border-radius: 18px;
+    }
+    textarea {
+      resize: vertical; min-height: 48px; max-height: 180px; width: 100%;
+      border: 1px solid var(--border); border-radius: 12px; padding: 12px;
+      color: var(--text); background: var(--panel-2); outline: none; font: inherit;
+    }
+    textarea:focus { border-color: #65587b; }
+    button {
+      border: 1px solid var(--border); border-radius: 12px; padding: 0 14px;
+      min-height: 44px; color: var(--text); background: var(--panel-2); font: inherit;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { border-color: #666681; }
+    button.primary { background: linear-gradient(135deg, #5a3158, #33446b); border-color: #72587b; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .actions { display:flex; gap:8px; justify-content: flex-end; margin-top: 8px; grid-column: 1 / -1; }
+    .tool-panel {
+      background: rgba(24,24,36,.75); border: 1px solid var(--border); border-radius: 18px;
+      overflow: hidden;
+    }
+    .tool-header {
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      padding: 12px 14px; cursor:pointer; user-select:none;
+    }
+    .tool-header strong { font-size:.9rem; }
+    .tool-header span { color:var(--muted); font-size:.76rem; }
+    .tool-log { border-top:1px solid var(--border); padding: 10px; max-height: 360px; overflow:auto; }
+    .tool-entry { border:1px solid var(--border); border-radius:12px; background:var(--panel); margin:8px 0; overflow:hidden; }
+    .tool-entry:first-child { margin-top:0; }
+    .tool-entry:last-child { margin-bottom:0; }
+    .tool-entry-head { padding:8px 10px; display:flex; justify-content:space-between; gap:10px; font-size:.78rem; }
+    .tool-call { color:#ffd7ef; }
+    .tool-result { color:#b8d7ff; }
+    .tool-entry pre { margin:0; padding:9px 10px; border-top:1px solid var(--border); white-space:pre-wrap; overflow-wrap:anywhere; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color:#d9d9e8; background:#11111a; }
+    .tool-empty { color:var(--muted); padding:10px; font-size:.8rem; }
+    .note { font-size: .78rem; line-height: 1.4; color: var(--muted); padding: 0 5px; }
+    .error { color: var(--danger); white-space: pre-wrap; }
+    code { color: #ffd7ef; }
+    @media (max-width: 650px) {
+      .app { padding: 12px; }
+      header { align-items: flex-start; flex-direction: column; }
+      .status { max-width: none; text-align: left; width: 100%; }
+      .bubble { max-width: 90%; }
+      .composer { grid-template-columns: 1fr; }
+      .actions { grid-column: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div>
+        <h1>Local Browser AI ✦</h1>
+        <p class="subtitle">Local models running entirely in the browser after download.</p>
+      </div>
+      <div class="status">
+        <div id="statusText"><strong>Not loaded.</strong> Pick a model, then click Load Model.</div>
+        <div class="progress" aria-hidden="true"><div id="progressBar"></div></div>
+      </div>
+    </header>
+
+    <section aria-label="Model selection">
+      <div class="model-controls">
+        <label for="modelSelect">Model</label>
+        <select id="modelSelect">
+          <option value="onnx-community/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B Instruct · smallest</option>
+          <option value="onnx-community/Qwen2.5-1.5B-Instruct">Qwen2.5 1.5B Instruct · ~1.2 GB q4f16</option>
+          <option value="onnx-community/Qwen3-0.6B-ONNX">Qwen3 0.6B · ~570 MB q4f16</option>
+          <option value="onnx-community/Qwen3-1.7B-ONNX">Qwen3 1.7B · ~1.4 GB q4f16</option>
+          <option value="onnx-community/Qwen3-4B-Instruct-2507-ONNX">Qwen3 4B Instruct · ~2.9 GB q4f16</option>
+          <option value="__custom__">Custom Hugging Face model ID…</option>
+        </select>
+        <button id="unload" type="button" disabled>Unload</button>
+      </div>
+      <div id="customRow" class="model-controls" hidden>
+        <label for="customModel">Model ID</label>
+        <input id="customModel" type="text" placeholder="onnx-community/your-model" autocomplete="off" spellcheck="false">
+        <span></span>
+      </div>
+      <div id="modelMeta" class="model-meta"></div>
+    </section>
+
+    <section id="chat" class="chat" aria-live="polite">
+      <div class="empty" id="empty">
+        <div>
+          <strong>Local inference proof of concept</strong><br><br>
+          The first load downloads the model and caches it in the browser.
+          After that, generation happens on this device with no API key or inference server.
+        </div>
+      </div>
+    </section>
+
+    <section class="tool-panel">
+      <div class="tool-header" id="toolHeader" role="button" tabindex="0" aria-expanded="true">
+        <strong>Tool activity</strong>
+        <span id="toolCount">No tool calls yet</span>
+      </div>
+      <div class="tool-log" id="toolLog">
+        <div class="tool-empty">The model has access to simulated editor tools. Tool calls are shown here and return fake results; nothing is actually changed.</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="composer">
+        <textarea id="input" disabled placeholder="Load the model, then say something…"></textarea>
+        <button id="send" class="primary" disabled>Send</button>
+        <div class="actions">
+          <button id="load">Load Model</button>
+          <button id="clear">Clear Chat</button>
+        </div>
+      </div>
+      <p class="note">
+        Pick a model above and load it to compare local models. WebGPU uses <code>q4f16</code>; CPU/WASM uses <code>q4</code>.
+        Larger models need substantially more memory and can take a while to download and initialize.
+      </p>
+    </section>
+  </main>
+
+  <script type="module">
+    import {
+      pipeline,
+      TextStreamer,
+      env,
+    } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1";
+
+    const DEFAULT_MODEL_ID = "onnx-community/Qwen2.5-0.5B-Instruct";
+    const MODEL_INFO = new Map([
+      ["onnx-community/Qwen2.5-0.5B-Instruct", "Qwen2.5 0.5B Instruct — tiny baseline for comparison."],
+      ["onnx-community/Qwen2.5-1.5B-Instruct", "Qwen2.5 1.5B Instruct — a much larger step up from the 0.5B baseline."],
+      ["onnx-community/Qwen3-0.6B-ONNX", "Qwen3 0.6B — newer small model; useful as a second small-model comparison."],
+      ["onnx-community/Qwen3-1.7B-ONNX", "Qwen3 1.7B — roughly 3× the parameters of the 0.6B model."],
+      ["onnx-community/Qwen3-4B-Instruct-2507-ONNX", "Qwen3 4B Instruct — the largest built-in option; expect a multi-GB download and much higher memory use."],
+    ]);
+    const TOOL_PROTOCOL = `
+TOOL USE IS REQUIRED FOR PROJECT WORK.
+If the user asks you to create, edit, inspect, test, run, or debug files in the project, you MUST use the available tools instead of only describing or printing code in your answer.
+For a request such as \"make a counter in HTML, CSS, and JS\", your first actions should be tool calls such as create_file for the needed files.
+Do not claim that files were created or changed unless the tool result says so.
+
+When you need a tool, emit EXACTLY ONE tool call using this format:
+<tool_call>
+{\"name\":\"tool_name\",\"arguments\":{}}
+</tool_call>
+Do not put markdown fences around the tool call. Do not invent tool names. After a tool result is provided, continue the task and decide whether another tool is needed.
+When the requested project work is complete, answer the user normally without a tool call.
+
+Example:
+User asks: \"Create script.js with a hello button.\"
+You should respond with a tool call like:
+<tool_call>
+{\"name\":\"create_file\",\"arguments\":{\"path\":\"script.js\",\"content\":\"...\"}}
+</tool_call>
+Then wait for the tool result before deciding what to do next.
+`;
+
+    const TOOLS = [
+      { name: "list_files", description: "List files in the project.", parameters: { type: "object", properties: { path: { type: "string" } }, required: [] } },
+      { name: "read_file", description: "Read a project file as text.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+      { name: "write_file", description: "Replace the contents of an existing project file.", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } },
+      { name: "create_file", description: "Create a new project file.", parameters: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } },
+      { name: "delete_file", description: "Delete a project file.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+      { name: "replace_in_files", description: "Find and replace text in project files.", parameters: { type: "object", properties: { search: { type: "string" }, replace: { type: "string" }, path: { type: "string" } }, required: ["search", "replace"] } },
+      { name: "get_active_file", description: "Get the file currently open in the editor.", parameters: { type: "object", properties: {} } },
+      { name: "open_file", description: "Open a project file in the editor.", parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+      { name: "run_command", description: "Run a short-lived shell-like command in the project runtime.", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } },
+      { name: "run_project", description: "Start or restart the project preview server.", parameters: { type: "object", properties: {} } },
+      { name: "get_browser_state", description: "Inspect the current project preview state.", parameters: { type: "object", properties: {} } },
+      { name: "get_browser_html", description: "Inspect the rendered HTML of the current project preview.", parameters: { type: "object", properties: {} } },
+      { name: "search_project", description: "Search project text for a string or pattern.", parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] } }
+    ];
+
+    const messages = [
+      {
+        role: "system",
+        content:
+          "You are a helpful local coding assistant. You are operating in a code editor with simulated tools. " +
+          "Use the tools when they would help you inspect or modify a project. Do not pretend a tool succeeded unless a tool result says it did. " +
+          TOOL_PROTOCOL +
+          "Available tools:\n" +
+          TOOLS.map(tool => `- ${tool.name}: ${tool.description}\n  Parameters: ${JSON.stringify(tool.parameters)}`).join("\n")
+      }
+    ];
+
+    env.useBrowserCache = true;
+    env.allowRemoteModels = true;
+    env.allowLocalModels = false;
+
+    const statusText = document.getElementById("statusText");
+    const progressBar = document.getElementById("progressBar");
+    const input = document.getElementById("input");
+    const send = document.getElementById("send");
+    const load = document.getElementById("load");
+    const clear = document.getElementById("clear");
+    const modelSelect = document.getElementById("modelSelect");
+    const customRow = document.getElementById("customRow");
+    const customModel = document.getElementById("customModel");
+    const modelMeta = document.getElementById("modelMeta");
+    const unload = document.getElementById("unload");
+    const chat = document.getElementById("chat");
+    const empty = document.getElementById("empty");
+    const toolHeader = document.getElementById("toolHeader");
+    const toolLog = document.getElementById("toolLog");
+    const toolCount = document.getElementById("toolCount");
+
+    let generator = null;
+    let loading = false;
+    let generating = false;
+    let toolCalls = 0;
+    const MAX_TOOL_STEPS = 12;
+    let toolsOpen = true;
+
+    function getSelectedModel() {
+      if (modelSelect.value === "__custom__") {
+        return customModel.value.trim();
+      }
+      return modelSelect.value;
+    }
+
+    function updateModelUI() {
+      const custom = modelSelect.value === "__custom__";
+      customRow.hidden = !custom;
+      const modelId = getSelectedModel();
+      modelMeta.textContent = MODEL_INFO.get(modelId) || (modelId ? `Custom model: ${modelId}` : "Enter a Hugging Face model ID.");
+      updateControls();
+    }
+
+    async function unloadModel() {
+      if (loading || generating) return;
+      const old = generator;
+      generator = null;
+      unload.disabled = true;
+      setStatus("Unloading current model…", null);
+      try {
+        await old?.dispose?.();
+      } catch (error) {
+        console.warn("Model disposal failed; the browser may reclaim it later.", error);
+      } finally {
+        setStatus("Model unloaded. Pick a model and click Load Model.");
+        updateControls();
+      }
+    }
+
+    function setStatus(text, progress = null, error = false) {
+      statusText.innerHTML = error ? '<span class="error"></span>' : `<strong>${text}</strong>`;
+      if (error) statusText.querySelector(".error").textContent = text;
+      if (progress == null) {
+        progressBar.style.width = "0%";
+        progressBar.parentElement.hidden = true;
+      } else {
+        progressBar.parentElement.hidden = false;
+        progressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+      }
+    }
+
+    function addMessage(role, text = "") {
+      document.getElementById("empty")?.remove();
+      const row = document.createElement("div");
+      row.className = `message ${role}`;
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      bubble.textContent = text;
+      row.appendChild(bubble);
+      chat.appendChild(row);
+      chat.scrollTop = chat.scrollHeight;
+      return bubble;
+    }
+
+    function updateControls() {
+      const ready = !!generator && !loading;
+      const hasModelId = !!getSelectedModel();
+      input.disabled = !ready || generating;
+      send.disabled = !ready || generating || !input.value.trim();
+      load.disabled = loading || generating || !hasModelId;
+      unload.disabled = loading || generating || !generator;
+      modelSelect.disabled = loading || generating;
+      customModel.disabled = loading || generating;
+      input.placeholder = ready ? "Say something…" : "Load the model first…";
+      load.textContent = generator ? "Reload Model" : "Load Model";
+    }
+
+    async function loadModel() {
+      if (loading || generating) return;
+      const modelId = getSelectedModel();
+      if (!modelId) {
+        setStatus("Enter a Hugging Face model ID first.", null, true);
+        return;
+      }
+
+      if (generator) {
+        await unloadModel();
+      }
+
+      loading = true;
+      updateControls();
+
+      const hasWebGPU = !!navigator.gpu;
+      const device = hasWebGPU ? "webgpu" : "wasm";
+      const dtype = hasWebGPU ? "q4f16" : "q4";
+
+      setStatus(`${hasWebGPU ? "WebGPU" : "WASM/CPU"} · loading ${modelId}…`, 0);
+
+      try {
+        generator = await pipeline("text-generation", modelId, {
+          device,
+          dtype,
+          progress_callback(info) {
+            if (info.status === "progress_total") {
+              const pct = Number(info.progress) || 0;
+              setStatus(`${hasWebGPU ? "WebGPU" : "WASM/CPU"} · loading ${modelId} · ${pct.toFixed(1)}%`, pct);
+            } else if (info.status === "ready") {
+              setStatus(`${hasWebGPU ? "WebGPU" : "WASM/CPU"} · ${modelId} ready`, 100);
+            }
+          }
+        });
+
+        setStatus(`${hasWebGPU ? "WebGPU" : "WASM/CPU"} · ${modelId} ready`, 100);
+        input.disabled = false;
+        updateControls();
+        input.focus();
+      } catch (error) {
+        generator = null;
+        setStatus(`Model load failed for ${modelId}: ${error?.message || String(error)}`, null, true);
+      } finally {
+        loading = false;
+        updateControls();
+      }
+    }
+
+    function escapeHtml(text) {
+      return String(text)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function appendToolLog(name, args, result, ok = true) {
+      toolCalls++;
+      toolCount.textContent = `${toolCalls} tool call${toolCalls === 1 ? "" : "s"}`;
+      const entry = document.createElement("div");
+      entry.className = "tool-entry";
+      entry.innerHTML =
+        `<div class="tool-entry-head"><span class="tool-call">CALL · ${escapeHtml(name)}</span><span>${ok ? "simulated" : "error"}</span></div>` +
+        `<pre>${escapeHtml(JSON.stringify({ arguments: args }, null, 2))}</pre>` +
+        `<div class="tool-entry-head"><span class="tool-result">RESULT</span></div>` +
+        `<pre>${escapeHtml(typeof result === "string" ? result : JSON.stringify(result, null, 2))}</pre>`;
+      toolLog.querySelector(".tool-empty")?.remove();
+      toolLog.appendChild(entry);
+      toolLog.scrollTop = toolLog.scrollHeight;
+    }
+
+    function fakeToolResult(name, args) {
+      switch (name) {
+        case "list_files":
+          return { ok: true, files: ["index.html", "style.css", "script.js", "assets/logo.svg", "package.json"] };
+        case "read_file":
+          return { ok: true, path: args.path, content: args.path === "script.js" ? `const button = document.querySelector('#hello');\nbutton.addEventListener('click', () => alert('Hello!'));` : `// Simulated contents of ${args.path}` };
+        case "write_file":
+          return { ok: true, path: args.path, changed: true, diff: "Simulated write: 8 lines added, 2 lines removed." };
+        case "create_file":
+          return { ok: true, path: args.path, created: true };
+        case "delete_file":
+          return { ok: true, path: args.path, deleted: true };
+        case "replace_in_files":
+          return { ok: true, matches: 2, filesChanged: [args.path || "script.js", "index.html"] };
+        case "get_active_file":
+          return { ok: true, path: "script.js", language: "javascript" };
+        case "open_file":
+          return { ok: true, path: args.path, opened: true };
+        case "run_command":
+          return { ok: true, command: args.command, stdout: "simulated command output", stderr: "", exitCode: 0 };
+        case "run_project":
+          return { ok: true, running: true, url: "http://localhost:3000" };
+        case "get_browser_state":
+          return { ok: true, url: "http://localhost:3000", title: "Hello App", consoleErrors: [], networkFailures: [] };
+        case "get_browser_html":
+          return { ok: true, html: `<main><h1 id="title">Hello</h1><button id="hello">Say hello</button></main>` };
+        case "search_project":
+          return { ok: true, query: args.query, matches: [{ path: "script.js", line: 2, text: "button.addEventListener('click', ...)" }] };
+        default:
+          return { ok: false, error: `Unknown tool: ${name}` };
+      }
+    }
+
+    function parseToolCall(text) {
+      const tagged = text.match(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/i);
+      const candidates = [];
+      if (tagged) candidates.push(tagged[1]);
+
+      // Some models add markdown fences around otherwise-correct JSON. Accept
+      // that during this POC so we can measure tool-use ability rather than
+      // failing solely on formatting.
+      const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+      if (fenced) candidates.push(fenced[1]);
+
+      // Finally, look for a bare JSON object containing a tool name.
+      const bare = text.match(/\{\s*\"name\"\s*:\s*\"[^\"]+\"[\s\S]*\}/);
+      if (bare) candidates.push(bare[0]);
+
+      if (!candidates.length) return null;
+
+      let lastError = null;
+      for (const candidate of candidates) {
+        try {
+          const parsed = JSON.parse(candidate.trim());
+          if (!parsed || typeof parsed.name !== "string") throw new Error("Missing tool name");
+          return {
+            name: parsed.name,
+            arguments: parsed.arguments && typeof parsed.arguments === "object" ? parsed.arguments : {}
+          };
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      return { parseError: lastError?.message || "Invalid tool-call JSON", raw: candidates[0] };
+    }
+
+    async function generateOnce() {
+      let generated = "";
+      const streamer = new TextStreamer(generator.tokenizer, {
+        skip_prompt: true,
+        skip_special_tokens: true,
+        callback_function(piece) {
+          generated += piece;
+        }
+      });
+      const result = await generator(messages, {
+        max_new_tokens: 384,
+        do_sample: true,
+        temperature: 0.7,
+        top_p: 0.9,
+        streamer
+      });
+      const finalText = result?.[0]?.generated_text?.at?.(-1)?.content ?? generated.trim();
+      return String(finalText || generated || "").trim();
+    }
+
+    async function generate() {
+      if (!generator || generating) return;
+      const text = input.value.trim();
+      if (!text) return;
+
+      generating = true;
+      input.value = "";
+      updateControls();
+
+      messages.push({ role: "user", content: text });
+      addMessage("user", text);
+      const bubble = addMessage("assistant", "");
+
+      try {
+        let assistantText = "";
+
+        for (let step = 1; step <= MAX_TOOL_STEPS; step++) {
+          assistantText = await generateOnce();
+          const toolCall = parseToolCall(assistantText);
+
+          if (!toolCall) {
+            bubble.textContent = assistantText || "(The local model returned an empty response.)";
+            messages.push({ role: "assistant", content: assistantText });
+            return;
+          }
+
+          if (toolCall.parseError) {
+            const result = { ok: false, error: `Malformed tool call JSON: ${toolCall.parseError}`, raw: toolCall.raw };
+            appendToolLog("<malformed>", {}, result, false);
+            messages.push({ role: "assistant", content: assistantText });
+            messages.push({ role: "user", content: `[TOOL RESULT] ${JSON.stringify(result)}` });
+            bubble.textContent = "Tool call was malformed; the model was given the error and can retry.";
+            continue;
+          }
+
+          const tool = TOOLS.find(item => item.name === toolCall.name);
+          if (!tool) {
+            const result = { ok: false, error: `Unknown tool: ${toolCall.name}` };
+            appendToolLog(toolCall.name, toolCall.arguments, result, false);
+            messages.push({ role: "assistant", content: assistantText });
+            messages.push({ role: "user", content: `[TOOL RESULT] ${JSON.stringify(result)}` });
+            continue;
+          }
+
+          const result = fakeToolResult(toolCall.name, toolCall.arguments);
+          appendToolLog(toolCall.name, toolCall.arguments, result, result?.ok !== false);
+          messages.push({ role: "assistant", content: assistantText });
+          messages.push({
+            role: "user",
+            content: `[TOOL RESULT for ${toolCall.name}]\n${JSON.stringify(result, null, 2)}\nUse this result to continue the task. Do not claim the simulated tool changed anything beyond what the result says.`
+          });
+          bubble.textContent = `Used ${toolCall.name} (step ${step}/${MAX_TOOL_STEPS})…`;
+        }
+
+        bubble.textContent = "The local model reached the tool-step limit without producing a final answer.";
+        messages.push({ role: "assistant", content: bubble.textContent });
+      } catch (error) {
+        bubble.textContent = `Generation failed: ${error?.message || String(error)}`;
+        if (messages.at(-1)?.role === "user" && messages.at(-1)?.content === text) messages.pop();
+      } finally {
+        generating = false;
+        updateControls();
+        input.focus();
+      }
+    }
+
+
+    function setToolPanelOpen(open) {
+      toolsOpen = open;
+      toolLog.hidden = !open;
+      toolHeader.setAttribute("aria-expanded", String(open));
+    }
+
+    toolHeader.addEventListener("click", () => setToolPanelOpen(!toolsOpen));
+    toolHeader.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        setToolPanelOpen(!toolsOpen);
+      }
+    });
+    modelSelect.addEventListener("change", () => {
+      updateModelUI();
+      if (generator && !loading && !generating) {
+        unloadModel();
+      }
+    });
+    customModel.addEventListener("input", updateModelUI);
+    unload.addEventListener("click", unloadModel);
+
+    input.addEventListener("input", updateControls);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        generate();
+      }
+    });
+    send.addEventListener("click", generate);
+    load.addEventListener("click", loadModel);
+
+    clear.addEventListener("click", () => {
+      messages.splice(1);
+      chat.innerHTML = "";
+      const placeholder = document.createElement("div");
+      placeholder.className = "empty";
+      placeholder.id = "empty";
+      placeholder.innerHTML = "<div><strong>Chat cleared.</strong><br><br>Ask the local model something.</div>";
+      chat.appendChild(placeholder);
+      toolCalls = 0;
+      toolCount.textContent = "No tool calls yet";
+      toolLog.innerHTML = '<div class="tool-empty">The model has access to simulated editor tools. Tool calls are shown here and return fake results; nothing is actually changed.</div>';
+      updateControls();
+    });
+
+    modelSelect.value = DEFAULT_MODEL_ID;
+    updateModelUI();
+    if (!navigator.gpu) {
+      setStatus("WebGPU unavailable · CPU fallback will be used.");
+    } else {
+      setStatus("WebGPU available · choose a model and click Load Model.");
+    }
+    updateControls();
+  </script>
+</body>
+</html>
