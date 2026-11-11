@@ -44,48 +44,58 @@ async function loadManifest() {
   return response.json();
 }
 
-function finiteTensor(tensor, label) {
-  if (!tensor?.data || !tensor?.dims) throw new Error(label + " did not return a readable tensor.");
-  for (let i = 0; i < tensor.data.length; i++) {
-    if (!Number.isFinite(Number(tensor.data[i]))) {
-      throw new Error(label + " contains a non-finite value at element " + i + ".");
-    }
-  }
-}
-
-function copyFp16(tensor, name, expectedShape) {
+function fp16Values(tensor, label) {
   if (!tensor?.data || tensor.type !== "float16") {
-    throw new Error("A." + name + " is missing or is not a readable FP16 tensor.");
+    throw new Error(label + " is missing or is not a readable FP16 tensor.");
   }
-  if (tensor.dims.length !== expectedShape.length ||
-      tensor.dims.some((dimension, index) => dimension !== expectedShape[index])) {
-    throw new Error("A." + name + " has shape [" + tensor.dims.join(", ") +
-      "], expected [" + expectedShape.join(", ") + "].");
-  }
-  finiteTensor(tensor, "A." + name);
   if (!(tensor.data instanceof Float16Array) && !(tensor.data instanceof Uint16Array)) {
-    throw new Error("A." + name + " data is " + tensor.data.constructor.name +
+    throw new Error(label + " data is " + tensor.data.constructor.name +
       "; expected a 16-bit float backing array.");
   }
-  // ONNX Runtime Web may expose float16 CPU data as either Float16Array
-  // (when supported) or Uint16Array containing raw IEEE-754 half bits.
-  // Copy the bytes, not numeric values, so both representations survive intact.
+
+  // ONNX Runtime Web exposes float16 CPU data as Float16Array when available,
+  // or Uint16Array containing raw IEEE-754 half bits otherwise. Copy the bytes
+  // rather than converting numeric values, which would corrupt raw half bits.
   const bytes = tensor.data.buffer.slice(
     tensor.data.byteOffset,
     tensor.data.byteOffset + tensor.data.byteLength
   );
-  return new Float16Array(bytes);
+  const values = new Float16Array(bytes);
+
+  for (let i = 0; i < values.length; i++) {
+    if (!Number.isFinite(values[i])) {
+      throw new Error(label + " contains a non-finite FP16 value at element " + i + ".");
+    }
+  }
+  return values;
+}
+
+function copyFp16(tensor, name, expectedShape) {
+  if (!tensor?.dims || tensor.dims.length !== expectedShape.length ||
+      tensor.dims.some((dimension, index) => dimension !== expectedShape[index])) {
+    const actual = tensor?.dims ? tensor.dims.join(", ") : "missing";
+    throw new Error("A." + name + " has shape [" + actual +
+      "], expected [" + expectedShape.join(", ") + "].");
+  }
+  const values = fp16Values(tensor, "A." + name);
+  const expectedSize = expectedShape.reduce((total, dimension) => total * dimension, 1);
+  if (values.length !== expectedSize) {
+    throw new Error("A." + name + " has " + values.length + " values; expected " + expectedSize + ".");
+  }
+  return values;
 }
 
 function validateOutput(output, name, shape) {
-  finiteTensor(output, "B." + name);
-  if (output.type !== "float16") {
-    throw new Error("B." + name + " has dtype " + output.type + "; expected float16.");
-  }
-  if (output.dims.length !== shape.length ||
+  if (!output?.dims || output.dims.length !== shape.length ||
       output.dims.some((dimension, index) => dimension !== shape[index])) {
-    throw new Error("B." + name + " has shape [" + output.dims.join(", ") +
+    const actual = output?.dims ? output.dims.join(", ") : "missing";
+    throw new Error("B." + name + " has shape [" + actual +
       "], expected [" + shape.join(", ") + "].");
+  }
+  fp16Values(output, "B." + name);
+  const expectedSize = shape.reduce((total, dimension) => total * dimension, 1);
+  if (output.data.length !== expectedSize) {
+    throw new Error("B." + name + " has " + output.data.length + " values; expected " + expectedSize + ".");
   }
 }
 
