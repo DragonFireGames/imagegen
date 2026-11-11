@@ -20,6 +20,7 @@ const button = document.querySelector("#testPromptConditioning");
 const status = document.querySelector("#promptConditioningStatus");
 const results = document.querySelector("#promptConditioningSummary");
 const promptInput = document.querySelector("#conditioningPrompt");
+const negativePromptInput = document.querySelector("#conditioningNegativePrompt");
 
 function setStatus(message, type = "info") {
   status.textContent = message;
@@ -106,7 +107,8 @@ button.addEventListener("click", async () => {
     acquireHeavyModelTest("dual-CLIP prompt conditioning");
     lockAcquired = true;
     const prompt = promptInput.value.trim();
-    if (!prompt) throw new Error("Enter a prompt before testing text conditioning.");
+    const negativePrompt = negativePromptInput.value.trim();
+    if (!prompt) throw new Error("Enter a positive prompt before testing text conditioning.");
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser.");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) throw new Error("The browser did not return a WebGPU adapter.");
@@ -117,7 +119,8 @@ button.addEventListener("click", async () => {
     const manifest = await response.json();
 
     addRow("Model pack", manifest.packageId || MODEL_ID);
-    addRow("Prompt", prompt);
+    addRow("Positive prompt", prompt);
+    addRow("Negative prompt", negativePrompt || "(empty)");
     addRow("CLIP-L component", ((manifest.components?.text_encoder?.bytes || 0) / 1024 / 1024).toFixed(1) + " MiB");
     addRow("CLIP-bigG component", ((manifest.components?.text_encoder_2?.bytes || 0) / 1024 / 1024).toFixed(1) + " MiB");
     addRow("Execution provider", "WebGPU · one text encoder session at a time");
@@ -125,19 +128,18 @@ button.addEventListener("click", async () => {
     setStatus("Loading tokenizer 1 from tokenizer/…");
     const started = performance.now();
     tokenizerL = await loadTokenizer("tokenizer");
-    const encodedL = await tokenizerL(prompt, {
+    const encodeOptions = {
       padding: "max_length",
       truncation: true,
       max_length: 77
-    });
+    };
+    const encodedL = await tokenizerL(prompt, encodeOptions);
+    const negativeEncodedL = await tokenizerL(negativePrompt, encodeOptions);
 
     setStatus("Loading tokenizer 2 from tokenizer_2/…");
     tokenizerG = await loadTokenizer("tokenizer_2");
-    const encodedG = await tokenizerG(prompt, {
-      padding: "max_length",
-      truncation: true,
-      max_length: 77
-    });
+    const encodedG = await tokenizerG(prompt, encodeOptions);
+    const negativeEncodedG = await tokenizerG(negativePrompt, encodeOptions);
 
     function makeInt64Ids(encoded, label) {
       const tensor = encoded?.input_ids;
@@ -156,16 +158,18 @@ button.addEventListener("click", async () => {
       return ids;
     }
 
-    const idsL = makeInt64Ids(encodedL, "CLIP-L");
-    const idsG = makeInt64Ids(encodedG, "CLIP-bigG");
-    const attentionL = encodedL.attention_mask?.data;
-    const attentionG = encodedG.attention_mask?.data;
-    const countL = attentionL ? Array.from(attentionL).reduce((sum, value) => sum + (Number(value) > 0 ? 1 : 0), 0) : "unavailable";
-    const countG = attentionG ? Array.from(attentionG).reduce((sum, value) => sum + (Number(value) > 0 ? 1 : 0), 0) : "unavailable";
-    addRow("CLIP-L tokenizer", "int64 [1, 77] · " + countL + " attended positions");
-    addRow("CLIP-bigG tokenizer", "int64 [1, 77] · " + countG + " attended positions");
-    addRow("CLIP-L token IDs", Array.from(idsL).slice(0, 16).map(String).join(", "));
-    addRow("CLIP-bigG token IDs", Array.from(idsG).slice(0, 16).map(String).join(", "));
+    const idsL = makeInt64Ids(encodedL, "CLIP-L positive");
+    const negativeIdsL = makeInt64Ids(negativeEncodedL, "CLIP-L negative");
+    const idsG = makeInt64Ids(encodedG, "CLIP-bigG positive");
+    const negativeIdsG = makeInt64Ids(negativeEncodedG, "CLIP-bigG negative");
+    const countTokens = encoded => {
+      const mask = encoded.attention_mask?.data;
+      return mask ? Array.from(mask).reduce((sum, value) => sum + (Number(value) > 0 ? 1 : 0), 0) : "unavailable";
+    };
+    addRow("CLIP-L tokenizer", "positive/negative int64 [1, 77] · " +
+      countTokens(encodedL) + " / " + countTokens(negativeEncodedL) + " attended positions");
+    addRow("CLIP-bigG tokenizer", "positive/negative int64 [1, 77] · " +
+      countTokens(encodedG) + " / " + countTokens(negativeEncodedG) + " attended positions");
 
     // Stage 1: CLIP-L. Keep its small FP16 hidden-state output on CPU.
     setStatus("Loading CLIP-L and encoding the actual prompt…");
@@ -178,9 +182,15 @@ button.addEventListener("click", async () => {
       input_ids: new ort.Tensor("int64", idsL, [1, 77])
     });
     const hiddenL = finiteFp16(outputL.penultimate_hidden_state,
-      "CLIP-L penultimate_hidden_state", [1, 77, 768]);
-    addRow("CLIP-L inference", ((performance.now() - loadL) / 1000).toFixed(1) + " s · FP16 [1, 77, 768]");
+      "CLIP-L positive penultimate_hidden_state", [1, 77, 768]);
     outputL = null;
+    let negativeOutputL = await sessionL.run({
+      input_ids: new ort.Tensor("int64", negativeIdsL, [1, 77])
+    });
+    const negativeHiddenL = finiteFp16(negativeOutputL.penultimate_hidden_state,
+      "CLIP-L negative penultimate_hidden_state", [1, 77, 768]);
+    negativeOutputL = null;
+    addRow("CLIP-L inference", ((performance.now() - loadL) / 1000).toFixed(1) + " s · positive + negative FP16 [1, 77, 768]");
     await sessionL.release();
     sessionL = null;
     await waitFrame();
@@ -196,29 +206,51 @@ button.addEventListener("click", async () => {
       input_ids: new ort.Tensor("int64", idsG, [1, 77])
     });
     const hiddenG = finiteFp16(outputG.penultimate_hidden_state,
-      "CLIP-bigG penultimate_hidden_state", [1, 77, 1280]);
-    const pooledG = finiteFp16(outputG.text_embeds, "CLIP-bigG text_embeds", [1, 1280]);
-    addRow("CLIP-bigG inference", ((performance.now() - loadG) / 1000).toFixed(1) + " s · FP16 [1, 77, 1280] + [1, 1280]");
+      "CLIP-bigG positive penultimate_hidden_state", [1, 77, 1280]);
+    const pooledG = finiteFp16(outputG.text_embeds, "CLIP-bigG positive text_embeds", [1, 1280]);
     outputG = null;
+    let negativeOutputG = await sessionG.run({
+      input_ids: new ort.Tensor("int64", negativeIdsG, [1, 77])
+    });
+    const negativeHiddenG = finiteFp16(negativeOutputG.penultimate_hidden_state,
+      "CLIP-bigG negative penultimate_hidden_state", [1, 77, 1280]);
+    const negativePooledG = finiteFp16(negativeOutputG.text_embeds,
+      "CLIP-bigG negative text_embeds", [1, 1280]);
+    negativeOutputG = null;
+    addRow("CLIP-bigG inference", ((performance.now() - loadG) / 1000).toFixed(1) + " s · positive + negative FP16 outputs");
     await sessionG.release();
     sessionG = null;
     await waitFrame();
 
     // SDXL combines CLIP-L and CLIP-bigG penultimate hidden states per token.
-    const combined = new Float16Array(77 * 2048);
-    for (let token = 0; token < 77; token++) {
-      combined.set(hiddenL.subarray(token * 768, token * 768 + 768), token * 2048);
-      combined.set(hiddenG.subarray(token * 1280, token * 1280 + 1280), token * 2048 + 768);
+    function combineHidden(hiddenOne, hiddenTwo, label) {
+      const combined = new Float16Array(77 * 2048);
+      for (let token = 0; token < 77; token++) {
+        combined.set(hiddenOne.subarray(token * 768, token * 768 + 768), token * 2048);
+        combined.set(hiddenTwo.subarray(token * 1280, token * 1280 + 1280), token * 2048 + 768);
+      }
+      for (let i = 0; i < combined.length; i++) {
+        if (!Number.isFinite(combined[i])) throw new Error(label + " contains a non-finite value.");
+      }
+      return combined;
     }
+    const positiveConditioning = combineHidden(hiddenL, hiddenG, "Positive SDXL conditioning");
+    const negativeConditioning = combineHidden(negativeHiddenL, negativeHiddenG, "Negative SDXL conditioning");
 
-    for (let i = 0; i < combined.length; i++) {
-      if (!Number.isFinite(combined[i])) throw new Error("Combined SDXL conditioning contains a non-finite value.");
+    function checkFinite(values, label) {
+      for (let i = 0; i < values.length; i++) {
+        if (!Number.isFinite(values[i])) throw new Error(label + " contains a non-finite value at " + i + ".");
+      }
     }
-    addRow("Combined SDXL conditioning", "FP16 [1, 77, 2048] · all " + combined.length.toLocaleString() + " values finite");
-    addRow("Pooled text embedding", "FP16 [1, 1280] · all " + pooledG.length.toLocaleString() + " values finite");
+    checkFinite(pooledG, "Positive pooled text embedding");
+    checkFinite(negativePooledG, "Negative pooled text embedding");
+
+    addRow("Positive SDXL conditioning", "FP16 [1, 77, 2048] · all " + positiveConditioning.length.toLocaleString() + " values finite");
+    addRow("Negative SDXL conditioning", "FP16 [1, 77, 2048] · all " + negativeConditioning.length.toLocaleString() + " values finite");
+    addRow("Positive / negative pooled", "FP16 [1, 1280] / [1, 1280] · all finite");
     addRow("Total tokenization + load + inference", ((performance.now() - started) / 1000).toFixed(1) + " s");
 
-    setStatus("Real prompt tokenization and both CLIP encoders passed. The test assembled the SDXL conditioning tensors [1, 77, 2048] and [1, 1280]. No UNet or VAE was loaded and no image was generated.", "success");
+    setStatus("Positive and negative prompts passed both tokenizers and CLIP encoders. The test assembled both SDXL conditioning pairs: encoder_hidden_states [1, 77, 2048] and text_embeds [1, 1280]. No UNet or VAE was loaded and no image was generated.", "success");
   } catch (error) {
     console.error("[Illustrious] Prompt conditioning smoke test failed:", error);
     setStatus("Prompt conditioning test failed: " + (error?.message || String(error)), "error");
