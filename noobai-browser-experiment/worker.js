@@ -122,6 +122,11 @@ function halfToFloat(value) {
 }
 
 function tensorF16(values, dims) {
+  // ONNX Runtime's newer browser build accepts numeric Float16Array values.
+  // Older runtimes use Uint16Array as the raw IEEE-754 binary16 bit container.
+  if (typeof Float16Array !== "undefined") {
+    return new ort.Tensor("float16", Float16Array.from(values), dims);
+  }
   return new ort.Tensor("float16", Uint16Array.from(values, floatToHalf), dims);
 }
 
@@ -303,6 +308,7 @@ async function predictNoise(session, latents, sigma, timestep, condition, height
 async function generate(message) {
   if (!activePack) throw new Error("Load a NoobAI browser model pack first.");
   const { prompt, negativePrompt, width, height, steps, cfgScale, requestedSeed } = message;
+  const sampler = message.sampler === "euler" ? "euler" : "euler_a";
   if (!prompt.trim()) throw new Error("Enter a positive prompt.");
   if (![width, height].every((n) => Number.isInteger(n) && n >= 512 && n <= 1216 && n % 64 === 0)) {
     throw new Error("Width and height must be 512–1216 and divisible by 64.");
@@ -332,7 +338,8 @@ async function generate(message) {
       const nextSigma = sigmas[step + 1];
       const conditional = await predictNoise(unet, latents, sigma, timesteps[step], positive, height, width);
       let prediction = conditional;
-      if (cfgScale > 1) {
+      const useCFG = cfgScale > 1 && Boolean(negativePrompt.trim());
+      if (useCFG) {
         const unconditional = await predictNoise(unet, latents, sigma, timesteps[step], negative, height, width);
         prediction = new Float32Array(latentSize);
         for (let i = 0; i < latentSize; i++) {
@@ -340,11 +347,25 @@ async function generate(message) {
         }
       }
 
-      // Match the checkpoint's EulerDiscreteScheduler (epsilon prediction):
-      // d(sample)/d(sigma) = predicted noise, with no ancestral noise injection.
-      const dt = nextSigma - sigma;
-      for (let i = 0; i < latentSize; i++) {
-        latents[i] += prediction[i] * dt;
+      if (sampler === "euler_a") {
+        // Euler ancestral update uses the source scheduler's exact sigmas and
+        // injects a fresh, seeded noise sample for the ancestral component.
+        const sigmaSquared = sigma * sigma;
+        const nextSquared = nextSigma * nextSigma;
+        const sigmaUp = nextSigma === 0 || sigma === 0
+          ? 0
+          : Math.min(nextSigma, Math.sqrt(Math.max(0, nextSquared * (sigmaSquared - nextSquared) / sigmaSquared)));
+        const sigmaDown = Math.sqrt(Math.max(0, nextSquared - sigmaUp * sigmaUp));
+        const dt = sigmaDown - sigma;
+        const noise = sigmaUp > 0 ? makeNoise(latentSize, rng) : null;
+        for (let i = 0; i < latentSize; i++) {
+          latents[i] += prediction[i] * dt;
+          if (noise) latents[i] += noise[i] * sigmaUp;
+        }
+      } else {
+        // Deterministic EulerDiscrete update: d(sample)/d(sigma) = epsilon.
+        const dt = nextSigma - sigma;
+        for (let i = 0; i < latentSize; i++) latents[i] += prediction[i] * dt;
       }
       post("step", { step: step + 1, total: steps, seed });
     }
@@ -381,6 +402,7 @@ async function generate(message) {
     dims: [1, 3, height, width],
     seed,
     elapsed: (performance.now() - started) / 1000,
+    sampler,
   }, [outputBuffer]);
 }
 

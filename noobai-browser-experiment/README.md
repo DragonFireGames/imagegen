@@ -18,9 +18,9 @@ No Node server, Python inference server, native executable, or local installatio
 
 The target is **NoobAI XL 1.1** from [Laxhar/noobai-XL-1.1](https://huggingface.co/Laxhar/noobai-XL-1.1). Its model index identifies a `StableDiffusionXLPipeline` with two CLIP text encoders/tokenizers, a U-Net, a VAE and an Euler scheduler. The model card describes training on Danbooru and e621 data.
 
-The browser app does not prepend a `safe` tag, append `nsfw` to the negative prompt, reject prompts, classify prompt text, or add an output safety checker. Positive and negative prompts are sent as separate SDXL conditioning inputs. The negative prompt can be cleared. The model's own learned behavior is not something the app can remove.
+The model card recommends the quality prefix `masterpiece, best quality, newest, absurdres, highres`, 25–30 steps, CFG 5–6, and Euler a. The app uses those settings as defaults. It deliberately omits the model card's `safe` prefix and omits `nsfw` from the default negative prompt. It also avoids generic negative tags that suppress furry/anthro subjects. Positive and negative prompts are sent as separate SDXL conditioning inputs; clearing the negative prompt disables classifier-free guidance. The app does not apply a prompt filter or output classifier, though the model's own learned behavior cannot be removed by the UI.
 
-The model card's license still applies independently of the application's behavior. It adds non-commercial and "unethical or offensive content" restrictions. This app does not implement those as prompt filters, but redistribution and use should be checked against the model terms.
+The model card's license still applies independently of the application's behavior. It prohibits commercialization, bans uses it calls "unethical or offensive," and requires derivative models and related products to be open-sourced with work details shared. The app does not implement those terms as prompt filters. The export pack preserves the source model card and a terms notice; review both before redistribution or use.
 
 ## Current implementation status
 
@@ -38,29 +38,27 @@ The graph external weights are split into files no larger than 1.5 GB. The brows
 
 ## Convert and publish the browser pack
 
-This is an author/developer task, not something ordinary users need to run. Use a CUDA environment with at least 16 GB VRAM and about 24 GB or more host RAM. The exporter streams external ONNX weights when repacking them, but the Diffusers model load and ONNX tracing still have substantial host-memory overhead. A free Colab T4 runtime may not provide enough host RAM; use a high-memory GPU runtime if it OOMs. The exporter deliberately rejects CPU-only conversion.
+This is a one-time conversion step, not an inference server. **The end-user generator runs in the browser; it does not need Python, CUDA, Node.js or a local server.**
 
-From a fresh Colab runtime:
+The easiest route is the [one-click Google Colab exporter](https://colab.research.google.com/github/DragonFireGames/imagegen/blob/main/noobai-browser-experiment/tools/Export_NoobAI_XL_1.1_to_browser_ONNX.ipynb). Select a CUDA GPU runtime (T4 16 GB VRAM or better), enter a public Hugging Face destination repository, and provide a Hugging Face write token when the notebook asks for it. The notebook installs the dependencies, checks that CUDA is available, converts the model components one at a time, and uploads the browser pack.
 
-```python
-!git clone https://github.com/DragonFireGames/imagegen.git
-%cd imagegen
-!pip install -r noobai-browser-experiment/tools/requirements-export.txt
-```
+The updated exporter no longer loads the entire Diffusers pipeline into host memory. It loads CLIP-L, CLIP-bigG, the U-Net and VAE sequentially, releasing each before the next. It traces the U-Net at 768² with dynamic spatial axes to keep tracing activations lower, upcasts fragile normalization/softmax calculations, validates the ONNX graphs, and streams external weight data into files no larger than 1.5 GB. A high-RAM Colab runtime is still preferable if conversion exhausts host memory.
 
-Create a public Hugging Face model repository to host the converted browser pack. Store a write token in the Colab secret/environment as `HF_TOKEN`, then run:
+For a manual conversion, use a CUDA environment and run:
 
-```python
-!python noobai-browser-experiment/tools/export_noobai_onnx.py \
+```bash
+git clone https://github.com/DragonFireGames/imagegen.git
+cd imagegen
+python -m pip install -r noobai-browser-experiment/tools/requirements-export.txt
+export HF_TOKEN="YOUR_HUGGING_FACE_WRITE_TOKEN"
+python noobai-browser-experiment/tools/export_noobai_onnx.py \
   --device cuda \
   --output noobai-xl-1.1-browser-pack \
   --upload-repo YOUR_ACCOUNT/noobai-xl-1.1-browser-onnx \
   --path-in-repo browser-pack
 ```
 
-The exporter downloads the source NoobAI Diffusers components, exports the graphs, applies fp32 accumulation around normalization/softmax nodes, re-packs ONNX external weights into sub-1.5-GB shards, writes `manifest.json`, and uploads the output folder. Set `HF_TOKEN` in the runtime before using `--upload-repo`.
-
-The resulting model-pack URL for the browser page is:
+After the upload, the notebook prints a model-pack URL in this format:
 
 ```
 https://huggingface.co/YOUR_ACCOUNT/noobai-xl-1.1-browser-onnx/resolve/main/browser-pack
@@ -79,7 +77,7 @@ Do not upload the multi-gigabyte model files to this GitHub Pages repository. Gi
 - The app requests persistent browser storage, but the browser can deny the request or later evict best-effort storage.
 - The page/runtime are cached by the service worker. Tokenizer files are small and are cached separately by Transformers.js.
 
-The initial pack is still a large SDXL model. The NoobAI U-Net source weights alone are about 5.14 GB; the FP16 browser export remains approximately that size for the U-Net component. Lowering the resolution to 768×768 reduces activation memory, but does not reduce the U-Net weight allocation. A machine with only about 9 GB total available memory may still fail to allocate the U-Net and browser/runtime overhead. The current exporter is an FP16 proof-of-conversion path, not yet a low-memory model pack. An int4/quantized U-Net is the next optimization to investigate; it must be verified on WebGPU before advertising it as a supported low-memory profile. The available unified/system memory and WebGPU adapter limits ultimately determine whether the current FP16 pack runs.
+The initial pack is a large SDXL model. The U-Net weights alone are about 5.14 GB in FP16. The browser loads each text encoder one at a time, releases both, then loads the U-Net; it releases the U-Net before loading the VAE. This reduces overlapping model-weight allocations. Your 16 GB Mac gives us a more realistic chance than the prior 9 GB setup, but it is not a guarantee: Chrome, GPU allocations, and working activations also consume memory. Start at 768×768. Resolution reduces activations, not the U-Net weights. A quantized U-Net remains a future optimization, not part of this first FP16 pack.
 
 ## Validation checklist
 
@@ -93,6 +91,6 @@ Before calling this finished, the pack must pass all of these on the target brow
 6. Run a complete 768×768 generation with a fixed seed.
 7. Confirm changing the negative prompt changes conditioning, clearing it disables negative conditioning, and changing the seed changes the output.
 8. Reload the page, disconnect the network, and generate again from the cached model and app shell.
-9. Verify memory use on the target 9 GB-class machine; a successful 768×768 run is not implied by a successful desktop 1024×1024 run.
+9. Verify memory use on the target 16 GB Mac; a successful 768×768 run is not implied by a successful desktop 1024×1024 run.
 
 Until those tests pass, this remains an experimental implementation rather than a verified working generator.

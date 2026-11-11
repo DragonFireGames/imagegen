@@ -1,0 +1,54 @@
+name: Verify NoobAI browser experiment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "noobai-browser-experiment/**"
+      - ".github/workflows/noobai-browser-checks.yml"
+  pull_request:
+    paths:
+      - "noobai-browser-experiment/**"
+      - ".github/workflows/noobai-browser-checks.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check browser JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in \
+            noobai-browser-experiment/app.js \
+            noobai-browser-experiment/worker.js \
+            noobai-browser-experiment/model-store.js \
+            noobai-browser-experiment/pwa.js \
+            noobai-browser-experiment/sw.js
+          do
+            echo "Checking $file"
+            node --input-type=module --check < "$file"
+          done
+
+      - name: Check exporter Python syntax
+        run: python -m py_compile noobai-browser-experiment/tools/export_noobai_onnx.py
+
+      - name: Check the Colab notebook JSON
+        run: python -c "import json; json.load(open('noobai-browser-experiment/tools/Export_NoobAI_XL_1.1_to_browser_ONNX.ipynb', encoding='utf-8'))"

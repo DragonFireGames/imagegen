@@ -110,7 +110,7 @@ function ensureWorker() {
         currentSeed = data.seed;
         $("seed").value = data.seed;
         $("seed-info").textContent = "Seed " + data.seed;
-        $("result-info").textContent = Number(data.elapsed).toFixed(1) + "s · " + $("width").value + " × " + $("height").value;
+        $("result-info").textContent = Number(data.elapsed).toFixed(1) + "s · " + $("width").value + " × " + $("height").value + " · " + (data.sampler === "euler_a" ? "Euler a" : "Euler");
         setProgress("Generation complete", 100, "Seed " + data.seed);
         logLine("Image generated locally in " + Number(data.elapsed).toFixed(1) + " seconds.");
       } catch (error) {
@@ -268,6 +268,7 @@ form.addEventListener("submit", (event) => {
     steps,
     cfgScale,
     requestedSeed,
+    sampler: $("sampler").value,
   });
 });
 

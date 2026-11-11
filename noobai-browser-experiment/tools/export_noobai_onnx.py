@@ -13,13 +13,15 @@ import json
 import os
 import uuid
 from pathlib import Path
+import shutil
 
 import onnx
 import torch
 from onnx import TensorProto, helper
-from diffusers import DiffusionPipeline
+from diffusers import AutoencoderKL, EulerDiscreteScheduler, UNet2DConditionModel
 from diffusers.models.attention_processor import AttnProcessor
-from huggingface_hub import model_info
+from huggingface_hub import hf_hub_download, model_info
+from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
 DEFAULT_MODEL = "Laxhar/noobai-XL-1.1"
 SHARD_BYTES = 1_500_000_000
@@ -256,9 +258,9 @@ def reshard_external_weights(graph_path: Path, max_shard_bytes=SHARD_BYTES):
 def export_model(args):
     if not torch.cuda.is_available():
         raise RuntimeError(
-            "A CUDA runtime is required for this conversion. Use a CUDA machine "
-            "with about 16 GB VRAM and 24+ GB host RAM. This is conversion-only; "
-            "ordinary users do not need Python or CUDA to run the published browser pack."
+            "A CUDA runtime is required for conversion. Select a CUDA GPU runtime "
+            "(16 GB VRAM recommended). End users do not need Python or CUDA to use "
+            "the published browser pack."
         )
 
     torch.set_grad_enabled(False)
@@ -267,40 +269,77 @@ def export_model(args):
     torch.backends.cuda.enable_mem_efficient_sdp(False)
     torch.backends.cuda.enable_math_sdp(True)
 
-    # Resolve the mutable branch/tag to a commit so the ONNX weights and
-    # browser-downloaded tokenizer files always refer to the same source state.
+    # Pin every artifact to the same source revision. Components are loaded one
+    # at a time instead of loading the complete pipeline into host RAM.
     info = model_info(args.model, revision=args.revision)
     source_revision = info.sha
-    print(f"[load] {args.model}@{source_revision} as float16")
-    pipe = DiffusionPipeline.from_pretrained(
+    print(f"[source] {args.model}@{source_revision}")
+
+    output = Path(args.output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+
+    # Carry the upstream model card into the converted pack. It contains the
+    # model-specific license terms, required attribution, and training notes.
+    source_card = hf_hub_download(
+        repo_id=args.model,
+        filename="README.md",
+        revision=source_revision,
+    )
+    shutil.copy2(source_card, output / "SOURCE_MODEL_README.md")
+    (output / "MODEL_TERMS.md").write_text(
+        "# Source model and terms\n\n"
+        f"- Source checkpoint: https://huggingface.co/{args.model}/tree/{source_revision}\n"
+        "- Model card: SOURCE_MODEL_README.md (copied from the exact source revision)\n"
+        "- License identifier: fair-ai-public-license-1.0-sd\n"
+        "- The source model card adds restrictions, including non-commercial use, "
+        "and requires derivatives and related products to be open-sourced and work "
+        "details to be shared. Read the complete copied model card and upstream "
+        "license before publishing or using this converted model pack.\n"
+        "- Base license: https://freedevproject.org/faipl-1.0-sd/\n",
+        encoding="utf-8",
+    )
+
+    ids = torch.zeros((1, 77), dtype=torch.int64, device="cuda")
+
+    scheduler_model = EulerDiscreteScheduler.from_pretrained(
         args.model,
+        subfolder="scheduler",
+        revision=source_revision,
+    )
+    scheduler = dict(scheduler_model.config)
+    del scheduler_model
+
+    print("[load] CLIP-L")
+    text_encoder = CLIPTextModel.from_pretrained(
+        args.model,
+        subfolder="text_encoder",
         revision=source_revision,
         torch_dtype=torch.float16,
         use_safetensors=True,
         low_cpu_mem_usage=True,
     )
-    # Trace the explicit attention path; PyTorch's fused SDPA op is not
-    # reliably exportable through the legacy ONNX tracing interface.
-    pipe.unet.set_attn_processor(AttnProcessor())
-
-    output = Path(args.output).resolve()
-    output.mkdir(parents=True, exist_ok=True)
-    ids = torch.zeros((1, 77), dtype=torch.int64, device="cuda")
-
-    print("[export] CLIP-L")
-    te1 = TextEncoderOne(pipe.text_encoder).to("cuda").eval()
+    te1 = TextEncoderOne(text_encoder).to("cuda").eval()
+    del text_encoder
     export_one(
         te1, (ids,), output / "text_encoder",
         ["input_ids"], ["hidden_states"],
         {"input_ids": {0: "batch"}, "hidden_states": {0: "batch"}},
     )
     del te1
-    pipe.text_encoder.to("cpu")
     torch.cuda.empty_cache()
     gc.collect()
 
-    print("[export] CLIP-bigG")
-    te2 = TextEncoderTwo(pipe.text_encoder_2).to("cuda").eval()
+    print("[load] CLIP-bigG")
+    text_encoder_2 = CLIPTextModelWithProjection.from_pretrained(
+        args.model,
+        subfolder="text_encoder_2",
+        revision=source_revision,
+        torch_dtype=torch.float16,
+        use_safetensors=True,
+        low_cpu_mem_usage=True,
+    )
+    te2 = TextEncoderTwo(text_encoder_2).to("cuda").eval()
+    del text_encoder_2
     export_one(
         te2, (ids,), output / "text_encoder_2",
         ["input_ids"], ["hidden_states", "text_embeds"],
@@ -311,17 +350,32 @@ def export_model(args):
         },
     )
     del te2
-    pipe.text_encoder_2.to("cpu")
     torch.cuda.empty_cache()
     gc.collect()
 
-    print("[export] SDXL U-Net (1024px reference shape; dynamic spatial axes)")
-    unet = UNetWrapper(pipe.unet).to("cuda").eval()
-    latent = torch.randn((1, 4, 128, 128), dtype=torch.float16, device="cuda")
+    print("[load] SDXL U-Net")
+    unet_model = UNet2DConditionModel.from_pretrained(
+        args.model,
+        subfolder="unet",
+        revision=source_revision,
+        torch_dtype=torch.float16,
+        use_safetensors=True,
+        low_cpu_mem_usage=True,
+    )
+    # Explicit attention avoids tracing PyTorch's fused SDPA operator.
+    unet_model.set_attn_processor(AttnProcessor())
+    unet = UNetWrapper(unet_model).to("cuda").eval()
+    del unet_model
+
+    # Trace at 768px to reduce export-time activation memory. The two spatial
+    # axes are dynamic in the ONNX graph, so the browser can use other supported
+    # multiples of 64 without exporting a separate graph.
+    trace_side = 96
+    latent = torch.randn((1, 4, trace_side, trace_side), dtype=torch.float16, device="cuda")
     timestep = torch.tensor([999.0], dtype=torch.float16, device="cuda")
     hidden = torch.randn((1, 77, 2048), dtype=torch.float16, device="cuda")
     pooled = torch.randn((1, 1280), dtype=torch.float16, device="cuda")
-    time_ids = torch.tensor([[1024, 1024, 0, 0, 1024, 1024]], dtype=torch.float16, device="cuda")
+    time_ids = torch.tensor([[768, 768, 0, 0, 768, 768]], dtype=torch.float16, device="cuda")
     unet_graph = export_one(
         unet, (latent, timestep, hidden, pooled, time_ids), output / "unet",
         ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"],
@@ -335,15 +389,23 @@ def export_model(args):
         },
     )
     del unet, latent, timestep, hidden, pooled, time_ids
-    del pipe.unet
     torch.cuda.empty_cache()
     gc.collect()
     upcast_fragile_ops(unet_graph)
 
-    print("[export] VAE decoder in fp32")
-    scaling_factor = float(pipe.vae.config.scaling_factor)
-    vae = VAEDecoder(pipe.vae).to(device="cuda", dtype=torch.float32).eval()
-    vae_input = torch.randn((1, 4, 128, 128), dtype=torch.float32, device="cuda")
+    print("[load] VAE")
+    vae_model = AutoencoderKL.from_pretrained(
+        args.model,
+        subfolder="vae",
+        revision=source_revision,
+        use_safetensors=True,
+        low_cpu_mem_usage=True,
+    )
+    scaling_factor = float(vae_model.config.scaling_factor)
+    # The NoobAI VAE is kept at fp32 for decode stability.
+    vae = VAEDecoder(vae_model).to(device="cuda", dtype=torch.float32).eval()
+    del vae_model
+    vae_input = torch.randn((1, 4, trace_side, trace_side), dtype=torch.float32, device="cuda")
     vae_graph = export_one(
         vae, (vae_input,), output / "vae_decoder",
         ["latent_sample"], ["sample"],
@@ -356,15 +418,12 @@ def export_model(args):
     torch.cuda.empty_cache()
     gc.collect()
 
-    scheduler = dict(pipe.scheduler.config)
-    del pipe
-    gc.collect()
-
     print("[package] streaming ONNX external weights into <= 1.5 GB shards")
     component_data = {}
     for component in ("text_encoder", "text_encoder_2", "unet", "vae_decoder"):
         graph = output / component / "model.onnx"
         shards = reshard_external_weights(graph)
+        onnx.checker.check_model(str(graph), full_check=False)
         component_data[component] = {
             "graph": f"{component}/model.onnx",
             "externalData": [
@@ -392,6 +451,7 @@ def export_model(args):
         "latentChannels": 4,
         "vaeScalingFactor": scaling_factor,
         "scheduler": scheduler,
+        "traceResolution": 768,
         "components": component_data,
         "runtime": {
             "name": "onnxruntime-web",
@@ -402,10 +462,11 @@ def export_model(args):
             "vaeExecutionProvider": "webgpu",
         },
         "notes": [
+            "Exported from the pinned NoobAI XL 1.1 Diffusers components.",
             "Text encoders expose penultimate hidden states; encoder 2 also exposes pooled text_embeds.",
             "U-Net inputs and outputs use float16. Text encoder outputs and VAE input/output use float32.",
             "The VAE scaling factor is applied in the JavaScript sampler before decoding.",
-            "Tokenizer assets are fetched at the pinned sourceRevision from sourceModel.",
+            "Tokenizer assets are fetched from sourceModel at sourceRevision.",
             "Only the VAE decoder is included; this pack targets text-to-image generation.",
         ],
     }
@@ -430,11 +491,11 @@ def export_model(args):
         )
         print(f"[upload] https://huggingface.co/{args.upload_repo}/tree/main/{args.path_in_repo}")
 
-
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default=DEFAULT_MODEL, help="NoobAI XL 1.1 Diffusers model repo.")
     parser.add_argument("--revision", default="main")
+    parser.add_argument("--device", default="cuda", choices=("cuda",), help="CUDA export device (CPU export is not supported).")
     parser.add_argument("--output", default="noobai-xl-1.1-browser-pack")
     parser.add_argument("--upload-repo", help="Optional Hugging Face model repo to publish the browser ONNX pack.")
     parser.add_argument("--path-in-repo", default="browser-pack")

@@ -46,7 +46,7 @@
 
           <label for="model-url">Published ONNX model-pack URL</label>
           <input id="model-url" type="url" inputmode="url" placeholder="https://huggingface.co/OWNER/REPO/resolve/main/browser-pack" autocomplete="off">
-          <p class="hint">This is the exported browser pack, not the original .safetensors checkpoint. See the export guide to create and publish it. The browser fetches the manifest and model shards from this base URL.</p>
+          <p class="hint">First create the pack with the <a href="https://colab.research.google.com/github/DragonFireGames/imagegen/blob/main/noobai-browser-experiment/tools/Export_NoobAI_XL_1.1_to_browser_ONNX.ipynb" target="_blank" rel="noreferrer">one-click Google Colab exporter</a>. This is the converted browser pack, not the original .safetensors checkpoint. The browser downloads its graphs and shards once, then caches them locally.</p>
           <button class="secondary full" id="load-model" type="button" disabled>Load and cache model</button>
 
           <div class="storage-row">
@@ -59,15 +59,15 @@
           </div>
 
           <label for="prompt">Positive prompt</label>
-          <textarea id="prompt" maxlength="6000" required>score_9, score_8_up, score_7_up, 1girl, adult woman, intricate illustration, detailed lighting, beautiful composition</textarea>
-          <p class="hint">Use NoobAI's quality and Danbooru-style tags as desired. Nothing is automatically prepended to this prompt.</p>
+          <textarea id="prompt" maxlength="6000" required>masterpiece, best quality, newest, absurdres, highres, 1girl, adult woman, intricate illustration, detailed lighting, beautiful composition</textarea>
+          <p class="hint">Uses NoobAI's recommended quality tags. The author's example also uses <code>safe</code>; that tag is intentionally not included here.</p>
 
           <div class="label-row">
             <label for="negative-prompt">Negative prompt</label>
             <span class="hint">Optional · fully editable</span>
           </div>
-          <textarea id="negative-prompt" class="negative" maxlength="4000">score_6, score_5, score_4, worst quality, low quality, blurry, bad anatomy, bad hands, extra digits, watermark, signature, text</textarea>
-          <p class="hint">Clear this field to disable negative conditioning. The app does not insert an NSFW-negative tag or rewrite your prompt.</p>
+          <textarea id="negative-prompt" class="negative" maxlength="4000">worst quality, old, early, low quality, lowres, signature, username, logo, bad hands, mutated hands, watermark, text</textarea>
+          <p class="hint">The default deliberately omits <code>nsfw</code> and does not exclude furry/anthro subjects. Clear the field to disable negative conditioning.</p>
 
           <div class="two-col">
             <div>
@@ -107,14 +107,19 @@
 
           <div class="two-col">
             <div>
+              <label for="sampler">Sampler</label>
+              <select id="sampler">
+                <option value="euler_a" selected>Euler a · Recommended</option>
+                <option value="euler">Euler · Deterministic</option>
+              </select>
+            </div>
+            <div>
               <label for="steps">Sampling steps</label>
               <input id="steps" type="number" min="10" max="50" step="1" value="28">
             </div>
-            <div>
-              <label for="seed">Seed <span class="hint inline">(−1 = random)</span></label>
-              <input id="seed" type="number" min="-1" max="2147483647" value="-1">
-            </div>
           </div>
+          <label for="seed">Seed <span class="hint inline">(−1 = random)</span></label>
+          <input id="seed" type="number" min="-1" max="2147483647" value="-1">
 
           <div class="guidance-header">
             <label for="cfg">CFG scale</label>
@@ -126,7 +131,7 @@
           <button class="generate" id="generate" type="submit" disabled>Load the model pack first</button>
           <div class="fine-print">
             <strong>Memory and storage</strong>
-            <p>NoobAI XL 1.1 is a large SDXL model. Its U-Net weights alone are about 5.14 GB in FP16. Starting at 768² reduces activation memory, not model-weight memory; a 9 GB total-memory machine may still fail to allocate the U-Net. The current FP16 pack is an initial compatibility target, not yet the low-memory build.</p>
+            <p>NoobAI XL 1.1 is a large SDXL model. Its U-Net weights alone are about 5.14 GB in FP16. The browser loads the text encoders, U-Net and VAE sequentially, releasing each component before loading the next. Start at 768²: this reduces activation memory, not model-weight memory. A 16 GB Mac is a more realistic target, but memory pressure from Chrome, GPU allocations and the U-Net activations can still cause allocation failures.</p>
             <p>Persistent storage is requested from the browser. The browser may deny the request or clear best-effort data; the model status reports whether the cache is present.</p>
           </div>
         </form>
@@ -150,7 +155,7 @@
 
     <footer>
       <span>NoobAI XL 1.1 · ONNX Runtime Web · WebGPU</span>
-      <span><a href="./README.md">Technical and export guide</a> · <a href="https://huggingface.co/Laxhar/noobai-XL-1.1" target="_blank" rel="noreferrer">Original model</a> · <a href="../uncensored-experiment/">Pony experiment</a> · <a href="../">Back to Imagegen</a></span>
+      <span><a href="./README.md">Technical and export guide</a> · <a href="https://colab.research.google.com/github/DragonFireGames/imagegen/blob/main/noobai-browser-experiment/tools/Export_NoobAI_XL_1.1_to_browser_ONNX.ipynb" target="_blank" rel="noreferrer">Colab exporter</a> · <a href="https://huggingface.co/Laxhar/noobai-XL-1.1" target="_blank" rel="noreferrer">Original model</a> · <a href="../uncensored-experiment/">Pony experiment</a> · <a href="../">Back to Imagegen</a></span>
     </footer>
   </div>
   <script type="module" src="./pwa.js"></script>
