@@ -1,4 +1,4 @@
-const CACHE_NAME = "noobai-browser-app-shell-v3";
+const CACHE_NAME = "noobai-browser-app-shell-v4";
 const APP_ASSETS = [
   "./",
   "./index.html",
