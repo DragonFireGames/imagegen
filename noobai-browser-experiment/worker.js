@@ -428,6 +428,7 @@ self.onmessage = async (event) => {
     if (message.op === "load") {
       operationController?.abort();
       operationController = new AbortController();
+      tokenizerPromise = null;
       const baseUrl = message.baseUrl.trim().replace(/\/+$/, "");
       if (!baseUrl.startsWith("https://")) throw new Error("Use an HTTPS model-pack URL.");
       status("Reading NoobAI model manifest");
