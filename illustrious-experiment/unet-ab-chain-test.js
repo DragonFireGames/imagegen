@@ -1,4 +1,5 @@
 import * as ort from "../vendor/onnxruntime-web/ort.webgpu.min.mjs";
+import { acquireHeavyModelTest, releaseHeavyModelTest } from "./heavy-model-test-lock.js";
 
 const MODEL_BASE = "https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17/resolve/main/";
 const MANIFEST_URL = MODEL_BASE + "manifest.json";
@@ -108,7 +109,10 @@ button.addEventListener("click", async () => {
   let bSession;
   let staged = null;
 
+  let lockAcquired = false;
   try {
+    acquireHeavyModelTest("UNET_A → UNET_B");
+    lockAcquired = true;
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser.");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) throw new Error("The browser did not return a WebGPU adapter.");
@@ -262,6 +266,7 @@ button.addEventListener("click", async () => {
         console.warn("[Illustrious] Could not release UNET_B session:", error);
       }
     }
+    if (lockAcquired) releaseHeavyModelTest("UNET_A → UNET_B");
     button.disabled = false;
   }
 });
