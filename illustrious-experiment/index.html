@@ -64,11 +64,13 @@
       <h2><a href="https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17" target="_blank" rel="noreferrer">WAI Illustrious v17 · ONNX WebGPU</a></h2>
       <div class="model-facts">
         <div class="fact"><span>Declared base</span><strong>Illustrious XL early-release v0</strong></div>
-        <div class="fact"><span>Repository size</span><strong>8.75 GB</strong></div>
-        <div class="fact"><span>Graph layout</span><strong>Split SDXL UNet</strong></div>
+        <div class="fact"><span>Repository size</span><strong>8.75 GB total</strong></div>
+        <div class="fact"><span>FP16 base components</span><strong>6.93 GB</strong></div>
+        <div class="fact"><span>INT4 UNet alternatives</span><strong>1.82 GB additional</strong></div>
+        <div class="fact"><span>Graph layout</span><strong>3-part SDXL UNet</strong></div>
         <div class="fact"><span>Adapter maps</span><strong>FP16 weights-index files</strong></div>
       </div>
-      <p class="notice">This is WAI Illustrious v17, a fine-tune based on Illustrious v0.1—not the untouched v0.1 base. Its card documents weight indexes for applying LoRAs to the FP16 graphs. INT4 UNet variants are also present, but their manifest entries do not include those weight-index maps. We need to verify adapter behavior on FP16 first.</p>
+      <p class="notice">This is WAI Illustrious v17, a fine-tune based on Illustrious v0.1—not the untouched v0.1 base. The manifest lists 232 MB for CLIP-L, 1.39 GB for CLIP-bigG, 5.14 GB for the three FP16 UNet graphs, and about 167 MB for the VAE pair. The two INT4 UNet alternatives are additional files and are not the initial LoRA target. Each external-data shard is below 1 GB. The 4 GiB WebGPU buffer limit reported by this browser is a per-buffer limit, not a measurement of total available GPU memory. We will start with CLIP-L only.</p>
       <p><a href="https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0" target="_blank" rel="noreferrer">Original Illustrious XL v0.1 base</a> · <a href="https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17/blob/main/LICENSE.txt" target="_blank" rel="noreferrer">Candidate pack license</a></p>
     </section>
 
@@ -128,23 +130,34 @@
     </section>
 
     <section class="panel">
+      <p class="eyebrow">First real model test</p>
+      <h2>CLIP-L ONNX WebGPU smoke test</h2>
+      <p>Load only the candidate pack's CLIP-L text encoder and run one minimal test inference. This downloads about 232 MB of external weights from Hugging Face. It does not download the bigG encoder, UNet, VAE, or LoRA, and it does not generate an image.</p>
+      <button class="button" id="testClipEncoder" type="button">Test CLIP-L (about 232 MB)</button>
+      <p class="status" id="clipSmokeStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="clipSmokeSummary" hidden></div>
+      <p class="notice">A successful result will verify that this browser can load one real SDXL ONNX graph with external data and execute it on WebGPU. It will not yet prove UNet operator coverage, full-model memory use, or Personal Ami LoRA compatibility.</p>
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Runtime diagnostics</p>
       <h2>Check browser and ONNX Runtime support</h2>
-      <p>This local probe checks whether the page can access WebGPU, reports relevant adapter memory limits, and confirms whether the vendored ONNX Runtime build exports its LoRA adapter API. It does not download model weights or run inference.</p>
+      <p>This local probe checks WebGPU, relevant adapter limits, the ONNX Runtime version, and the adapter API surface. ONNX Runtime's built-in LoRA adapter API is WASM-only, so it is not usable by this experiment's WebGPU execution path.</p>
       <button class="button" id="probeRuntime" type="button">Check local runtime</button>
       <p class="status" id="probeStatus" data-type="info" aria-live="polite">Not checked yet.</p>
       <div class="data-list" id="runtimeProbeSummary" hidden></div>
-      <p class="notice">The ONNX Runtime LoRA API requires an ONNX Runtime <code>.onnx_adapter</code> and a graph prepared with matching adapter parameters. It cannot load a Kohya <code>.safetensors</code> file directly. Actual adapter + WebGPU session compatibility remains untested.</p>
+      <p class="notice">The built-in ONNX Runtime <code>LoraAdapter</code> API is available only on the WASM backend. It cannot be used with the WebGPU sessions targeted here, and it does not load Kohya <code>.safetensors</code> files directly. The browser-side path we are investigating is the candidate pack's FP16 <code>weights-index.json</code> format.</p>
     </section>
 
     <section class="panel">
       <p class="eyebrow">Runtime status</p>
-      <h2>Inference is not wired up yet</h2>
-      <p>Target architecture: offline Python/Diffusers conversion, then ONNX Runtime WebGPU inference in this page. Python would be used for export only; no Python inference server is intended. ExecuTorch WebGPU is a second experimental route being evaluated. The FLUX.2 application remains untouched.</p>
+      <h2>Full image generation is not wired up yet</h2>
+      <p>The first CLIP-L component smoke test is now available above. The target remains offline Python/Diffusers conversion, then ONNX Runtime WebGPU inference in this page. Python is export-only; no Python inference server is intended. ExecuTorch WebGPU remains a secondary experiment. The FLUX.2 application remains untouched.</p>
       <p><a href="./README.md">Technical plan and validation checklist</a> · <a href="./tools/README.md">Offline LoRA fusion / ONNX export instructions</a></p>
     </section>
   </main>
   <script type="module" src="./lora-inspector.js"></script>
   <script type="module" src="./runtime-probe.js"></script>
+  <script type="module" src="./component-smoke-test.js"></script>
 </body>
 </html>
