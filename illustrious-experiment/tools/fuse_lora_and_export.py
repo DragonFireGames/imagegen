@@ -72,6 +72,7 @@ def main() -> int:
     }
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
     staging_parent = output_dir.parent
     with tempfile.TemporaryDirectory(prefix="illustrious-lora-fuse-", dir=staging_parent) as temp_name:
         merged_dir = Path(temp_name) / "merged-diffusers"
