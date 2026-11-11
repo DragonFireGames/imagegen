@@ -147,15 +147,21 @@ The user has now run this test successfully in Chrome. It loaded the CLIP-L
 graph and its 221.3 MiB component download, created a WebGPU session, and ran
 one dummy-token inference. The output was `penultimate_hidden_state`, shape
 `[1, 77, 768]`, dtype `float16`, with all finite values; load plus inference
-took 15.6 seconds. This validates CLIP-L only, not the other encoder, UNet,
+took 15.9 seconds. This validates CLIP-L only, not the other encoder, UNet,
 scheduler, full-model memory use, or LoRA injection.
 
-A second independent test is now available for the VAE decoder. The user's
-first browser run created the WebGPU session and loaded the external data, but
-the inference call rejected the supplied FP32 input: this graph expects an
-FP16 latent tensor. The browser test was corrected to pass a zero-filled
-FP16 tensor of shape `[1, 4, 128, 128]`. The corrected inference has not yet
-been rerun in the user's browser.
+The VAE decoder test has now passed in the user's browser. It loaded 94.5 MiB
+of graph and external weights, accepted an FP16 zero latent with shape
+`[1, 4, 128, 128]`, and returned an FP16 `image` tensor with shape
+`[1, 3, 1024, 1024]`; all output values were finite. Load plus inference
+took 16.1 seconds. The initial FP32 input failure was corrected by using
+the graph's actual FP16 input contract.
+
+A separate CLIP-bigG smoke test is now available. The package model card
+describes its text encoders as taking int64 `[1, 77]` token IDs with FP16
+outputs. The bigG component is about 1.39 GB, so it is an explicit opt-in test,
+not loaded automatically. The test checks every exposed output tensor for
+finite values. It has not yet been run in the user's browser.
 
 ## Runtime decision
 
@@ -183,7 +189,8 @@ Both routes target browser-native inference: model computation occurs inside the
 - tools/README.md: isolated environment and export instructions.
 - runtime-probe.js: reports WebGPU capabilities and explicitly flags the built-in ORT LoRA API as WASM-only.
 - component-smoke-test.js: CLIP-L graph and dummy-token WebGPU inference; passed in the user's browser (221.3 MiB, 15.6 s, output [1, 77, 768], FP16, finite).
-- vae-smoke-test.js: loads only the VAE decoder and runs a zero-latent FP16 WebGPU inference. Initial run confirmed session creation but failed at inference because the graph expects FP16; input dtype corrected, awaiting rerun.
+- text-encoder-2-smoke-test.js: opt-in CLIP-bigG graph load and dummy-token WebGPU inference; approximately 1.39 GB, awaits browser validation.
+- vae-smoke-test.js: passed in the user's browser; FP16 input [1, 4, 128, 128], FP16 image output [1, 3, 1024, 1024], all finite, 16.1 seconds.
 - Full image-generation inference is not wired up yet.
 
 ## Offline LoRA fusion and ONNX reference export
