@@ -39,6 +39,7 @@
     .tensor-list li { margin: 7px 0; overflow-wrap: anywhere; }
     .notice { padding: 12px 14px; border-left: 3px solid #e5a64b; background: #22252d; color: #c7c9d1; }
     [hidden] { display: none !important; }
+    .inspect-output { max-height: 680px; overflow: auto; padding: 14px; border-radius: 8px; background: #111319; color: #d5d7e0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
     @media (max-width: 560px) { body { padding: 18px 12px; } .panel { padding: 16px; } .data-row { grid-template-columns: 1fr; gap: 2px; } }
   </style>
 </head>
@@ -160,6 +161,16 @@
     </section>
 
     <section class="panel">
+      <p class="eyebrow">Next: inspect before loading the UNet</p>
+      <h2>Split UNet graph and LoRA-index metadata</h2>
+      <p>Inspect the three small ONNX graph files and their <code>weights-index.json</code> files. The inspector verifies each file against the model manifest's size and SHA-256, then reads graph input/output names, tensor types and shapes, node/initializer counts, external tensor references, and representative weight-index entries.</p>
+      <p class="notice">This downloads only about 3.8 MB of graph metadata and index JSON. It does not download any of the multi-gigabyte UNet tensor shards, allocate a WebGPU session, or run inference.</p>
+      <button class="button" id="inspectUnetMetadata" type="button">Inspect UNet metadata (about 3.8 MB)</button>
+      <p class="status" id="unetMetadataStatus" data-type="info" aria-live="polite">Not inspected yet.</p>
+      <pre class="inspect-output" id="unetMetadataOutput" hidden></pre>
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Runtime diagnostics</p>
       <h2>Check browser and ONNX Runtime support</h2>
       <p>This local probe checks WebGPU, relevant adapter limits, the ONNX Runtime version, and the adapter API surface. ONNX Runtime's built-in LoRA adapter API is WASM-only, so it is not usable by this experiment's WebGPU execution path.</p>
@@ -181,5 +192,6 @@
   <script type="module" src="./component-smoke-test.js"></script>
   <script type="module" src="./text-encoder-2-smoke-test.js"></script>
   <script type="module" src="./vae-smoke-test.js"></script>
+  <script type="module" src="./unet-metadata-inspector.js"></script>
 </body>
 </html>
