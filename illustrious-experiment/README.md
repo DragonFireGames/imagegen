@@ -157,11 +157,18 @@ of graph and external weights, accepted an FP16 zero latent with shape
 took 16.1 seconds. The initial FP32 input failure was corrected by using
 the graph's actual FP16 input contract.
 
-A separate CLIP-bigG smoke test is now available. The package model card
-describes its text encoders as taking int64 `[1, 77]` token IDs with FP16
-outputs. The bigG component is about 1.39 GB, so it is an explicit opt-in test,
-not loaded automatically. The test checks every exposed output tensor for
-finite values. It has not yet been run in the user's browser.
+The CLIP-bigG test has now passed in the user's browser. It loaded 1.29 GiB
+of graph and external weights, accepted int64 token IDs with shape
+`[1, 77]`, and returned both expected FP16 outputs:
+`penultimate_hidden_state [1, 77, 1280]` and `text_embeds [1, 1280]`.
+All 99,840 output values were finite. Load plus inference took 79.1 seconds.
+Both SDXL text encoders and the VAE decoder have now passed isolated WebGPU
+inference tests.
+
+The next target is the split UNet. Do not load all three graphs at once yet:
+first inspect each graph's I/O contract, the external-data manifest, the
+three-part chaining/partition convention, and the `weights-index.json` format.
+Only then design staged tests with explicit memory controls.
 
 ## Runtime decision
 
@@ -169,8 +176,8 @@ Do not try to bundle the Python Diffusers runtime into this static site. Diffuse
 
 Preferred sequence:
 
-1. Run the CLIP-L and VAE decoder component smoke tests in the browser. Both have now passed on the target machine, confirming external-data loading and real WebGPU inference for those components.
-2. Run the opt-in CLIP-bigG test (about 1.39 GB), then inspect all three split UNet graphs and their weight-index maps before attempting to load the UNet.
+1. Run the CLIP-L, CLIP-bigG, and VAE decoder component smoke tests in the browser. All three have now passed on the target machine, confirming external-data loading and real WebGPU inference for both text encoders and the decoder.
+2. Inspect all three split UNet graphs, their chaining convention, and their weight-index maps. Design a staged test instead of loading all UNet parts simultaneously.
 3. Build the no-LoRA WAI v17 SDXL pipeline in JavaScript and generate a baseline image. Keep in mind that WAI v17 is a derivative, not the original Illustrious v0.1 training checkpoint.
 4. Use Python/Diffusers offline to load the actual Personal Ami adapter, fuse it into the official Illustrious v0.1 base, and generate a reproducible reference image. Do not require a Python inference server.
 5. Inspect the WAI FP16 weight-index format and implement a converter for Personal Ami only after all 986 pairs have been mapped and shape-checked. If the derivative graph cannot be validated, export the exact base as a separate browser model instead.
@@ -189,7 +196,7 @@ Both routes target browser-native inference: model computation occurs inside the
 - tools/README.md: isolated environment and export instructions.
 - runtime-probe.js: reports WebGPU capabilities and explicitly flags the built-in ORT LoRA API as WASM-only.
 - component-smoke-test.js: CLIP-L graph and dummy-token WebGPU inference; passed in the user's browser (221.3 MiB, 15.6 s, output [1, 77, 768], FP16, finite).
-- text-encoder-2-smoke-test.js: opt-in CLIP-bigG graph load and dummy-token WebGPU inference; approximately 1.39 GB, awaits browser validation.
+- text-encoder-2-smoke-test.js: passed in the user's browser; 1.29 GiB, int64 [1, 77] input, FP16 outputs [1, 77, 1280] and [1, 1280], all 99,840 values finite, 79.1 seconds.
 - vae-smoke-test.js: passed in the user's browser; FP16 input [1, 4, 128, 128], FP16 image output [1, 3, 1024, 1024], all finite, 16.1 seconds.
 - Full image-generation inference is not wired up yet.
 
@@ -215,8 +222,8 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [x] Run the browser capability probe: the user's browser reports WebGPU, Float16Array, ONNX Runtime Web 1.31.1, and 4 GiB maximum buffer/binding limits.
 - [x] Run the 232 MB CLIP-L ONNX WebGPU smoke test: success; output `[1, 77, 768]`, FP16, all finite, 15.9 seconds.
 - [x] Run the ~99 MB VAE decoder ONNX WebGPU smoke test: success; FP16 input `[1, 4, 128, 128]`, FP16 output `[1, 3, 1024, 1024]`, all finite, 16.1 seconds.
-- [ ] Run the ~1.39 GB CLIP-bigG ONNX WebGPU smoke test (separate opt-in button; checks all graph outputs).
-- [ ] Inspect all three split UNet graphs and their weight-index maps before loading them.
+- [x] Run the ~1.39 GB CLIP-bigG ONNX WebGPU smoke test: success; 1.29 GiB, int64 input [1, 77], FP16 outputs [1, 77, 1280] and [1, 1280], all finite, 79.1 seconds.
+- [ ] Inspect all three split UNet graphs, their I/O contracts, chaining convention, and weight-index maps before loading them.
 - [x] Add an offline Diffusers fusion / generic ONNX reference export script (Python syntax and `--help` pass; synthetic BF16 Safetensors test reproduced the real scan's 2,958 keys, 986 rank-32 pairs, 986 alpha keys, and three component counts; deliberately malformed rank was rejected). Real Personal Ami loading/fusion is still pending.
 - [x] Inspect the exact Personal Ami LoRA header and tensor-key layout in the browser (actual report recorded above).
 - [ ] Load and fuse the actual Personal Ami tensors in Diffusers against the official Illustrious v0.1 base.
