@@ -494,7 +494,21 @@ self.onmessage = async (event) => {
       if (!baseUrl.startsWith("https://")) throw new Error("Use an HTTPS model-pack URL.");
       status("Reading NoobAI model manifest");
       const packLoadStarted = performance.now();
+      let activeAsset = null;
+      let activeAssetStarted = 0;
+      let activeAssetCached = false;
       activePack = await loadModelPack(baseUrl, (progress) => {
+        if (progress.file !== activeAsset) {
+          if (activeAsset) {
+            const elapsed = performance.now() - activeAssetStarted;
+            perfMark("model asset " + (activeAssetCached ? "cache hit" : "downloaded") + " · " + activeAsset,
+              elapsed.toFixed(0) + " ms");
+          }
+          activeAsset = progress.file;
+          activeAssetStarted = performance.now();
+          activeAssetCached = Boolean(progress.cached);
+          perfMark("model asset " + (activeAssetCached ? "checking cache" : "fetching") + " · " + activeAsset);
+        }
         const percent = progress.total ? Math.round(progress.loaded / progress.total * 100) : 0;
         post("progress", {
           label: progress.phase === "cache" ? "Checking browser cache" : "Downloading " + progress.file,
@@ -503,6 +517,10 @@ self.onmessage = async (event) => {
           percent,
         });
       }, operationController.signal);
+      if (activeAsset) {
+        perfMark("model asset " + (activeAssetCached ? "cache hit" : "downloaded") + " · " + activeAsset,
+          (performance.now() - activeAssetStarted).toFixed(0) + " ms");
+      }
       perf("model pack load/cache", packLoadStarted, (activePack.cachedBytes / 1024 ** 3).toFixed(2) + " GiB cached");
       post("model-ready", {
         model: activePack.manifest.model,
