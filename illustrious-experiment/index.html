@@ -77,7 +77,27 @@
       <h2><a href="https://github.com/d0grr/generate-ai-images" target="_blank" rel="noreferrer">Browser SDXL · ONNX WebGPU</a></h2>
       <p>A separate project already runs SDXL in Chrome with a JavaScript pipeline, OPFS caching, FP16 and INT4 UNet variants. Its inpainting example fuses a specific LoRA before export; it does not demonstrate arbitrary live LoRA swapping.</p>
       <p>We can adapt its SDXL pipeline architecture, then validate the Personal Ami LoRA against Illustrious. This is a reference implementation, not a dependency.</p>
+    </    <section class="panel">
+      <p class="eyebrow">Actual Personal Ami header scan</p>
+      <h2>Adapter structure confirmed</h2>
+      <p>The browser inspector has now been run against <code>personal_ami_style_illustrious-000006.safetensors</code>. These are the reported header statistics; the multi-gigabyte base model and LoRA tensor payloads have not been uploaded to this repository.</p>
+      <div class="model-facts">
+        <div class="fact"><span>Adapter file</span><strong>217.9 MB</strong></div>
+        <div class="fact"><span>Tensors / parameters</span><strong>2,958 / 114.0M</strong></div>
+        <div class="fact"><span>Complete LoRA pairs</span><strong>986</strong></div>
+        <div class="fact"><span>Rank / alpha metadata</span><strong>32 / 16</strong></div>
+      </div>
+      <div class="data-list">
+        <div class="data-row"><span class="data-label">CLIP-L (text encoder 1)</span><span class="data-value">216 tensors · 72 pairs</span></div>
+        <div class="data-row"><span class="data-label">CLIP-bigG (text encoder 2)</span><span class="data-value">576 tensors · 192 pairs</span></div>
+        <div class="data-row"><span class="data-label">SDXL UNet</span><span class="data-value">2,166 tensors · 722 pairs</span></div>
+        <div class="data-row"><span class="data-label">Header validation</span><span class="data-value">0 incomplete pairs · 0 rank mismatches</span></div>
+        <div class="data-row"><span class="data-label">Tensor dtype</span><span class="data-value">BF16</span></div>
+      </div>
+      <p class="notice">All three SDXL components are present. The embedded <code>ss_base_model_version=sdxl_base_v1-0</code> tag is generic SDXL metadata; the author’s model listing says the LoRA was trained on Illustrious 0.1. The exporter now loads the local Safetensors state dict and explicitly checks all three components before fusion.</p>
     </section>
+
+section>
 
     <section class="panel">
       <p class="eyebrow">Local-only utility</p>
