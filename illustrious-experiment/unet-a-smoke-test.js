@@ -120,11 +120,40 @@ button.addEventListener("click", async () => {
     const outputNames = session.outputNames;
     if (!outputNames.length) throw new Error("UNET_A graph exposes no outputs.");
 
+    const expectedOutputShapes = {
+      hidden: [1, 1280, 32, 32],
+      emb: [1, 1280],
+      skip_0: [1, 320, 128, 128],
+      skip_1: [1, 320, 128, 128],
+      skip_2: [1, 320, 128, 128],
+      skip_3: [1, 320, 64, 64],
+      skip_4: [1, 640, 64, 64],
+      skip_5: [1, 640, 64, 64],
+      skip_6: [1, 640, 32, 32],
+      skip_7: [1, 1280, 32, 32],
+      skip_8: [1, 1280, 32, 32]
+    };
+    const missingOutputs = Object.keys(expectedOutputShapes).filter(name => !outputNames.includes(name));
+    if (missingOutputs.length) {
+      throw new Error("UNET_A is missing expected outputs: " + missingOutputs.join(", ") +
+        ". Actual outputs: " + outputNames.join(", "));
+    }
+
     let totalValues = 0;
     for (const outputName of outputNames) {
       const output = outputs[outputName];
       if (!output || !output.data || !output.dims) {
         throw new Error("UNET_A returned no readable tensor for output " + outputName + ".");
+      }
+
+      const expectedShape = expectedOutputShapes[outputName];
+      if (expectedShape && (output.dims.length !== expectedShape.length ||
+          output.dims.some((dimension, index) => dimension !== expectedShape[index]))) {
+        throw new Error("UNET_A output " + outputName + " has shape [" + output.dims.join(", ") +
+          "], expected [" + expectedShape.join(", ") + "].");
+      }
+      if (output.type !== "float16") {
+        throw new Error("UNET_A output " + outputName + " has dtype " + output.type + "; expected float16.");
       }
 
       for (let i = 0; i < output.data.length; i++) {
