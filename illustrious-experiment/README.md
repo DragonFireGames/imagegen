@@ -165,16 +165,42 @@ All 99,840 output values were finite. Load plus inference took 79.1 seconds.
 Both SDXL text encoders and the VAE decoder have now passed isolated WebGPU
 inference tests.
 
-The next target is the split UNet. Do not load all three graphs at once yet:
-the three FP16 parts total about 5.14 GB of weights, before runtime allocations.
-The new metadata-only inspector fetches the three small ONNX protobuf graph
-files and their `weights-index.json` files (about 3.8 MB total), verifies their
-manifest size and SHA-256 records, and parses graph inputs/outputs, tensor
-types/shapes, node/initializer counts, external-data references, and sample
-index entries. It deliberately does not fetch any external weight shards or
-create an ONNX session. The user has not run this inspection yet. Use its
-results to understand the partition chain and adapter-name mapping before
-designing any staged UNet inference tests.
+The metadata-only split-UNet inspection has now passed in the user's
+browser. All six small files (three ONNX graph protobufs and three weight
+indexes) matched the manifest's exact sizes and SHA-256 hashes. It transferred
+3.61 MiB and zero tensor shards.
+
+The graph interfaces establish this chain:
+
+- **UNET_A — down path + middle:** inputs `sample` FP16 [B,4,h,w],
+  `timestep` FP32 [B], `encoder_hidden_states` FP16 [B,S,2048],
+  `text_embeds` FP16 [B,1280], and `time_ids` FP32 [B,6]. It returns
+  `hidden`, `emb`, and skip tensors `skip_0` through `skip_8`.
+- **UNET_B — first up-path partition:** consumes A's `hidden` and `emb`,
+  the conditioning, and `skip_6` through `skip_8`. It returns
+  `hidden_out`, which is C's `hidden` input.
+- **UNET_C — remaining up path:** consumes B's `hidden_out`, A's `emb`,
+  the conditioning, and `skip_0` through `skip_5`. It returns
+  `out_sample`, the denoiser prediction.
+
+At a 1024-pixel output size, the expected latent is 128×128; A's observed
+intermediate spatial scales are 128, 64, and 32. This gives us a precise
+interface for a staged test. The index files contain 383, 319, and 92 entries
+for A, B, and C respectively. Their entries map readable Diffusers-style
+weight names to ONNX initializer names, shard/offset/length, and both Torch
+and ONNX shapes. Some attention projections (including cross-attention
+`to_k` and `to_v`) are flagged `transposed: true`. The Personal Ami adapter
+must be mapped and its low-rank delta oriented correctly before touching these
+weights. The counts are not yet proof that every one of the adapter's 722 UNet
+pairs has a direct one-to-one match.
+
+The new **UNET_A-only** smoke test loads A's external weight shards and runs
+one zero-input WebGPU inference at 1024². It uses the types reported in the
+graph metadata (FP16 sample/conditioning embeddings, FP32 timestep/time IDs),
+checks every output for finite values, and releases the session. It does not
+load B/C. A's weights are about 2.49 GB, so this is explicitly opt-in and may
+fail on memory/driver limits even though the encoders worked. The user has not
+run this test yet.
 
 ## Runtime decision
 
@@ -204,7 +230,8 @@ Both routes target browser-native inference: model computation occurs inside the
 - component-smoke-test.js: CLIP-L graph and dummy-token WebGPU inference; passed in the user's browser (221.3 MiB, 15.6 s, output [1, 77, 768], FP16, finite).
 - text-encoder-2-smoke-test.js: passed in the user's browser; 1.29 GiB, int64 [1, 77] input, FP16 outputs [1, 77, 1280] and [1, 1280], all 99,840 values finite, 79.1 seconds.
 - vae-smoke-test.js: passed in the user's browser; FP16 input [1, 4, 128, 128], FP16 image output [1, 3, 1024, 1024], all finite, 16.1 seconds.
-- unet-metadata-inspector.js: fetches and hash-verifies only the three small ONNX graph protobufs and three weights-index JSON files; parses I/O contracts and index structure without fetching model tensor shards or allocating GPU sessions. Awaits browser results.
+- unet-metadata-inspector.js: passed in the user's browser; verified all 6 graph/index files against manifest sizes and SHA-256, downloaded 3.61 MiB, fetched 0 UNet tensor shards. Extracted the A → B → C interfaces and weight index layout.
+- unet-a-smoke-test.js: opt-in, single-partition WebGPU inference for UNET_A at 1024², downloads only A's external weights, checks all outputs, releases the session; awaits browser validation.
 - Full image-generation inference is not wired up yet.
 
 ## Offline LoRA fusion and ONNX reference export
