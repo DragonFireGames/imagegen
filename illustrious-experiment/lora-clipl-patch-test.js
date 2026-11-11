@@ -391,6 +391,17 @@ button.addEventListener("click", async () => {
       throw new Error("CLIP-L shard size mismatch: expected " + shardRecord.size +
         ", received " + baseBlob.size + ".");
     }
+    let shardHashStatus = "not listed in manifest";
+    if (shardRecord.sha256) {
+      const shardBuffer = await baseBlob.arrayBuffer();
+      const digest = await crypto.subtle.digest("SHA-256", shardBuffer);
+      const actualHash = Array.from(new Uint8Array(digest),
+        value => value.toString(16).padStart(2, "0")).join("");
+      if (actualHash !== shardRecord.sha256) {
+        throw new Error("CLIP-L shard SHA-256 does not match the model manifest.");
+      }
+      shardHashStatus = "matched manifest SHA-256";
+    }
 
     const baseTargetBuffer = await baseBlob.slice(offset, offset + length).arrayBuffer();
     const patch = patchLinearTarget(
@@ -419,6 +430,7 @@ button.addEventListener("click", async () => {
     addRow("Maximum |applied delta|", patch.maxAbsApplied.toExponential(4));
     addRow("Patched shard representation", "Blob composed from original shard slices + one FP16 weight update");
     addRow("Full base shard download", formatBytes(baseBlob.size));
+    addRow("Base shard integrity", shardHashStatus);
 
     const ids = makeTestIds();
     setStatus("Loading the original CLIP-L session and measuring its baseline output…");
