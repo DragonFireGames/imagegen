@@ -18,7 +18,7 @@ A compatible SDXL-derived ONNX/WebGPU model pack already exists:
 - The full repository is 8.75 GB because it includes both FP16 and INT4 graph variants. The FP16 UNet graphs alone are about 5.13 GB; text encoders are about 1.62 GB and VAE graphs about 0.17 GB.
 - The INT4 variants reduce the two largest UNet segments to about 1.82 GB combined, but the model manifest does not declare weights-index files for those INT4 graphs. Therefore they are not the initial LoRA target.
 
-This is a promising runtime starting point, not a claim of tested compatibility. It is WAI Illustrious v17, a fine-tune derived from Illustrious v0.1—not the untouched v0.1 checkpoint. We still need to apply the Personal Ami adapter and compare output against the same LoRA loaded with Diffusers.
+This is a promising runtime and graph-layout reference, not the final target checkpoint and not a claim of tested compatibility. It is WAI Illustrious v17, a fine-tune derived from Illustrious v0.1—not the untouched v0.1 checkpoint. The Personal Ami adapter is reported as trained on Illustrious v0.1, so its exact result must be compared on the official v0.1 base before accepting the WAI v17 derivative as a compatible substitute.
 
 The ONNX pack is under Fair AI Public License 1.0-SD, which contains prohibited-use restrictions and notice/source requirements. Review the full [LICENSE.txt](https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17/blob/main/LICENSE.txt) and [NOTICE.txt](https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17/blob/main/NOTICE.txt) before use or redistribution. This experiment links to the upstream model pack and does not copy its weights into this repository. The original Illustrious v0.1 repository also lists that license and provides a TERM_OF_USE.
 
@@ -56,9 +56,9 @@ Do not try to bundle the Python Diffusers runtime into this static site. Diffuse
 
 Preferred sequence:
 
-1. First try the pre-exported FP16 ONNX graphs because they already exist and have weight-index metadata for browser LoRA use.
+1. Use the pre-exported FP16 ONNX graphs to study and validate the split-SDXL browser runtime and its weight-index mechanism. Keep in mind that WAI v17 is not the original Illustrious v0.1 checkpoint.
 2. Keep ExecuTorch as a later alternative only. Its current WebGPU partitioner can select operators not implemented by the WebGPU runtime, so validate operator coverage for the exact SDXL UNet before investing in that export path.
-3. Use Python/Diffusers only as an offline export/conversion tool or reference implementation; do not require a Python inference server.
+3. Use Python/Diffusers offline to fuse Personal Ami into the official Illustrious v0.1 base and create a reproducible reference model. The new exporter can optionally create a generic Optimum ONNX export; that export is not WebGPU-ready until validated. Do not require a Python inference server.
 4. Keep tokenizer, scheduler, image preprocessing, and orchestration in JavaScript where practical.
 5. Load the target .safetensors LoRA locally in the browser and validate its exact keys, tensor shapes, and supported adapter type.
 6. Keep model weights out of Git and load them from local files or a configurable Hugging Face source.
@@ -69,7 +69,21 @@ Both routes target browser-native inference: model computation occurs inside the
 
 - index.html: separate experiment page with model/runtime research notes and a local LoRA inspection utility.
 - lora-inspector.js: reads only the first safetensors header block and reports tensor names, shapes, common LoRA A/B or down/up pairs, possible extended adapter tensors, and embedded training metadata. It does not upload or deserialize tensor payloads.
+- tools/fuse_lora_and_export.py: offline Diffusers LoRA fusion with optional Optimum SDXL ONNX export. It has not been run against the real Personal Ami weights.
+- tools/README.md: isolated environment and export instructions.
 - No image-generation inference is wired up yet.
+
+## Offline LoRA fusion and ONNX reference export
+
+The offline helper is documented in [tools/README.md](tools/README.md). It loads the official Illustrious v0.1 Diffusers pipeline, loads a local SDXL `.safetensors` adapter, fuses it at a chosen scale with `safe_fusing=True`, and optionally runs:
+
+```bash
+optimum-cli export onnx --model MERGED_DIFFUSERS_DIR --task stable-diffusion-xl --dtype fp16 OUTPUT_DIR
+```
+
+The script defaults to strength 0.75 (inside the mirrored Personal Ami recommendation of 0.6–0.9). It keeps generated weights outside Git and writes an `export-metadata.json` describing the base, adapter filename, strength, dtype, versions, and fused components.
+
+This provides a fixed-strength Diffusers reference and a first ONNX export for comparison. **It does not claim that the resulting generic Optimum export is ready for ONNX Runtime WebGPU.** The browser target still needs split graphs, external-data sharding, supported WebGPU operators, and matching numerical output. For an eventual browser release, live LoRA swapping can follow after the fixed-strength model is working.
 
 ## LoRA inspection caveat
 
@@ -78,6 +92,7 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 ## Validation milestones
 
 - [x] Identify an Illustrious v0.1-derived browser ONNX package with FP16 graph weights-index metadata.
+- [x] Add an offline Diffusers fusion / generic ONNX reference export script (syntax/help checked; real-model execution pending).
 - [ ] Inspect the exact Civitai LoRA version and tensor keys.
 - [ ] Verify the Personal Ami LoRA against the package's WAI Illustrious v17 FP16 graph.
 - [ ] Prototype ExecuTorch WebGPU export for the SDXL UNet and verify required operator coverage.
