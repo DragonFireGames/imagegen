@@ -249,6 +249,7 @@ Both routes target browser-native inference: model computation occurs inside the
 ## Current implementation
 
 - index.html: separate experiment page with model/runtime research notes and a local LoRA inspection utility.
+- heavy-model-test-lock.js: page-wide lock that rejects overlapping CLIP, VAE, prompt-conditioning and UNet smoke tests before they download weights or allocate WebGPU sessions.
 - heavy-model-test-lock.js: shared page-wide lock prevents CLIP-bigG, VAE, prompt-conditioning and multi-gigabyte UNet tests from allocating GPU sessions concurrently.
 - lora-inspector.js: reads only the first safetensors header block and reports tensor names, shapes, dtypes, byte-range validity, common LoRA A/B or down/up pairs, rank-dimension mismatches, possible extended adapter tensors, and embedded training metadata. It does not upload or deserialize tensor payloads.
 - lora-weight-map-inspector.js: new local-header-only mapping test; matches Personal Ami pair stems to CLIP-L, CLIP-bigG and all three UNet FP16 weights-index maps, checks Torch-shape compatibility and transposition flags; it does not read tensor payloads or edit ONNX shards; awaits browser results.
@@ -265,6 +266,7 @@ Both routes target browser-native inference: model computation occurs inside the
 - All component/UNet/prompt smoke tests acquire the same shared lock before any download or WebGPU allocation and release it in `finally`; concurrent heavy tests are refused with a visible status error.
 - vae-encoder-smoke-test.js: isolated zero-image FP16 VAE encoder inference; discovers input shape through session metadata, checks every output for finite FP16 values; awaits browser validation.
 - prompt-conditioning-smoke-test.js: real prompt through both Transformers.js tokenizers and CLIP encoders sequentially; assembles SDXL hidden states [1,77,2048] and pooled embedding [1,1280]; awaits browser validation.
+- scheduler-math-smoke-test.js: loads the pinned Illustrious v0.1 scheduler config and runs deterministic synthetic Euler ancestral steps; checks timesteps, sigma monotonicity, sigma-up/down identity, repeatability and finite output; no ONNX or GPU allocation.
 - Full image-generation inference is not wired up yet.
 
 ## Offline LoRA fusion and ONNX reference export
@@ -297,13 +299,13 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [ ] Run the VAE encoder zero-image WebGPU smoke test; inspect output tensor contract before attempting encode/decode round-trip.
 - [ ] Run real-prompt dual-tokenizer + CLIP conditioning test; verify the combined SDXL tensors [1,77,2048] and [1,1280].
 - [ ] Run header-only Personal Ami → ONNX weights-index mapping and inspect unmatched or shape-incompatible pairs across all 5 indexed components.
-- [ ] After the complete chain and text conditioning pass, add scheduler and denoising-loop tests.
+- [ ] Run the scheduler-only Euler ancestral math test against the Illustrious beta/timestep config; then integrate scheduler with the real three-part UNet chain after that chain passes.
 - [x] Add an offline Diffusers fusion / generic ONNX reference export script (Python syntax and `--help` pass; synthetic BF16 Safetensors test reproduced the real scan's 2,958 keys, 986 rank-32 pairs, 986 alpha keys, and three component counts; deliberately malformed rank was rejected). Real Personal Ami loading/fusion is still pending.
 - [x] Inspect the exact Personal Ami LoRA header and tensor-key layout in the browser (actual report recorded above).
 - [ ] Load and fuse the actual Personal Ami tensors in Diffusers against the official Illustrious v0.1 base.
 - [ ] Verify the Personal Ami LoRA against the package's WAI Illustrious v17 FP16 graph (this derivative is not the exact v0.1 training checkpoint).
 - [ ] Prototype ExecuTorch WebGPU export for the SDXL UNet and verify required operator coverage.
-- [ ] Complete the staged A → B → C WebGPU denoiser chain, validate real prompt conditioning, and add the SDXL scheduler plus iterative denoising loop.
+- [ ] Complete the staged A → B → C WebGPU denoiser chain, validate real prompt conditioning and VAE encode/decode compatibility, then connect the scheduler and iterative denoising loop.
 - [ ] Run a baseline prompt in browser WebGPU without a LoRA.
 - [ ] Match a reference image from Diffusers within expected precision differences.
 - [ ] Apply Personal Ami LoRA at strengths 0.6, 0.75, and 0.9; compare against Diffusers.
