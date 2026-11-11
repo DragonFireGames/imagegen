@@ -161,7 +161,9 @@ def main() -> int:
         raise SystemExit("Only .safetensors LoRA files are accepted by this script.")
     if not 0.0 <= args.strength <= 2.0:
         raise SystemExit("--strength must be between 0.0 and 2.0.")
-    if output_dir.exists() and any(output_dir.iterdir()):
+    if output_dir.exists() and not output_dir.is_dir():
+        raise SystemExit(f"Output path exists and is not a directory: {output_dir}")
+    if output_dir.is_dir() and any(output_dir.iterdir()):
         raise SystemExit(f"Output directory must be empty: {output_dir}")
     if output_dir == Path.cwd().resolve() or Path.cwd().resolve() in output_dir.parents:
         # Keeping the output outside this repo is intentional: exports are multi-GB
