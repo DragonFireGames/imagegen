@@ -66,7 +66,7 @@ function finiteFp16(tensor, label, shape) {
 }
 
 async function loadTokenizer(subfolder) {
-  env.remotePathTemplate = "{model}/resolve/{revision}/" + subfolder + "/";
+  env.remotePathTemplate = "{model}/resolve/{revision}/" + subfolder + "/{file}";
   return AutoTokenizer.from_pretrained(MODEL_ID, { revision: "main" });
 }
 
