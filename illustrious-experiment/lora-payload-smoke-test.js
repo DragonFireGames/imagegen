@@ -55,6 +55,22 @@ async function readSafetensorsHeader(file) {
   const dataStart = 8 + Number(headerLength);
   const bytes = await file.slice(8, dataStart).arrayBuffer();
   const header = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  if (!header || typeof header !== "object" || Array.isArray(header)) {
+    throw new Error("Safetensors header must be a JSON object.");
+  }
+  const dataBytes = file.size - dataStart;
+  for (const [name, info] of Object.entries(header)) {
+    if (name === "__metadata__") continue;
+    if (!info || !Array.isArray(info.shape) ||
+        !info.shape.every(dimension => Number.isSafeInteger(dimension) && dimension >= 0)) {
+      throw new Error("Invalid shape in safetensors header: " + name);
+    }
+    if (!Array.isArray(info.data_offsets) || info.data_offsets.length !== 2 ||
+        !info.data_offsets.every(offset => Number.isSafeInteger(offset) && offset >= 0) ||
+        info.data_offsets[1] < info.data_offsets[0] || info.data_offsets[1] > dataBytes) {
+      throw new Error("Invalid payload range in safetensors header: " + name);
+    }
+  }
   return { header, dataStart };
 }
 
@@ -118,6 +134,10 @@ async function readTensorPayload(file, dataStart, info, name) {
   }
   const start = info.data_offsets[0];
   const end = info.data_offsets[1];
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
+      start < 0 || end < start || dataStart + end > file.size) {
+    throw new Error(name + " has an invalid or out-of-file byte range.");
+  }
   const expectedElements = info.shape.reduce((product, dimension) => product * dimension, 1);
   const expectedBytes = expectedElements * 2;
   if (end - start !== expectedBytes) {
