@@ -33,7 +33,7 @@ function configuredPath(configKey, envKey, fallback) {
 const paths = {
   cli: configuredPath("sdCli", "SD_CLI", ".local/stable-diffusion.cpp/build/bin/sd-cli"),
   diffusion: configuredPath("diffusionModel", "QWEN_DIFFUSION_MODEL", ".local/qwen-image-2.1/qwen-image-2.1-UC-Q4_K_M.gguf"),
-  textEncoder: configuredPath("textEncoder", "QWEN_TEXT_ENCODER", ".local/qwen-image-2.1/Qwen3VL-8B-Instruct-Q4_K_M.gguf"),
+  textEncoder: configuredPath("textEncoder", "QWEN_TEXT_ENCODER", ".local/qwen-image-2.1/Qwen3-VL-8B-Instruct-Q4_K_M.gguf"),
   vae: configuredPath("vae", "QWEN_VAE", ".local/qwen-image-2.1/qwen_image_2.1_vae_bf16.safetensors"),
   offloadToCpu: localConfig.offloadToCpu !== false
 };
