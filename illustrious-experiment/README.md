@@ -339,8 +339,8 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 - [ ] Validate VAE encode/decode scaling and round-trip compatibility independently; successful image generation confirms the chosen decode scale can produce a visually coherent image but is not a formal encoder/decoder round-trip test.
 - [x] Run a baseline prompt in browser WebGPU without a LoRA; first 1024×1024, 28-step, CFG 5, seed 1337 image generated successfully and saved as a 1.8 MiB PNG.
 - [ ] Match a reference image from Diffusers within expected precision differences.
-- [ ] Run the single-pair CLIP-L ONNX shard patch test and verify that the patched Blob loads and changes the graph output.
-- [ ] Extend the validated patcher to all 980 mapped targets, including both text encoders and the three UNet partitions.
+- [x] Run the single-pair CLIP-L ONNX shard patch test; the patched Blob loaded and changed the graph output.\n- [ ] Run the full 66-pair CLIP-L ONNX patch test and verify the complete text-encoder component.
+- [ ] Extend the validated patcher from CLIP-L to CLIP-bigG and the three UNet partitions (all 980 indexed targets total).
 - [ ] Compare full-adapter browser outputs at strengths 0.6, 0.75, and 0.9 against a Diffusers reference.
 - [ ] Investigate quantized UNet execution and adapter application.
 - [x] Add dimension controls (512–1024 multiples of 64), negative prompt, CFG, Euler ancestral steps, seed, progress, cancellation, performance logs, and PNG output.
