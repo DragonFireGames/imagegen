@@ -249,6 +249,7 @@ Both routes target browser-native inference: model computation occurs inside the
 ## Current implementation
 
 - index.html: separate experiment page with model/runtime research notes and a local LoRA inspection utility.
+- heavy-model-test-lock.js: shared page-wide lock prevents CLIP-bigG, VAE, prompt-conditioning and multi-gigabyte UNet tests from allocating GPU sessions concurrently.
 - lora-inspector.js: reads only the first safetensors header block and reports tensor names, shapes, dtypes, byte-range validity, common LoRA A/B or down/up pairs, rank-dimension mismatches, possible extended adapter tensors, and embedded training metadata. It does not upload or deserialize tensor payloads.
 - lora-weight-map-inspector.js: new local-header-only mapping test; matches Personal Ami pair stems to CLIP-L, CLIP-bigG and all three UNet FP16 weights-index maps, checks Torch-shape compatibility and transposition flags; it does not read tensor payloads or edit ONNX shards; awaits browser results.
 - tools/fuse_lora_and_export.py: validates the safetensors header, loads its tensors as a Diffusers state dict, verifies that UNet and both text encoders receive the adapter, then fuses it at the selected strength. The real Personal Ami header report is recorded above; actual full Diffusers fusion still needs to be run.
@@ -261,8 +262,7 @@ Both routes target browser-native inference: model computation occurs inside the
 - unet-a-smoke-test.js: passed in the user's browser; 2.32 GiB across 3 shards, inference 5.6 s, total 100.5 s, 26,871,040 FP16 output values across all 11 correctly shaped and finite outputs; session released.
 - unet-ab-chain-test.js: passed in the user's browser; A→B actual tensor handoff, 8.8 MiB intermediate data, A 106.5 s, B 150.5 s, total 275.9 s; B hidden_out FP16 [1,1280,64,64] finite.
 - unet-abc-chain-test.js: sequential full A→B→C chain; keeps only A's required CPU-side FP16 outputs while releasing A and B before loading the next partition; verifies final FP16 out_sample [1,4,128,128]; awaits browser validation.
-- vae-encoder-smoke-test.js: isolated zero-image FP16 VAE encoder inference; discovers input shape through session metadata, checks every output for finite FP16 values; awaits browser validation.
-- prompt-conditioning-smoke-test.js: real prompt through both Transformers.js tokenizers and CLIP encoders sequentially; assembles SDXL hidden states [1,77,2048] and pooled embedding [1,1280]; awaits browser validation.
+- All component/UNet/prompt smoke tests acquire the same shared lock before any download or WebGPU allocation and release it in `finally`; concurrent heavy tests are refused with a visible status error.
 - vae-encoder-smoke-test.js: isolated zero-image FP16 VAE encoder inference; discovers input shape through session metadata, checks every output for finite FP16 values; awaits browser validation.
 - prompt-conditioning-smoke-test.js: real prompt through both Transformers.js tokenizers and CLIP encoders sequentially; assembles SDXL hidden states [1,77,2048] and pooled embedding [1,1280]; awaits browser validation.
 - Full image-generation inference is not wired up yet.
