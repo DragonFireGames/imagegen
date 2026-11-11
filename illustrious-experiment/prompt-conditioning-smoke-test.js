@@ -1,4 +1,5 @@
 import * as ort from "../vendor/onnxruntime-web/ort.webgpu.min.mjs";
+import { acquireHeavyModelTest, releaseHeavyModelTest } from "./heavy-model-test-lock.js";
 import { AutoTokenizer, env } from "../vendor/transformers/transformers.js";
 
 const MODEL_ID = "aaaaaeeeee/blip-sdxl-anime-wai-illustrious17";
@@ -100,7 +101,10 @@ button.addEventListener("click", async () => {
   let sessionL;
   let sessionG;
 
+  let lockAcquired = false;
   try {
+    acquireHeavyModelTest("dual-CLIP prompt conditioning");
+    lockAcquired = true;
     const prompt = promptInput.value.trim();
     if (!prompt) throw new Error("Enter a prompt before testing text conditioning.");
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser.");
@@ -221,6 +225,7 @@ button.addEventListener("click", async () => {
         console.warn("[Illustrious] Could not release CLIP-bigG session:", error);
       }
     }
+    if (lockAcquired) releaseHeavyModelTest("dual-CLIP prompt conditioning");
     button.disabled = false;
   }
 });
