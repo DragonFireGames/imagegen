@@ -143,10 +143,16 @@ The page now includes a **CLIP-L ONNX WebGPU smoke test** in
 and runs one dummy-token inference. It does not download the bigG encoder,
 UNet, VAE, or Personal Ami LoRA, and it does not create an image.
 
-A successful run will validate one real SDXL graph, its external-data mapping,
-and its WebGPU operator path. It does not validate the other encoders, the UNet,
-the scheduler, full-model memory use, or LoRA injection. The browser test has
-been implemented but still needs to be run in the user's browser.
+The user has now run this test successfully in Chrome. It loaded the CLIP-L
+graph and its 221.3 MiB component download, created a WebGPU session, and ran
+one dummy-token inference. The output was `penultimate_hidden_state`, shape
+`[1, 77, 768]`, dtype `float16`, with all finite values; load plus inference
+took 15.6 seconds. This validates CLIP-L only, not the other encoder, UNet,
+scheduler, full-model memory use, or LoRA injection.
+
+A second independent test is now available for the VAE decoder. It loads about
+99 MB of graph and weights and runs a zero-latent decode. It has not yet been
+run in the user's browser.
 
 ## Runtime decision
 
@@ -173,7 +179,8 @@ Both routes target browser-native inference: model computation occurs inside the
 - tools/fuse_lora_and_export.py: offline Diffusers LoRA fusion with optional Optimum SDXL ONNX export. It has not been run against the real Personal Ami weights.
 - tools/README.md: isolated environment and export instructions.
 - runtime-probe.js: reports WebGPU capabilities and explicitly flags the built-in ORT LoRA API as WASM-only.
-- component-smoke-test.js: loads the candidate pack's CLIP-L graph and runs one dummy-token WebGPU inference; this has not yet been run in the user's browser.
+- component-smoke-test.js: CLIP-L graph and dummy-token WebGPU inference; passed in the user's browser (221.3 MiB, 15.6 s, output [1, 77, 768], FP16, finite).
+- vae-smoke-test.js: loads only the VAE decoder and runs a zero-latent WebGPU inference; awaits browser validation.
 - Full image-generation inference is not wired up yet.
 
 ## Offline LoRA fusion and ONNX reference export
@@ -196,7 +203,9 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 
 - [x] Identify an Illustrious v0.1-derived browser ONNX package with FP16 graph weights-index metadata and inspect its current manifest.
 - [x] Run the browser capability probe: the user's browser reports WebGPU, Float16Array, ONNX Runtime Web 1.31.1, and 4 GiB maximum buffer/binding limits.
-- [ ] Run the 232 MB CLIP-L ONNX WebGPU smoke test and verify its external-data shard mapping.
+- [x] Run the 232 MB CLIP-L ONNX WebGPU smoke test: success; output `[1, 77, 768]`, FP16, all finite, 15.6 seconds.
+- [ ] Run the ~99 MB VAE decoder ONNX WebGPU smoke test.
+- [ ] Inspect CLIP-bigG and all three split UNet graphs before loading them.
 - [x] Add an offline Diffusers fusion / generic ONNX reference export script (Python syntax and `--help` pass; synthetic BF16 Safetensors test reproduced the real scan's 2,958 keys, 986 rank-32 pairs, 986 alpha keys, and three component counts; deliberately malformed rank was rejected). Real Personal Ami loading/fusion is still pending.
 - [x] Inspect the exact Personal Ami LoRA header and tensor-key layout in the browser (actual report recorded above).
 - [ ] Load and fuse the actual Personal Ami tensors in Diffusers against the official Illustrious v0.1 base.
