@@ -366,7 +366,7 @@ async function encodePrompts(manifest, prompt, negativePrompt) {
   encoderHidden.set(negative, 0);
   encoderHidden.set(positive, negative.length);
   const textEmbeds = new Float16Array(2 * 1280);
-  textEmbeds.set(negativePooled, 0);
+  textEmbeds.set(negativePooledG, 0);
   textEmbeds.set(pooledG, 1280);
   log("Classifier-free conditioning ready · encoder_hidden_states [2,77,2048] · text_embeds [2,1280].");
   return { encoderHidden, textEmbeds };
