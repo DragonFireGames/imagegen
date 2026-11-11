@@ -77,7 +77,9 @@
       <h2><a href="https://github.com/d0grr/generate-ai-images" target="_blank" rel="noreferrer">Browser SDXL · ONNX WebGPU</a></h2>
       <p>A separate project already runs SDXL in Chrome with a JavaScript pipeline, OPFS caching, FP16 and INT4 UNet variants. Its inpainting example fuses a specific LoRA before export; it does not demonstrate arbitrary live LoRA swapping.</p>
       <p>We can adapt its SDXL pipeline architecture, then validate the Personal Ami LoRA against Illustrious. This is a reference implementation, not a dependency.</p>
-    </    <section class="panel">
+    </section>
+
+    <section class="panel">
       <p class="eyebrow">Actual Personal Ami header scan</p>
       <h2>Adapter structure confirmed</h2>
       <p>The browser inspector has now been run against <code>personal_ami_style_illustrious-000006.safetensors</code>. These are the reported header statistics; the multi-gigabyte base model and LoRA tensor payloads have not been uploaded to this repository.</p>
@@ -96,8 +98,6 @@
       </div>
       <p class="notice">All three SDXL components are present. The embedded <code>ss_base_model_version=sdxl_base_v1-0</code> tag is generic SDXL metadata; the author’s model listing says the LoRA was trained on Illustrious 0.1. The exporter now loads the local Safetensors state dict and explicitly checks all three components before fusion.</p>
     </section>
-
-section>
 
     <section class="panel">
       <p class="eyebrow">Local-only utility</p>
