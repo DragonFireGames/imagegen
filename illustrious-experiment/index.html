@@ -89,6 +89,20 @@
       <p><a href="https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0" target="_blank" rel="noreferrer">Original Illustrious XL v0.1 base</a> · <a href="https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17/blob/main/LICENSE.txt" target="_blank" rel="noreferrer">Candidate pack license</a></p>
     </section>
 
+    <section class="panel" id="model-cache">
+      <p class="eyebrow">Offline model storage</p>
+      <h2>Model downloads & portable cache</h2>
+      <p>Prepare the complete generation model up front: both CLIP encoders, all three UNet partitions, VAE decoder, tokenizer assets, indexes, and ONNX graphs. Files are verified against the model manifest and stored in this browser's persistent Cache Storage. The first preparation may download several GiB; later generations reuse the cache.</p>
+      <div class="generator-actions">
+        <button class="button" id="prepareModelCache" type="button">Download & cache all model files</button>
+        <button class="button secondary-button" id="exportModelBundle" type="button">Export portable model bundle</button>
+        <button class="button secondary-button" id="importModelBundle" type="button">Import model bundle</button>
+        <input id="importModelBundleFile" type="file" accept=".wkimodel,application/octet-stream" hidden>
+      </div>
+      <p class="status" id="modelCacheStatus" data-type="info" aria-live="polite">Model files are currently fetched as needed. Prepare the cache once to front-load downloads.</p>
+      <p class="notice">The portable <code>.wkimodel</code> bundle is a single-file archive containing the verified model assets. It can be moved to another browser profile or computer and imported without downloading each model shard again. Keep enough disk space for both the bundle and browser cache; the bundle may be several GiB. Your Personal Ami .safetensors file is not included.</p>
+    </section>
+
     <section class="panel" id="generator">
       <p class="eyebrow">Full browser-side inference</p>
       <h2>Generate an image</h2>
