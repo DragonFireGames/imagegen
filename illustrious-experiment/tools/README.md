@@ -6,9 +6,12 @@ PyTorch, Diffusers, or an inference server.
 ## What the exporter does
 
 `fuse_lora_and_export.py` loads the official Diffusers pipeline
-`OnomaAIResearch/Illustrious-xl-early-release-v0`, loads a local SDXL
-`.safetensors` adapter, fuses it into the model at a chosen strength using
-Diffusers' safe-fusing path, and optionally runs Optimum's SDXL ONNX exporter.
+`OnomaAIResearch/Illustrious-xl-early-release-v0`, inspects the local
+`.safetensors` header, loads its tensors with `safetensors.torch.load_file()`
+as a state dictionary, preserves Kohya `.alpha` entries for Diffusers conversion,
+verifies that UNet and both text encoders receive the adapter, and fuses it at
+a chosen strength with Diffusers' safe-fusing path. It can optionally run
+Optimum's SDXL ONNX exporter.
 
 Example (use a machine or notebook with enough RAM/disk for the full SDXL model). The script defaults to BF16 to match the published Illustrious v0.1 weights; choose `--dtype float16` for hardware with limited BF16 support. `--device auto` chooses CUDA, then Apple MPS, then CPU.
 
