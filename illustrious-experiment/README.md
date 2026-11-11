@@ -6,6 +6,21 @@ This experiment is intentionally isolated from the working FLUX.2 Klein generato
 
 [Personal Ami Style - Illustrious](https://civitai.com/models/1309467/personal-ami-style-illustrious) is listed as an Illustrious LoRA trained on Illustrious XL 0.1. Its mirrored listing gives the trigger personal ami and suggests a strength of 0.6–0.9. The mirror identifies its own copy as a reprint, so the original Civitai page remains the source of record.
 
+## Actual Personal Ami adapter header
+
+The user ran the browser inspector on `personal_ami_style_illustrious-000006.safetensors` and supplied this real report:
+
+- File size: 217.9 MB
+- 2,958 tensors, 114,017,242 parameters
+- 986 complete LoRA down/up pairs; zero incomplete pairs and zero rank-shape mismatches
+- Component tensor counts: text encoder 1 = 216, text encoder 2 = 576, UNet = 2,166
+- Embedded metadata: `ss_sd_model_name=889818.safetensors`, `ss_base_model_version=sdxl_base_v1-0`, `ss_network_module=networks.lora`, `ss_network_dim=32`, `ss_network_alpha=16`, `ss_v2=False`, `modelspec.architecture=stable-diffusion-xl-v1-base/lora`, `modelspec.title=personal_ami_style_illustrious`
+- Sample keys use Kohya-style `lora_te1_`, `lora_te2_`, and `lora_unet_` prefixes with BF16 down/up tensors.
+
+The component counts divide evenly into 72 text_encoder pairs, 192 text_encoder_2 pairs, and 722 UNet pairs (986 total), with one scalar alpha entry per pair implied by the 2,958-tensor total. The author listing mirrored by TensorHub explicitly says the LoRA was trained on Illustrious 0.1 and recommends `personal ami` with strength 0.6–0.9. The embedded `sdxl_base_v1-0` value is the generic SDXL base-version tag; it does not by itself identify the specific fine-tuned checkpoint.
+
+**Compatibility assessment:** the real file has the expected SDXL architecture and all three adapter groups, in the Kohya layout Diffusers knows how to convert. This is strong evidence that it is loadable as an SDXL LoRA. The remaining test is an actual Diffusers load/fuse against the official Illustrious v0.1 pipeline, followed by output comparison. The user has not uploaded the raw model file into this repository or chat runtime; the report above is the user's browser-side scan.
+
 ## Browser-native runtime candidates
 
 ### Option A: pre-exported ONNX + ONNX Runtime WebGPU
@@ -69,6 +84,7 @@ Both routes target browser-native inference: model computation occurs inside the
 
 - index.html: separate experiment page with model/runtime research notes and a local LoRA inspection utility.
 - lora-inspector.js: reads only the first safetensors header block and reports tensor names, shapes, dtypes, byte-range validity, common LoRA A/B or down/up pairs, rank-dimension mismatches, possible extended adapter tensors, and embedded training metadata. It does not upload or deserialize tensor payloads.
+- tools/fuse_lora_and_export.py: validates the safetensors header, loads its tensors as a Diffusers state dict, verifies that UNet and both text encoders receive the adapter, then fuses it at the selected strength. The real Personal Ami header report is recorded above; actual full Diffusers fusion still needs to be run.
 - tools/fuse_lora_and_export.py: offline Diffusers LoRA fusion with optional Optimum SDXL ONNX export. It has not been run against the real Personal Ami weights.
 - tools/README.md: isolated environment and export instructions.
 - No image-generation inference is wired up yet.
@@ -93,8 +109,9 @@ The safetensors header can show adapter naming and tensor dimensions, but it doe
 
 - [x] Identify an Illustrious v0.1-derived browser ONNX package with FP16 graph weights-index metadata.
 - [x] Add an offline Diffusers fusion / generic ONNX reference export script (Python syntax/help and mocked end-to-end control flow checked; real-model execution pending).
-- [ ] Inspect the exact Civitai LoRA version and tensor keys.
-- [ ] Verify the Personal Ami LoRA against the package's WAI Illustrious v17 FP16 graph.
+- [x] Inspect the exact Personal Ami LoRA header and tensor-key layout in the browser (actual report recorded above).
+- [ ] Load and fuse the actual Personal Ami tensors in Diffusers against the official Illustrious v0.1 base.
+- [ ] Verify the Personal Ami LoRA against the package's WAI Illustrious v17 FP16 graph (this derivative is not the exact v0.1 training checkpoint).
 - [ ] Prototype ExecuTorch WebGPU export for the SDXL UNet and verify required operator coverage.
 - [ ] Build or adapt the ONNX Runtime WebGPU execution pipeline for the split SDXL UNet graphs.
 - [ ] Run a baseline prompt in browser WebGPU without a LoRA.
