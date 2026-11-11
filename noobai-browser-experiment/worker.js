@@ -22,6 +22,19 @@ function status(label, extra = "") {
   post("status", { label, extra });
 }
 
+function perf(label, started, details = "") {
+  const elapsed = performance.now() - started;
+  post("status", {
+    label: "PERF · " + label,
+    extra: elapsed.toFixed(1) + " ms" + (details ? " · " + details : ""),
+  });
+  return elapsed;
+}
+
+function perfMark(label, details = "") {
+  post("status", { label: "PERF · " + label, extra: details });
+}
+
 function toBigIntIds(tokenizer, prompt) {
   return Promise.resolve(tokenizer._call(prompt, {
     padding: "max_length",
@@ -37,10 +50,13 @@ function toBigIntIds(tokenizer, prompt) {
 async function loadTokenizers() {
   if (!tokenizerPromise) {
     const loadOne = async (folder, label) => {
+      const tokenizerStarted = performance.now();
       const loadJson = async (filename) => {
         const url = new URL(folder + "/" + filename, activePack.baseUrl);
         status("Downloading " + label, filename);
+        const fetchStarted = performance.now();
         const response = await fetch(url);
+        perf(label + " fetch " + filename, fetchStarted, response.status + " · " + (response.headers.get("content-length") || "unknown") + " bytes");
         if (!response.ok) {
           throw new Error("Could not load bundled " + label + " asset " + filename +
             " (HTTP " + response.status + "): " + url);
@@ -59,7 +75,9 @@ async function loadTokenizers() {
       if (!tokenizerJSON || typeof tokenizerJSON !== "object" || !tokenizerJSON.model) {
         throw new Error("Bundled tokenizer " + folder + "/tokenizer.json has no tokenizer model.");
       }
-      return new PreTrainedTokenizer(tokenizerJSON, tokenizerConfig);
+      const tokenizer = new PreTrainedTokenizer(tokenizerJSON, tokenizerConfig);
+      perf(label + " construction", tokenizerStarted, "vocab " + Object.keys(tokenizerJSON.model.vocab || {}).length + " entries");
+      return tokenizer;
     };
 
     tokenizerPromise = Promise.all([
@@ -74,21 +92,28 @@ async function loadTokenizers() {
 }
 
 async function createSession(componentName, provider) {
+  const sessionStarted = performance.now();
   const component = activePack.manifest.components[componentName];
   if (!component) throw new Error("The model manifest is missing component: " + componentName);
   const packVersion = activePack.manifest.packId || activePack.manifest.sourceRevision || "unversioned";
+  const graphStarted = performance.now();
   const graphFile = await getCachedModelFile(activePack.baseUrl, component.graphBytesAsset, packVersion);
+  perf(componentName + " graph cache/read", graphStarted, (graphFile.size / 1024 ** 2).toFixed(1) + " MiB");
   const externalData = [];
   for (const shard of component.externalData || []) {
+    const shardStarted = performance.now();
     const data = await getCachedModelFile(activePack.baseUrl, shard.asset, packVersion);
+    perf(componentName + " shard " + shard.asset, shardStarted, (data.size / 1024 ** 2).toFixed(1) + " MiB");
     externalData.push({ path: shard.path, data });
   }
   status("Preparing " + componentName.replaceAll("_", " "), provider === "webgpu" ? "WebGPU" : "WebAssembly");
-  return ort.InferenceSession.create(await graphFile.arrayBuffer(), {
+  const session = await ort.InferenceSession.create(await graphFile.arrayBuffer(), {
     executionProviders: [provider],
     graphOptimizationLevel: componentName.startsWith("text_encoder") ? "basic" : "all",
     externalData,
   });
+  perf(componentName + " session initialization", sessionStarted, provider);
+  return session;
 }
 
 function asFloat32(tensor) {
@@ -147,10 +172,14 @@ function tensorF16(values, dims) {
 }
 
 async function encodeWithSession(session, tokenizer, prompt, withPooled = false) {
+  const tokenizeStarted = performance.now();
   const ids = await toBigIntIds(tokenizer, prompt);
+  perf("tokenization", tokenizeStarted, prompt.length + " prompt characters");
+  const encodeStarted = performance.now();
   const outputs = await session.run({
     input_ids: new ort.Tensor("int64", ids, [1, 77]),
   });
+  perf("text encoder inference", encodeStarted, withPooled ? "hidden + pooled outputs" : "hidden output");
   const result = { hidden: asFloat32(outputs.hidden_states) };
   if (withPooled) result.pooled = asFloat32(outputs.text_embeds);
   return result;
@@ -169,7 +198,9 @@ function combineTextEmbeddings(hidden1, hidden2, pooled) {
 }
 
 async function encodePrompts(prompt, negativePrompt, tokenizers, cfgScale) {
+  const promptStarted = performance.now();
   const runNegative = Boolean(negativePrompt.trim()) && cfgScale > 1;
+  perfMark("prompt encoding started", "negative prompt " + (runNegative ? "enabled" : "disabled"));
   let positive1, negative1, positive2, negative2;
   status("Loading CLIP-L encoder", "WebAssembly · 246 MB source weights");
   const encoder1 = await createSession("text_encoder", "wasm");
@@ -201,6 +232,7 @@ async function encodePrompts(prompt, negativePrompt, tokenizers, cfgScale) {
   const negative = runNegative
     ? combineTextEmbeddings(negative1.hidden, negative2.hidden, negative2.pooled)
     : { hidden: new Float32Array(77 * 2048), pooled: new Float32Array(1280) };
+  perf("both CLIP encoders total", promptStarted);
   return { positive, negative };
 }
 
@@ -333,30 +365,45 @@ async function generate(message) {
   if (!Number.isFinite(cfgScale) || cfgScale < 1 || cfgScale > 12) throw new Error("CFG must be 1–12.");
 
   const started = performance.now();
+  perfMark("generation started", width + " × " + height + " · " + steps + " steps · CFG " + cfgScale);
   const seed = requestedSeed < 0 ? Math.floor(Math.random() * 2147483647) : requestedSeed;
+  perfMark("seed selected", String(seed));
+  const tokenizerStarted = performance.now();
   const tokenizers = await loadTokenizers();
+  perf("load both tokenizers", tokenizerStarted);
   const { positive, negative } = await encodePrompts(prompt, negativePrompt, tokenizers, cfgScale);
 
   const latentHeight = height / 8;
   const latentWidth = width / 8;
   const latentSize = 4 * latentHeight * latentWidth;
+  perfMark("latent allocation", latentSize.toLocaleString() + " values · " + (latentSize * 4 / 1024 ** 2).toFixed(1) + " MiB FP32");
   const rng = makeRng(seed);
+  const schedulerStarted = performance.now();
   const { sigmas, timesteps, initNoiseSigma } = makeSigmas(activePack.manifest.scheduler || {}, steps);
+  perf("scheduler setup", schedulerStarted, "initial sigma " + initNoiseSigma.toFixed(4));
   let latents = makeNoise(latentSize, rng);
   for (let i = 0; i < latentSize; i++) latents[i] *= initNoiseSigma;
 
   status("Loading SDXL U-Net", "WebGPU");
+  const unetStarted = performance.now();
   const unet = await createSession("unet", "webgpu");
+  perfMark("denoising loop started", "U-Net ready; " + (cfgScale > 1 && negativePrompt.trim() ? "2 predictions per step" : "1 prediction per step"));
   try {
     for (let step = 0; step < steps; step++) {
+      const stepStarted = performance.now();
       if (operationController?.signal.aborted) throw new Error("Generation cancelled.");
       const sigma = sigmas[step];
       const nextSigma = sigmas[step + 1];
+      const conditionalStarted = performance.now();
       const conditional = await predictNoise(unet, latents, sigma, timesteps[step], positive, height, width);
+      const conditionalMs = performance.now() - conditionalStarted;
+      let unconditionalMs = 0;
       let prediction = conditional;
       const useCFG = cfgScale > 1 && Boolean(negativePrompt.trim());
       if (useCFG) {
+        const unconditionalStarted = performance.now();
         const unconditional = await predictNoise(unet, latents, sigma, timesteps[step], negative, height, width);
+        unconditionalMs = performance.now() - unconditionalStarted;
         prediction = new Float32Array(latentSize);
         for (let i = 0; i < latentSize; i++) {
           prediction[i] = unconditional[i] + cfgScale * (conditional[i] - unconditional[i]);
@@ -383,25 +430,37 @@ async function generate(message) {
         const dt = nextSigma - sigma;
         for (let i = 0; i < latentSize; i++) latents[i] += prediction[i] * dt;
       }
+      const stepMs = performance.now() - stepStarted;
+      if (step === 0 || (step + 1) % 5 === 0 || step + 1 === steps) {
+        perfMark("U-Net step " + (step + 1) + "/" + steps,
+          "total " + stepMs.toFixed(0) + " ms · conditional " + conditionalMs.toFixed(0) + " ms" +
+          (useCFG ? " · unconditional " + unconditionalMs.toFixed(0) + " ms" : "") +
+          " · sigma " + sigma.toFixed(4));
+      }
       post("step", { step: step + 1, total: steps, seed });
     }
   } finally {
     await unet.release();
+    perf("U-Net load + denoising + release", unetStarted);
   }
 
   status("Loading VAE decoder", "WebGPU");
+  const vaeStarted = performance.now();
   const vae = await createSession("vae_decoder", "webgpu");
   let decoded;
   try {
     const scaledLatents = new Float32Array(latents.length);
     const vaeScale = Number(activePack.manifest.vaeScalingFactor || 0.13025);
     for (let i = 0; i < latents.length; i++) scaledLatents[i] = latents[i] / vaeScale;
+    const decodeStarted = performance.now();
     const output = await vae.run({
       latent_sample: new ort.Tensor("float32", scaledLatents, [1, 4, latentHeight, latentWidth]),
     });
+    perf("VAE decode inference", decodeStarted, width + " × " + height);
     decoded = output.sample;
   } finally {
     await vae.release();
+    perf("VAE session load + decode + release", vaeStarted);
   }
 
   const image = asFloat32(decoded);
@@ -413,6 +472,8 @@ async function generate(message) {
     if (!Number.isFinite(image[i])) throw new Error("VAE output contains a non-finite value at index " + i + ".");
   }
   const outputBuffer = image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength);
+  perf("total generation", started, width + " × " + height + " · seed " + seed);
+  perfMark("output prepared", (outputBuffer.byteLength / 1024 ** 2).toFixed(1) + " MiB RGB float32");
   post("result", {
     buffer: outputBuffer,
     dims: [1, 3, height, width],
@@ -432,6 +493,7 @@ self.onmessage = async (event) => {
       const baseUrl = message.baseUrl.trim().replace(/\/+$/, "");
       if (!baseUrl.startsWith("https://")) throw new Error("Use an HTTPS model-pack URL.");
       status("Reading NoobAI model manifest");
+      const packLoadStarted = performance.now();
       activePack = await loadModelPack(baseUrl, (progress) => {
         const percent = progress.total ? Math.round(progress.loaded / progress.total * 100) : 0;
         post("progress", {
@@ -441,6 +503,7 @@ self.onmessage = async (event) => {
           percent,
         });
       }, operationController.signal);
+      perf("model pack load/cache", packLoadStarted, (activePack.cachedBytes / 1024 ** 3).toFixed(2) + " GiB cached");
       post("model-ready", {
         model: activePack.manifest.model,
         totalBytes: activePack.cachedBytes,
