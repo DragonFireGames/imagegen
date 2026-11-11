@@ -64,7 +64,7 @@ button.addEventListener("click", async () => {
 
     addRow("Model pack", manifest.packageId || "WAI Illustrious v17");
     addRow("Component", "CLIP-L text encoder");
-    addRow("External weights", formatBytes(component.bytes));
+    addRow("Component download", formatBytes(component.bytes));
     addRow("Execution provider", "WebGPU");
     addRow("Graph", component.onnx);
 
@@ -75,7 +75,7 @@ button.addEventListener("click", async () => {
       data: MODEL_BASE + path
     }));
 
-    setStatus("Loading CLIP-L into ONNX Runtime WebGPU. This downloads about 232 MB of weights; it does not download the UNet or the rest of the model.");
+    setStatus("Loading CLIP-L into ONNX Runtime WebGPU. This downloads about 232 MB of graph plus weights; it does not download the UNet or the rest of the model.");
     const started = performance.now();
     session = await ort.InferenceSession.create(MODEL_BASE + component.onnx, {
       executionProviders: ["webgpu"],
