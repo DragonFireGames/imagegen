@@ -7,7 +7,7 @@ ort.env.wasm.numThreads = 1;
 ort.env.wasm.proxy = false;
 ort.env.logLevel = "warning";
 transformersEnv.useBrowserCache = true;
-transformersEnv.allowRemoteModels = true;
+transformersEnv.allowRemoteModels = false;
 transformersEnv.allowLocalModels = false;
 
 let activePack = null;
