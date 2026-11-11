@@ -2,6 +2,7 @@ import * as ort from "../vendor/onnxruntime-web/ort.webgpu.min.mjs";
 import { CLIPTokenizer } from "../vendor/transformers/transformers.min.js";
 import { acquireHeavyModelTest, releaseHeavyModelTest } from "./heavy-model-test-lock.js";
 import { preparePersonalAmiComponent } from "./personal-ami-lora.js";
+import { fetchModelResource, prepareModelCache, exportModelBundle, importModelBundle } from "./model-cache.js";
 
 const MODEL_ID = "aaaaaeeeee/blip-sdxl-anime-wai-illustrious17";
 const MODEL_BASE = "https://huggingface.co/" + MODEL_ID + "/resolve/main/";
@@ -75,7 +76,7 @@ function formatBytes(bytes) {
 }
 
 async function fetchJSON(url, label) {
-  const response = await fetch(url, { credentials: "omit" });
+  const response = await fetchModelResource(url, { credentials: "omit" });
   if (!response.ok) throw new Error(label + " request failed: HTTP " + response.status);
   return response.json();
 }
@@ -85,7 +86,7 @@ async function loadTokenizer(subfolder) {
 
   async function readJSON(filename) {
     const url = folderURL + filename;
-    const response = await fetch(url, { credentials: "omit" });
+    const response = await fetchModelResource(url, { credentials: "omit" });
     if (!response.ok) throw new Error("Tokenizer request failed: " + filename + " · HTTP " + response.status);
     return response.json();
   }
@@ -689,6 +690,10 @@ function readOptions() {
 
 async function generate(options) {
   const manifest = await fetchJSON(MANIFEST_URL, "Model manifest");
+  setProgress(1, "Preparing model downloads");
+  setStatus("Downloading and verifying model files into persistent browser cache…");
+  const cacheResult = await prepareModelCache(manifest, log, (value, path) => setProgress(1 + value * 5, "Caching model files · " + path), checkCancelled);
+  log("Preload complete · " + cacheResult.downloaded + " new downloads, " + cacheResult.reused + " cached files.");
   const schedulerConfig = await fetchJSON(SCHEDULER_URL, "Scheduler config");
   const latentWidth = options.width / 8;
   const latentHeight = options.height / 8;
@@ -891,4 +896,55 @@ cancelButton.addEventListener("click", () => {
   cancelButton.disabled = true;
   setStatus("Cancellation requested. The current WebGPU graph call must finish before stopping…");
   log("Cancellation requested; the current ONNX graph invocation is not interruptible.");
+});
+
+
+const cacheStatus = document.querySelector("#modelCacheStatus");
+const importBundleInput = document.querySelector("#importModelBundleFile");
+document.querySelector("#prepareModelCache")?.addEventListener("click", async () => {
+  try {
+    const manifest = await fetchJSON(MANIFEST_URL, "Model manifest");
+    const result = await prepareModelCache(manifest, message => {
+      cacheStatus.textContent = message;
+      console.log("[Model cache] " + message);
+    }, (value, path) => {
+      cacheStatus.textContent = "Caching " + Math.round(value) + "% · " + path;
+    }, () => {});
+    cacheStatus.textContent = "Ready · " + result.paths.length + " files · " +
+      (result.bytes / 1024 ** 3).toFixed(2) + " GiB · " + result.reused + " reused.";
+  } catch (error) {
+    cacheStatus.textContent = "Cache preparation failed: " + error.message;
+  }
+});
+document.querySelector("#exportModelBundle")?.addEventListener("click", async () => {
+  try {
+    const manifest = await fetchJSON(MANIFEST_URL, "Model manifest");
+    cacheStatus.textContent = "Building portable model bundle…";
+    const blob = await exportModelBundle(manifest, message => cacheStatus.textContent = message);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "wai-illustrious-v17-browser-model.wkimodel";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    cacheStatus.textContent = "Bundle ready · " + (blob.size / 1024 ** 3).toFixed(2) + " GiB.";
+  } catch (error) {
+    cacheStatus.textContent = "Bundle export failed: " + error.message;
+  }
+});
+document.querySelector("#importModelBundle")?.addEventListener("click", () => importBundleInput?.click());
+importBundleInput?.addEventListener("change", async () => {
+  const file = importBundleInput.files?.[0];
+  if (!file) return;
+  try {
+    const manifest = await fetchJSON(MANIFEST_URL, "Model manifest");
+    cacheStatus.textContent = "Importing and verifying model bundle…";
+    const count = await importModelBundle(file, manifest, message => cacheStatus.textContent = message,
+      value => cacheStatus.textContent = "Importing " + Math.round(value) + "%…");
+    cacheStatus.textContent = "Imported and verified " + count + " files. Ready to generate.";
+  } catch (error) {
+    cacheStatus.textContent = "Bundle import failed: " + error.message;
+  } finally {
+    importBundleInput.value = "";
+  }
 });
