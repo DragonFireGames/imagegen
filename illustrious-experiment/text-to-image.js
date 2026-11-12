@@ -1685,7 +1685,8 @@ async function buildUnetSessions(
 }
 
 async function ensureUnetSessions(
-  manifest, lora, conditioning, width, height, cfg, useGpuScheduler = true, imageCount = 1
+  manifest, lora, conditioning, width, height, cfg, useGpuScheduler = true,
+  imageCount = 1, validationMode = preferredUnetValidationMode
 ) {
   const branchCount = cfg === 0 || cfg === 1 ? 1 : 2;
   const batchSize = branchCount * imageCount;
@@ -1695,7 +1696,7 @@ async function ensureUnetSessions(
     (useGpuScheduler ? "|gpu-scheduler" : "|cpu-scheduler") +
     (graphCaptureEnabled ? "|graph-capture" : "|standard-dispatch") +
     "|" + (preferredUnetLayout || "default-layout") +
-    "|validation:" + (preferredUnetValidationMode || "ort-default");
+    "|validation:" + (validationMode || "ort-default");
   if (residentUnetSessions && residentUnetKey === key) {
     log("Reusing resident UNET_A, UNET_B, and UNET_C sessions.");
     residentUnetSessions.gpuInputs.updateConditioning(conditioning, conditioningIndex);
@@ -1739,7 +1740,7 @@ async function ensureUnetSessions(
       sessions = await buildUnetSessions(
         manifest, lora, conditioning, width, height, batchSize, imageCount, branchCount, conditioningIndex,
         patchCache, useGpuScheduler, graphCaptureEnabled, preferredUnetLayout,
-        preferredUnetValidationMode
+        validationMode
       );
       log("UNET_A/B/C ready · " + (graphCaptureEnabled ? "graph-captured" : "standard") +
         " WebGPU dispatch with persistent GPU inputs and GPU-resident partition handoffs." +
@@ -1757,7 +1758,7 @@ async function ensureUnetSessions(
       sessions = await buildUnetSessions(
         manifest, lora, conditioning, width, height, batchSize, imageCount, branchCount, conditioningIndex,
         patchCache, useGpuScheduler, false, preferredUnetLayout,
-        preferredUnetValidationMode
+        validationMode
       );
       await runWarmup();
     }
