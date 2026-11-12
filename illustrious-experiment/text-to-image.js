@@ -690,18 +690,28 @@ function createGpuInputState(conditioning, width, height, batchSize, conditionin
 
 async function createGpuScheduler(device, gpuInputs, width, height, batchSize) {
   const latentSize = 4 * (height / 8) * (width / 8);
-  const latentBuffer = device.createBuffer({
-    size: latentSize * 4,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
-  });
-  const noiseBuffer = device.createBuffer({
-    size: latentSize * 4,
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-  });
-  const uniformBuffer = device.createBuffer({
-    size: 32,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-  });
+  let latentBuffer = null;
+  let noiseBuffer = null;
+  let uniformBuffer = null;
+  try {
+    latentBuffer = device.createBuffer({
+      size: latentSize * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+    });
+    noiseBuffer = device.createBuffer({
+      size: latentSize * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+    });
+    uniformBuffer = device.createBuffer({
+      size: 32,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    });
+  } catch (error) {
+    latentBuffer?.destroy();
+    noiseBuffer?.destroy();
+    uniformBuffer?.destroy();
+    throw error;
+  }
   const shader = device.createShaderModule({ code: `
     struct Params {
       count: u32,
@@ -804,14 +814,17 @@ async function createGpuScheduler(device, gpuInputs, width, height, batchSize) {
           size: latentSize * 4,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
         });
-        const encoder = device.createCommandEncoder();
-        encoder.copyBufferToBuffer(latentBuffer, 0, readback, 0, latentSize * 4);
-        device.queue.submit([encoder.finish()]);
-        await readback.mapAsync(GPUMapMode.READ);
-        const result = new Float32Array(readback.getMappedRange().slice(0));
-        readback.unmap();
-        readback.destroy();
-        return result;
+        try {
+          const encoder = device.createCommandEncoder();
+          encoder.copyBufferToBuffer(latentBuffer, 0, readback, 0, latentSize * 4);
+          device.queue.submit([encoder.finish()]);
+          await readback.mapAsync(GPUMapMode.READ);
+          const result = new Float32Array(readback.getMappedRange().slice(0));
+          readback.unmap();
+          return result;
+        } finally {
+          readback.destroy();
+        }
       },
       destroy() {
         latentBuffer.destroy();
