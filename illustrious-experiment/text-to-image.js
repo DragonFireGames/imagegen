@@ -357,14 +357,22 @@ function splitFp16Batch(values, sampleSize, batchIndex) {
   return new Float16Array(values.subarray(batchIndex * sampleSize, (batchIndex + 1) * sampleSize));
 }
 
-async function encodePrompts(manifest, prompt, negativePrompt, personalAmi) {
+async function encodePrompts(manifest, prompt, negativePrompt, personalAmi, cfg) {
   const options = { padding: "max_length", truncation: true, max_length: 77 };
-  log("Loading CLIP-L and tokenizing positive/negative prompts…");
+  const branchIndex = cfg === 0 ? 0 : cfg === 1 ? 1 : null;
+  const encodePositive = branchIndex !== 0;
+  const encodeNegative = branchIndex !== 1;
+  const branchDescription = branchIndex === 1
+    ? "positive prompt only · CFG 1"
+    : branchIndex === 0
+      ? "negative prompt only · CFG 0"
+      : "positive and negative prompts";
+  log("Loading CLIP-L and tokenizing " + branchDescription + "…");
   const tokenizerL = await loadTokenizer("tokenizer");
-  const encodedL = await tokenizerL(prompt, options);
-  const negativeEncodedL = await tokenizerL(negativePrompt, options);
-  const idsL = tokenIds(encodedL, "CLIP-L positive");
-  const negativeIdsL = tokenIds(negativeEncodedL, "CLIP-L negative");
+  const encodedL = encodePositive ? await tokenizerL(prompt, options) : null;
+  const negativeEncodedL = encodeNegative ? await tokenizerL(negativePrompt, options) : null;
+  const idsL = encodedL ? tokenIds(encodedL, "CLIP-L positive") : null;
+  const negativeIdsL = negativeEncodedL ? tokenIds(negativeEncodedL, "CLIP-L negative") : null;
   const startedL = performance.now();
   let sessionL;
   let hiddenL;
@@ -374,7 +382,14 @@ async function encodePrompts(manifest, prompt, negativePrompt, personalAmi) {
       ? await preparePersonalAmiComponent(personalAmi.file, manifest, "text_encoder", personalAmi.strength, log, checkCancelled)
       : null;
     sessionL = await loadSession(manifest, "text_encoder", "CLIP-L", patchedL?.externalData);
-    if (canBatchEncoder(sessionL, "input_ids")) {
+    if (branchIndex !== null) {
+      const selectedIds = branchIndex === 1 ? idsL : negativeIdsL;
+      const output = await sessionL.run({ input_ids: new ort.Tensor("int64", selectedIds, [1, 77]) });
+      const hidden = fp16Values(output.penultimate_hidden_state, "CLIP-L selected hidden", [1, 77, 768]);
+      if (branchIndex === 1) hiddenL = hidden;
+      else negativeHiddenL = hidden;
+      log("CLIP-L encoded only the selected CFG branch.");
+    } else if (canBatchEncoder(sessionL, "input_ids")) {
       const outputs = await sessionL.run({
         input_ids: new ort.Tensor("int64", combineTokenBatches(idsL, negativeIdsL, "CLIP-L"), [2, 77])
       });
@@ -393,14 +408,14 @@ async function encodePrompts(manifest, prompt, negativePrompt, personalAmi) {
     if (sessionL) await sessionL.release();
   }
   await yieldFrames();
-  log("CLIP-L positive + negative encoded in " + ((performance.now() - startedL) / 1000).toFixed(2) + "s; released.");
+  log("CLIP-L " + branchDescription + " encoded in " + ((performance.now() - startedL) / 1000).toFixed(2) + "s; released.");
 
-  log("Loading CLIP-bigG and tokenizing positive/negative prompts…");
+  log("Loading CLIP-bigG and tokenizing " + branchDescription + "…");
   const tokenizerG = await loadTokenizer("tokenizer_2");
-  const encodedG = await tokenizerG(prompt, options);
-  const negativeEncodedG = await tokenizerG(negativePrompt, options);
-  const idsG = tokenIds(encodedG, "CLIP-bigG positive");
-  const negativeIdsG = tokenIds(negativeEncodedG, "CLIP-bigG negative");
+  const encodedG = encodePositive ? await tokenizerG(prompt, options) : null;
+  const negativeEncodedG = encodeNegative ? await tokenizerG(negativePrompt, options) : null;
+  const idsG = encodedG ? tokenIds(encodedG, "CLIP-bigG positive") : null;
+  const negativeIdsG = negativeEncodedG ? tokenIds(negativeEncodedG, "CLIP-bigG negative") : null;
   const startedG = performance.now();
   let sessionG;
   let hiddenG;
@@ -412,7 +427,20 @@ async function encodePrompts(manifest, prompt, negativePrompt, personalAmi) {
       ? await preparePersonalAmiComponent(personalAmi.file, manifest, "text_encoder_2", personalAmi.strength, log, checkCancelled)
       : null;
     sessionG = await loadSession(manifest, "text_encoder_2", "CLIP-bigG", patchedG?.externalData);
-    if (canBatchEncoder(sessionG, "input_ids")) {
+    if (branchIndex !== null) {
+      const selectedIds = branchIndex === 1 ? idsG : negativeIdsG;
+      const output = await sessionG.run({ input_ids: new ort.Tensor("int64", selectedIds, [1, 77]) });
+      const hidden = fp16Values(output.penultimate_hidden_state, "CLIP-bigG selected hidden", [1, 77, 1280]);
+      const pooled = fp16Values(output.text_embeds, "CLIP-bigG selected pooled", [1, 1280]);
+      if (branchIndex === 1) {
+        hiddenG = hidden;
+        pooledG = pooled;
+      } else {
+        negativeHiddenG = hidden;
+        negativePooledG = pooled;
+      }
+      log("CLIP-bigG encoded only the selected CFG branch.");
+    } else if (canBatchEncoder(sessionG, "input_ids")) {
       const outputs = await sessionG.run({
         input_ids: new ort.Tensor("int64", combineTokenBatches(idsG, negativeIdsG, "CLIP-bigG"), [2, 77])
       });
@@ -436,17 +464,23 @@ async function encodePrompts(manifest, prompt, negativePrompt, personalAmi) {
     if (sessionG) await sessionG.release();
   }
   await yieldFrames();
-  log("CLIP-bigG positive + negative encoded in " + ((performance.now() - startedG) / 1000).toFixed(2) + "s; released.");
+  log("CLIP-bigG " + branchDescription + " encoded in " + ((performance.now() - startedG) / 1000).toFixed(2) + "s; released.");
 
-  const positive = combineHidden(hiddenL, hiddenG, "Positive conditioning");
-  const negative = combineHidden(negativeHiddenL, negativeHiddenG, "Negative conditioning");
-  const encoderHidden = new Float16Array(2 * 77 * 2048);
-  encoderHidden.set(negative, 0);
-  encoderHidden.set(positive, negative.length);
-  const textEmbeds = new Float16Array(2 * 1280);
-  textEmbeds.set(negativePooledG, 0);
-  textEmbeds.set(pooledG, 1280);
-  log("Classifier-free conditioning ready · encoder_hidden_states [2,77,2048] · text_embeds [2,1280].");
+  const positive = encodePositive ? combineHidden(hiddenL, hiddenG, "Positive conditioning") : null;
+  const negative = encodeNegative ? combineHidden(negativeHiddenL, negativeHiddenG, "Negative conditioning") : null;
+  const hiddenLength = 77 * 2048;
+  const pooledLength = 1280;
+  const encoderHidden = new Float16Array(2 * hiddenLength);
+  const textEmbeds = new Float16Array(2 * pooledLength);
+  if (negative) {
+    encoderHidden.set(negative, 0);
+    textEmbeds.set(negativePooledG, 0);
+  }
+  if (positive) {
+    encoderHidden.set(positive, hiddenLength);
+    textEmbeds.set(pooledG, pooledLength);
+  }
+  log("Classifier-free conditioning ready · encoder_hidden_states [2,77,2048] · text_embeds [2,1280] · " + branchDescription + ".");
   return { encoderHidden, textEmbeds };
 }
 
@@ -1086,6 +1120,7 @@ function conditioningCacheKey(options) {
   return JSON.stringify([
     options.prompt,
     options.negative,
+    options.cfg === 0 ? 0 : options.cfg === 1 ? 1 : 2,
     adapterCacheKey(options.personalAmi)
   ]);
 }
@@ -1103,7 +1138,8 @@ async function getConditioning(manifest, options) {
     manifest,
     options.prompt,
     options.negative,
-    options.personalAmi
+    options.personalAmi,
+    options.cfg
   );
   conditioningCache.set(key, conditioning);
   while (conditioningCache.size > 8) {
