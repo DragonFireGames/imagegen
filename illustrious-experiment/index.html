@@ -39,9 +39,12 @@
     .file-name { color: #e5e6eb; overflow-wrap: anywhere; font-size: 13px; }
     #generationProgress { display: block; width: 100%; height: 12px; accent-color: #f08acb; }
     .progress-label { margin: 4px 0 12px; font-size: 12px; }
-    .generated-result { display: grid; justify-items: start; gap: 10px; margin-top: 18px; }
-    #generatedImage { display: block; max-width: 100%; height: auto; border-radius: 8px; background: #111319; }
-    #downloadGeneratedImage { font-weight: 700; }
+    .generated-result { margin-top: 18px; }
+    .generated-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 16px; }
+    .generated-item { display: grid; align-content: start; gap: 8px; min-width: 0; padding: 12px; border: 1px solid #343740; border-radius: 9px; background: #22252d; }
+    .generated-item img { display: block; width: 100%; height: auto; border-radius: 6px; background: #111319; }
+    .generated-item p { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+    .generated-item a { font-weight: 700; overflow-wrap: anywhere; }
     .generation-log { min-height: 100px; max-height: 360px; margin: 10px 0 0; padding: 14px; overflow: auto; border-radius: 8px; background: #111319; color: #d5d7e0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
     details { margin-top: 20px; color: #bfc1ca; }
     summary { cursor: pointer; color: #e5e6eb; font-weight: 650; }
@@ -97,7 +100,8 @@
         <div><label for="generationHeight">Height</label><input class="number-input" id="generationHeight" type="number" min="512" max="1024" step="64" value="512"></div>
         <div><label for="generationSteps">Steps</label><input class="number-input" id="generationSteps" type="number" min="1" max="100" value="12"></div>
         <div><label for="generationCfg">CFG scale</label><input class="number-input" id="generationCfg" type="number" min="0" max="20" step="0.5" value="1"></div>
-        <div><label for="generationSeed">Seed</label><input class="number-input" id="generationSeed" type="number" min="-1" max="4294967295" step="1" value="1337"><small>Enter -1 for a random seed; the generated seed appears with the download.</small></div>
+        <div><label for="generationSeed">Seed</label><input class="number-input" id="generationSeed" type="number" min="-1" max="4294967295" step="1" value="1337"><small>Enter -1 for a random seed; each image gets its own seed.</small></div>
+        <div><label for="generationBatch">Batch</label><input class="number-input" id="generationBatch" type="number" min="1" max="20" step="1" value="1"><small>Generate 1–20 images sequentially.</small></div>
       </div>
       <p class="notice">Fast defaults: 512×512 · 12 steps · CFG 1. CFG 1 uses only the positive UNet branch and skips negative-prompt encoding. This trades away negative-prompt control and some guided refinement for speed. For the original guided quality profile, use 28 steps and CFG 5. At the same settings, 1024×1024 requires roughly four times the UNet work of 512×512.</p>
 
@@ -126,8 +130,7 @@
       <p class="progress-label" id="generationProgressLabel">Idle</p>
 
       <div class="generated-result">
-        <img id="generatedImage" alt="Generated Illustrious image" hidden>
-        <a id="downloadGeneratedImage" hidden>Save PNG</a>
+        <div class="generated-results" id="generatedResults" aria-live="polite"></div>
       </div>
 
       <details>
