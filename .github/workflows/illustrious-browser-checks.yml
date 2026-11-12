@@ -1,0 +1,37 @@
+name: Verify Illustrious browser experiment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "illustrious-experiment/**"
+      - ".github/workflows/illustrious-browser-checks.yml"
+  pull_request:
+    paths:
+      - "illustrious-experiment/**"
+      - ".github/workflows/illustrious-browser-checks.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Check every Illustrious JavaScript module
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            echo "Checking $file"
+            node --input-type=module --check < "$file"
+          done < <(find illustrious-experiment -type f -name '*.js' -print0)
