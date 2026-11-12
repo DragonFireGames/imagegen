@@ -13,6 +13,10 @@ const runtimePreference = new URLSearchParams(window.location.search).get("runti
 const graphCaptureEnabled = new URLSearchParams(window.location.search).get("graphCapture") === "1";
 const keepVaeResident = new URLSearchParams(window.location.search).get("keepVae") === "1";
 const preferredUnetLayout = new URLSearchParams(window.location.search).get("layout") === "NHWC" ? "NHWC" : null;
+const requestedUnetValidationMode = new URLSearchParams(window.location.search).get("validation");
+const preferredUnetValidationMode = ["basic", "wgpuOnly", "full"].includes(requestedUnetValidationMode)
+  ? requestedUnetValidationMode
+  : null;
 const LOCAL_ORT_BASE = new URL("../vendor/onnxruntime-web/", import.meta.url).href;
 
 async function loadOrtRuntime() {
@@ -60,12 +64,9 @@ const { ort, label: runtimeLabel, note: runtimeNote } = await loadOrtRuntime();
 // This must be set before ORT creates its first WebGPU session.
 if (ort.env.webgpu) ort.env.webgpu.powerPreference = "high-performance";
 
-// Optional WebGPU operator profiling. Enable with ?gpuProfile=1 before loading
-// the page; profiling adds overhead and should not be used for final benchmarks.
-const gpuProfilingEnabled = new URLSearchParams(window.location.search).get("gpuProfile") === "1";
-if (gpuProfilingEnabled && ort.env.webgpu) {
-  ort.env.webgpu.profiling = { mode: "default" };
-}
+// Keep the legacy diagnostic switch recognizable, but do not enable the JSEP-only
+// profiling callback on this app's native WebGPU execution-provider path.
+const gpuProfilingRequested = new URLSearchParams(window.location.search).get("gpuProfile") === "1";
 
 const button = document.querySelector("#generateImage");
 const cancelButton = document.querySelector("#cancelGeneration");
@@ -446,7 +447,8 @@ async function loadSession(
   patchedExternalData = null,
   preferredOutputLocation = null,
   enableGraphCapture = false,
-  preferredLayout = null
+  preferredLayout = null,
+  validationMode = null
 ) {
   const component = manifest?.components?.[key];
   const started = performance.now();
@@ -460,9 +462,12 @@ async function loadSession(
   if (!graphResponse.ok) throw new Error(label + " ONNX graph request failed · HTTP " + graphResponse.status);
   const graphData = await graphResponse.arrayBuffer();
   const weightData = patchedExternalData || await externalData(component, manifest);
+  const webgpuProvider = { name: "webgpu" };
+  if (preferredLayout) webgpuProvider.preferredLayout = preferredLayout;
+  if (validationMode) webgpuProvider.validationMode = validationMode;
   const sessionOptions = {
-    executionProviders: preferredLayout
-      ? [{ name: "webgpu", preferredLayout }]
+    executionProviders: preferredLayout || validationMode
+      ? [webgpuProvider]
       : ["webgpu"],
     graphOptimizationLevel: "all",
     externalData: weightData
@@ -1560,7 +1565,8 @@ async function buildUnetSessions(
   patchCache,
   useGpuScheduler = true,
   enableGraphCapture = false,
-  preferredLayout = null
+  preferredLayout = null,
+  validationMode = null
 ) {
   const sessions = {
     a: null, b: null, c: null, gpuInputs: null, gpuOutputs: { a: null, b: null },
@@ -1593,7 +1599,7 @@ async function buildUnetSessions(
     const patchedA = await patchedComponent("unet_a");
     sessions.a = await loadSession(
       manifest, "unet_a", "UNET_A", patchedA?.externalData, outputsA,
-      enableGraphCapture, preferredLayout
+      enableGraphCapture, preferredLayout, validationMode
     );
     sessions.gpuInputs = createGpuInputState(
       conditioning, width, height, batchSize, conditioningIndex, imageCount, branchCount
@@ -1603,7 +1609,7 @@ async function buildUnetSessions(
     const patchedB = await patchedComponent("unet_b");
     sessions.b = await loadSession(
       manifest, "unet_b", "UNET_B", patchedB?.externalData, outputsB,
-      enableGraphCapture, preferredLayout
+      enableGraphCapture, preferredLayout, validationMode
     );
     checkCancelled();
 
@@ -1630,7 +1636,8 @@ async function buildUnetSessions(
       manifest, "unet_c", "UNET_C", patchedC?.externalData,
       sessions.gpuScheduler ? "gpu-buffer" : null,
       enableGraphCapture,
-      preferredLayout
+      preferredLayout,
+      validationMode
     );
 
     validateSessionInputs(sessions.a, ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], "UNET_A");
@@ -1687,7 +1694,8 @@ async function ensureUnetSessions(
     "|branches" + branchCount + "|batch" + batchSize +
     (useGpuScheduler ? "|gpu-scheduler" : "|cpu-scheduler") +
     (graphCaptureEnabled ? "|graph-capture" : "|standard-dispatch") +
-    "|" + (preferredUnetLayout || "default-layout");
+    "|" + (preferredUnetLayout || "default-layout") +
+    "|validation:" + (preferredUnetValidationMode || "ort-default");
   if (residentUnetSessions && residentUnetKey === key) {
     log("Reusing resident UNET_A, UNET_B, and UNET_C sessions.");
     residentUnetSessions.gpuInputs.updateConditioning(conditioning, conditioningIndex);
@@ -1730,7 +1738,8 @@ async function ensureUnetSessions(
     try {
       sessions = await buildUnetSessions(
         manifest, lora, conditioning, width, height, batchSize, imageCount, branchCount, conditioningIndex,
-        patchCache, useGpuScheduler, graphCaptureEnabled, preferredUnetLayout
+        patchCache, useGpuScheduler, graphCaptureEnabled, preferredUnetLayout,
+        preferredUnetValidationMode
       );
       log("UNET_A/B/C ready · " + (graphCaptureEnabled ? "graph-captured" : "standard") +
         " WebGPU dispatch with persistent GPU inputs and GPU-resident partition handoffs." +
@@ -1747,7 +1756,8 @@ async function ensureUnetSessions(
         (captureError?.message || String(captureError)));
       sessions = await buildUnetSessions(
         manifest, lora, conditioning, width, height, batchSize, imageCount, branchCount, conditioningIndex,
-        patchCache, useGpuScheduler, false, preferredUnetLayout
+        patchCache, useGpuScheduler, false, preferredUnetLayout,
+        preferredUnetValidationMode
       );
       await runWarmup();
     }
@@ -1863,7 +1873,8 @@ async function prepareInferenceEngine() {
     setStatus("Preparing resident UNet sessions…");
     await ensureUnetSessions(
       manifest, options.lora, conditioning, options.width, options.height, options.cfg,
-      !infillMode, Math.min(options.parallelCount, options.batchCount)
+      !infillMode, Math.min(options.parallelCount, options.batchCount),
+      preferredUnetValidationMode
     );
     checkCancelled();
 
@@ -2083,9 +2094,11 @@ async function generateMany(imageOptionsList, infillData = null, onImage = null)
   log(runtimeLabel + ".");
   if (runtimeNote) log(runtimeNote);
   log("UNet preferred layout · " + (preferredUnetLayout || "NCHW (default)") + ".");
+  log("UNet validation mode · " + (preferredUnetValidationMode || "ORT default (basic)") +
+    (preferredUnetValidationMode === "wgpuOnly" ? " · retains WebGPU/Dawn validation; skips additional ONNX basic validation." : "."));
   if (graphCaptureEnabled) log("Static UNet WebGPU graph capture requested · initialization falls back to standard dispatch if capture fails.");
-  if (gpuProfilingEnabled) {
-    log("WebGPU kernel profiling enabled · inspect [profiling] entries in the browser console; timings include profiling overhead.");
+  if (gpuProfilingRequested) {
+    log("Per-operator GPU profiling is not exposed to JavaScript by the bundled ONNX Runtime 1.31.1 native WebGPU provider. No [profiling] entries are expected; the A/B/C wall-clock timings below remain available.");
   }
   log("Model " + (manifest.packageId || MODEL_ID) + " · WebGPU · " +
     options.width + "×" + options.height + " · " + options.steps + " steps.");
@@ -2138,7 +2151,8 @@ async function generateMany(imageOptionsList, infillData = null, onImage = null)
   }
   const sessions = await ensureUnetSessions(
     manifest, options.lora, conditioning, options.width, options.height, options.cfg,
-    !infillData, imageCount
+    !infillData, imageCount,
+    preferredUnetValidationMode
   );
   const gpuScheduler = sessions.gpuScheduler;
   if (gpuScheduler) {
