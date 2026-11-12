@@ -662,6 +662,37 @@ function createGpuInput(device, dataType, data, dims, label, usage = GPUBufferUs
   }
 }
 
+function createGpuOutputSet(device, shapes, label) {
+  const fetches = {};
+  const buffers = [];
+  try {
+    for (const [name, dims] of Object.entries(shapes)) {
+      const elements = dims.reduce((product, dimension) => product * dimension, 1);
+      const buffer = device.createBuffer({
+        size: Math.max(4, elements * 2),
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+      });
+      try {
+        fetches[name] = ort.Tensor.fromGpuBuffer(buffer, { dataType: "float16", dims });
+        buffers.push(buffer);
+      } catch (error) {
+        buffer.destroy();
+        throw error;
+      }
+    }
+  } catch (error) {
+    for (const buffer of buffers) buffer.destroy();
+    throw new Error("Could not allocate persistent " + label + " GPU outputs: " + (error?.message || error));
+  }
+  return {
+    fetches,
+    destroy() {
+      for (const buffer of buffers) buffer.destroy();
+      buffers.length = 0;
+    }
+  };
+}
+
 function createGpuInputState(conditioning, width, height, batchSize, conditioningIndex) {
   const device = ort.env.webgpu?.device;
   if (!device || typeof ort.Tensor.fromGpuBuffer !== "function") {
@@ -925,7 +956,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       encoder_hidden_states: gpu.entries.encoderHidden.tensor,
       text_embeds: gpu.entries.textEmbeds.tensor,
       time_ids: gpu.entries.timeIds.tensor
-    });
+    }, sessions.gpuOutputs.a.fetches);
     timings.a = (performance.now() - startedA) / 1000;
     checkCancelled();
 
@@ -950,15 +981,11 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       skip_6: outputsA.skip_6,
       skip_7: outputsA.skip_7,
       skip_8: outputsA.skip_8
-    });
+    }, sessions.gpuOutputs.b.fetches);
     timings.b = (performance.now() - startedB) / 1000;
     checkCancelled();
     validateGpuTensor(outputsB.hidden_out, "UNET_B hidden_out",
       shape(1280, latentHeight / 2, latentWidth / 2));
-
-    for (const name of ["hidden", "skip_6", "skip_7", "skip_8"]) {
-      disposeOutput(outputsA, name);
-    }
 
     const startedC = performance.now();
     const feedsC = {
@@ -1006,8 +1033,6 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
     return { guided, timings };
   } finally {
     if (!sessions.gpuScheduler) disposeRemaining(outputsC);
-    disposeRemaining(outputsB);
-    disposeRemaining(outputsA);
   }
 }
 
@@ -1029,6 +1054,12 @@ async function releaseSessions(sessions) {
   }
   if (failures.length) {
     throw new Error("One or more UNet sessions could not be released: " + failures.join("; "));
+  }
+  if (sessions.gpuOutputs) {
+    for (const outputSet of Object.values(sessions.gpuOutputs)) {
+      outputSet?.destroy();
+    }
+    sessions.gpuOutputs = null;
   }
   if (sessions.gpuScheduler) {
     sessions.gpuScheduler.destroy();
@@ -1315,7 +1346,7 @@ async function getConditioning(manifest, options) {
 }
 
 async function buildUnetSessions(manifest, lora, conditioning, width, height, batchSize, conditioningIndex, patchCache, useGpuScheduler = true) {
-  const sessions = { a: null, b: null, c: null, gpuInputs: null, batchSize };
+  const sessions = { a: null, b: null, c: null, gpuInputs: null, gpuOutputs: { a: null, b: null }, batchSize };
   const patchedComponent = async name => {
     if (!lora) return null;
     if (!patchCache.has(name)) {
@@ -1343,10 +1374,28 @@ async function buildUnetSessions(manifest, lora, conditioning, width, height, ba
     const patchedA = await patchedComponent("unet_a");
     sessions.a = await loadSession(manifest, "unet_a", "UNET_A", patchedA?.externalData, outputsA);
     sessions.gpuInputs = createGpuInputState(conditioning, width, height, batchSize, conditioningIndex);
+    const latentWidth = width / 8;
+    const latentHeight = height / 8;
+    sessions.gpuOutputs.a = createGpuOutputSet(ort.env.webgpu.device, {
+      hidden: [batchSize, 1280, latentHeight / 4, latentWidth / 4],
+      emb: [batchSize, 1280],
+      skip_0: [batchSize, 320, latentHeight, latentWidth],
+      skip_1: [batchSize, 320, latentHeight, latentWidth],
+      skip_2: [batchSize, 320, latentHeight, latentWidth],
+      skip_3: [batchSize, 320, latentHeight / 2, latentWidth / 2],
+      skip_4: [batchSize, 640, latentHeight / 2, latentWidth / 2],
+      skip_5: [batchSize, 640, latentHeight / 2, latentWidth / 2],
+      skip_6: [batchSize, 640, latentHeight / 4, latentWidth / 4],
+      skip_7: [batchSize, 1280, latentHeight / 4, latentWidth / 4],
+      skip_8: [batchSize, 1280, latentHeight / 4, latentWidth / 4]
+    }, "UNET_A");
     checkCancelled();
 
     const patchedB = await patchedComponent("unet_b");
     sessions.b = await loadSession(manifest, "unet_b", "UNET_B", patchedB?.externalData, outputsB);
+    sessions.gpuOutputs.b = createGpuOutputSet(ort.env.webgpu.device, {
+      hidden_out: [batchSize, 1280, latentHeight / 2, latentWidth / 2]
+    }, "UNET_B");
     checkCancelled();
 
     const patchedC = await patchedComponent("unet_c");
@@ -1374,6 +1423,12 @@ async function buildUnetSessions(manifest, lora, conditioning, width, height, ba
     );
 
     validateSessionInputs(sessions.a, ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], "UNET_A");
+    for (const name of Object.keys(sessions.gpuOutputs.a.fetches)) {
+      if (!sessions.a.outputNames.includes(name)) throw new Error("UNET_A is missing expected output " + name + ".");
+    }
+    for (const name of Object.keys(sessions.gpuOutputs.b.fetches)) {
+      if (!sessions.b.outputNames.includes(name)) throw new Error("UNET_B is missing expected output " + name + ".");
+    }
     validateSessionInputs(sessions.b, ["hidden", "emb", "encoder_hidden_states", "skip_6", "skip_7", "skip_8"], "UNET_B");
     validateSessionInputs(sessions.c, ["hidden", "emb", "encoder_hidden_states", "skip_0", "skip_1", "skip_2", "skip_3", "skip_4", "skip_5"], "UNET_C");
     return sessions;
