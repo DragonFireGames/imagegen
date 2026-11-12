@@ -518,6 +518,20 @@ function createEulerAncestralScheduler(config, steps) {
       for (let i = 0; i < sample.length; i++) output[i] = sample[i] * scale;
       return output;
     },
+    stepParameters(index, cfg, batch) {
+      const sigma = sigmas[index];
+      const sigmaTo = sigmas[index + 1];
+      const sigmaUp = Math.sqrt(Math.max(0, sigmaTo * sigmaTo *
+        (sigma * sigma - sigmaTo * sigmaTo) / (sigma * sigma)));
+      const sigmaDown = Math.sqrt(Math.max(0, sigmaTo * sigmaTo - sigmaUp * sigmaUp));
+      return {
+        cfg,
+        batch,
+        dt: sigmaDown - sigma,
+        sigmaUp,
+        nextScale: 1 / Math.sqrt(sigmaTo * sigmaTo + 1)
+      };
+    },
     step(modelOutput, index, sample, noise) {
       const sigma = sigmas[index];
       const sigmaTo = sigmas[index + 1];
@@ -628,6 +642,9 @@ function createGpuInputState(conditioning, width, height, batchSize, conditionin
       [batchSize, 1280], "UNET_A text_embeds");
     entries.timeIds = createGpuInput(device, "float32", makeBatchTimeIds(height, width, batchSize),
       [batchSize, 6], "UNET_A time_ids");
+    entries.cOutput = createGpuInput(device, "float16",
+      new Float16Array(latentLength * batchSize), [batchSize, 4, latentHeight, latentWidth],
+      "UNET_C reusable output");
   } catch (error) {
     for (const entry of Object.values(entries)) entry.buffer.destroy();
     throw error;
@@ -659,9 +676,151 @@ function createGpuInputState(conditioning, width, height, batchSize, conditionin
       device.queue.writeBuffer(entries.textEmbeds.buffer, 0, pooled);
     },
     destroy() {
-      for (const entry of Object.values(entries)) entry.buffer.destroy();
+      for (const entry of Object.values(entries)) {
+        if (entry?.buffer) entry.buffer.destroy();
+      }
     }
   };
+}
+
+
+async function createGpuScheduler(device, gpuInputs, width, height, batchSize) {
+  const latentSize = 4 * (height / 8) * (width / 8);
+  const latentBuffer = device.createBuffer({
+    size: latentSize * 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
+  });
+  const noiseBuffer = device.createBuffer({
+    size: latentSize * 4,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+  });
+  const uniformBuffer = device.createBuffer({
+    size: 32,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+  });
+  const shader = device.createShaderModule({ code: `
+    struct Params {
+      count: u32,
+      batch: u32,
+      cfg: f32,
+      dt: f32,
+      sigmaUp: f32,
+      nextScale: f32,
+      latentSize: u32,
+      padding: u32
+    };
+    @group(0) @binding(0) var<storage, read> prediction: array<u32>;
+    @group(0) @binding(1) var<storage, read_write> latents: array<f32>;
+    @group(0) @binding(2) var<storage, read> noise: array<f32>;
+    @group(0) @binding(3) var<storage, read_write> nextSample: array<u32>;
+    @group(0) @binding(4) var<uniform> params: Params;
+
+    fn halfAt(index: u32) -> f32 {
+      let packed = unpack2x16float(prediction[index / 2u]);
+      return select(packed.x, packed.y, (index & 1u) == 1u);
+    }
+
+    @compute @workgroup_size(256)
+    fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+      let pair = gid.x;
+      let first = pair * 2u;
+      if (first >= params.count) { return; }
+      let second = first + 1u;
+
+      var epsilon0 = halfAt(first);
+      var epsilon1 = halfAt(second);
+      if (params.batch == 2u) {
+        let conditional0 = halfAt(params.latentSize + first);
+        let conditional1 = halfAt(params.latentSize + second);
+        epsilon0 = epsilon0 + params.cfg * (conditional0 - epsilon0);
+        epsilon1 = epsilon1 + params.cfg * (conditional1 - epsilon1);
+      }
+
+      let latent0 = latents[first] + epsilon0 * params.dt + noise[first] * params.sigmaUp;
+      let latent1 = latents[second] + epsilon1 * params.dt + noise[second] * params.sigmaUp;
+      latents[first] = latent0;
+      latents[second] = latent1;
+
+      let packed = pack2x16float(vec2<f32>(latent0 * params.nextScale, latent1 * params.nextScale));
+      nextSample[pair] = packed;
+      if (params.batch == 2u) {
+        nextSample[params.count / 2u + pair] = packed;
+      }
+    }
+  ` });
+  try {
+    const pipeline = await device.createComputePipelineAsync({
+      layout: "auto",
+      compute: { module: shader, entryPoint: "main" }
+    });
+    const bindGroup = device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: gpuInputs.entries.cOutput.buffer } },
+        { binding: 1, resource: { buffer: latentBuffer } },
+        { binding: 2, resource: { buffer: noiseBuffer } },
+        { binding: 3, resource: { buffer: gpuInputs.entries.sample.buffer } },
+        { binding: 4, resource: { buffer: uniformBuffer } }
+      ]
+    });
+    return {
+      latentBuffer, noiseBuffer, uniformBuffer, pipeline, bindGroup, latentSize, batchSize,
+      initialize(latents, scaledLatents) {
+        if (latents.length !== latentSize || scaledLatents.length !== latentSize) {
+          throw new Error("Initial GPU scheduler latent dimensions do not match the selected resolution.");
+        }
+        device.queue.writeBuffer(latentBuffer, 0, latents);
+        const batchSample = makeBatchSample(scaledLatents, height / 8, width / 8, batchSize);
+        device.queue.writeBuffer(gpuInputs.entries.sample.buffer, 0, batchSample);
+      },
+      step(noise, stepParams) {
+        if (noise.length !== latentSize) throw new Error("GPU scheduler noise dimensions changed.");
+        device.queue.writeBuffer(noiseBuffer, 0, noise);
+        const raw = new ArrayBuffer(32);
+        const view = new DataView(raw);
+        view.setUint32(0, latentSize, true);
+        view.setUint32(4, batchSize, true);
+        view.setFloat32(8, stepParams.cfg, true);
+        view.setFloat32(12, stepParams.dt, true);
+        view.setFloat32(16, stepParams.sigmaUp, true);
+        view.setFloat32(20, stepParams.nextScale, true);
+        view.setUint32(24, latentSize, true);
+        view.setUint32(28, 0, true);
+        device.queue.writeBuffer(uniformBuffer, 0, raw);
+        const encoder = device.createCommandEncoder();
+        const pass = encoder.beginComputePass();
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.dispatchWorkgroups(Math.ceil(latentSize / 2 / 256));
+        pass.end();
+        device.queue.submit([encoder.finish()]);
+      },
+      async readLatents() {
+        const readback = device.createBuffer({
+          size: latentSize * 4,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+        });
+        const encoder = device.createCommandEncoder();
+        encoder.copyBufferToBuffer(latentBuffer, 0, readback, 0, latentSize * 4);
+        device.queue.submit([encoder.finish()]);
+        await readback.mapAsync(GPUMapMode.READ);
+        const result = new Float32Array(readback.getMappedRange().slice(0));
+        readback.unmap();
+        readback.destroy();
+        return result;
+      },
+      destroy() {
+        latentBuffer.destroy();
+        noiseBuffer.destroy();
+        uniformBuffer.destroy();
+      }
+    };
+  } catch (error) {
+    latentBuffer.destroy();
+    noiseBuffer.destroy();
+    uniformBuffer.destroy();
+    throw error;
+  }
 }
 
 function disposeOutput(outputs, name) {
@@ -674,7 +833,9 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
   const latentWidth = width / 8;
   const latentHeight = height / 8;
   const batch = sessions.batchSize || 2;
-  const batchSample = makeBatchSample(scaledLatents, latentHeight, latentWidth, batch);
+  const batchSample = sessions.gpuScheduler
+    ? null
+    : makeBatchSample(scaledLatents, latentHeight, latentWidth, batch);
   const shape = (channels, h, w) => [batch, channels, h, w];
   const timings = {};
   const gpu = sessions.gpuInputs;
@@ -690,7 +851,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
   };
 
   try {
-    gpu.writeStep(batchSample, timestep);
+    if (!sessions.gpuScheduler) gpu.writeStep(batchSample, timestep);
     const startedA = performance.now();
     outputsA = await sessions.a.run({
       sample: gpu.entries.sample.tensor,
@@ -734,7 +895,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
     }
 
     const startedC = performance.now();
-    outputsC = await sessions.c.run({
+    const feedsC = {
       hidden: outputsB.hidden_out,
       emb: outputsA.emb,
       encoder_hidden_states: gpu.entries.encoderHidden.tensor,
@@ -744,21 +905,31 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       skip_3: outputsA.skip_3,
       skip_4: outputsA.skip_4,
       skip_5: outputsA.skip_5
-    });
+    };
+    if (sessions.gpuScheduler) {
+      outputsC = await sessions.c.run(feedsC, { out_sample: gpu.entries.cOutput.tensor });
+      validateGpuTensor(gpu.entries.cOutput.tensor, "UNET_C out_sample",
+        [batch, 4, latentHeight, latentWidth]);
+    } else {
+      outputsC = await sessions.c.run(feedsC);
+    }
     timings.c = (performance.now() - startedC) / 1000;
     checkCancelled();
 
-    const noisePrediction = fp16Values(outputsC.out_sample, "UNET_C out_sample",
-      [batch, 4, latentHeight, latentWidth]);
-    const latentSize = 4 * latentHeight * latentWidth;
-    const guided = new Float32Array(latentSize);
-    if (batch === 1) {
-      for (let i = 0; i < latentSize; i++) guided[i] = noisePrediction[i];
-    } else {
-      for (let i = 0; i < latentSize; i++) {
-        const unconditional = noisePrediction[i];
-        const conditional = noisePrediction[latentSize + i];
-        guided[i] = unconditional + cfg * (conditional - unconditional);
+    let guided = null;
+    if (!sessions.gpuScheduler) {
+      const noisePrediction = fp16Values(outputsC.out_sample, "UNET_C out_sample",
+        [batch, 4, latentHeight, latentWidth]);
+      const latentSize = 4 * latentHeight * latentWidth;
+      guided = new Float32Array(latentSize);
+      if (batch === 1) {
+        for (let i = 0; i < latentSize; i++) guided[i] = noisePrediction[i];
+      } else {
+        for (let i = 0; i < latentSize; i++) {
+          const unconditional = noisePrediction[i];
+          const conditional = noisePrediction[latentSize + i];
+          guided[i] = unconditional + cfg * (conditional - unconditional);
+        }
       }
     }
 
@@ -791,6 +962,10 @@ async function releaseSessions(sessions) {
   }
   if (failures.length) {
     throw new Error("One or more UNet sessions could not be released: " + failures.join("; "));
+  }
+  if (sessions.gpuScheduler) {
+    sessions.gpuScheduler.destroy();
+    sessions.gpuScheduler = null;
   }
   if (sessions.gpuInputs) {
     sessions.gpuInputs.destroy();
@@ -952,7 +1127,22 @@ async function buildUnetSessions(manifest, personalAmi, conditioning, width, hei
     checkCancelled();
 
     const patchedC = await patchedComponent("unet_c");
-    sessions.c = await loadSession(manifest, "unet_c", "UNET_C", patchedC?.externalData);
+    try {
+      sessions.gpuScheduler = await createGpuScheduler(
+        ort.env.webgpu.device, sessions.gpuInputs, width, height, batchSize
+      );
+      log("GPU-resident Euler scheduler initialized · CFG and latent update stay on WebGPU.");
+    } catch (error) {
+      sessions.gpuScheduler = null;
+      sessions.gpuInputs.entries.cOutput.buffer.destroy();
+      sessions.gpuInputs.entries.cOutput = null;
+      log("GPU scheduler unavailable; retaining the CPU scheduler. Reason: " +
+        (error?.message || String(error)));
+    }
+    sessions.c = await loadSession(
+      manifest, "unet_c", "UNET_C", patchedC?.externalData,
+      sessions.gpuScheduler ? "gpu-buffer" : null
+    );
 
     validateSessionInputs(sessions.a, ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], "UNET_A");
     validateSessionInputs(sessions.b, ["hidden", "emb", "encoder_hidden_states", "skip_6", "skip_7", "skip_8"], "UNET_B");
@@ -1165,14 +1355,20 @@ async function generate(options) {
   log("UNet manifest payload total " + formatBytes(unetBytes) +
     " (not a direct VRAM measurement). Loading all partitions together…");
   const sessions = await ensureUnetSessions(manifest, options.personalAmi, conditioning, options.width, options.height, options.cfg);
+  const gpuScheduler = sessions.gpuScheduler;
+  if (gpuScheduler) {
+    const initialScaled = scheduler.scaleModelInput(latents, 0);
+    gpuScheduler.initialize(latents, new Float16Array(initialScaled));
+  }
   let totalUnetExecutionSeconds = 0;
-  log("All three UNet sessions are resident. Beginning " + options.steps + " denoising steps.");
+  log("All three UNet sessions are resident. Beginning " + options.steps + " denoising steps." +
+    (gpuScheduler ? " GPU scheduler avoids per-step latent readback." : ""));
   await yieldFrames();
 
   for (let step = 0; step < options.steps; step++) {
     checkCancelled();
     const stepStarted = performance.now();
-    const scaled = scheduler.scaleModelInput(latents, step);
+    const scaled = gpuScheduler ? null : scheduler.scaleModelInput(latents, step);
     const denoiser = await runUnetStep(
       sessions,
       conditioning,
@@ -1184,11 +1380,14 @@ async function generate(options) {
       step
     );
     totalUnetExecutionSeconds += denoiser.timings.a + denoiser.timings.b + denoiser.timings.c;
-    const epsilon = denoiser.guided;
     const noise = createNormalNoise(latentSize, options.seed + step + 1);
-    latents = scheduler.step(epsilon, step, latents, noise);
-    for (let i = 0; i < latents.length; i++) {
-      if (!Number.isFinite(latents[i])) throw new Error("Denoising produced a non-finite latent at " + i + ".");
+    if (gpuScheduler) {
+      gpuScheduler.step(noise, scheduler.stepParameters(step, options.cfg, sessions.batchSize));
+    } else {
+      latents = scheduler.step(denoiser.guided, step, latents, noise);
+      for (let i = 0; i < latents.length; i++) {
+        if (!Number.isFinite(latents[i])) throw new Error("Denoising produced a non-finite latent at " + i + ".");
+      }
     }
     const percent = 8 + ((step + 1) / options.steps) * 82;
     setProgress(percent, "Denoising " + (step + 1) + " / " + options.steps);
@@ -1200,6 +1399,13 @@ async function generate(options) {
   }
   log("Accumulated UNet execution time " + totalUnetExecutionSeconds.toFixed(2) +
     "s across " + options.steps + " steps (sum of A + B + C inference calls).");
+  if (gpuScheduler) {
+    latents = await gpuScheduler.readLatents();
+    for (let i = 0; i < latents.length; i++) {
+      if (!Number.isFinite(latents[i])) throw new Error("GPU scheduler produced a non-finite latent at " + i + ".");
+    }
+    log("GPU scheduler final latent readback complete · no per-step latent readback.");
+  }
 
   checkCancelled();
   log("Denoising complete. Loading VAE decoder after releasing all UNet partitions.");
