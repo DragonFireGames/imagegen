@@ -1322,7 +1322,7 @@ function downloadGenerationSettings() {
   const link = document.createElement("a");
   link.href = url;
   link.download = "illustrious-settings-" + settings.generation.width + "x" +
-    settings.generation.height + "-batch-" + settings.generation.batchCount +
+    settings.generation.height + "-batch-" + (settings.generation.batchCount ?? 1) +
     "-seed-" + (settings.generation.seed === -1 ? "random" : settings.generation.seed) + ".json";
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
