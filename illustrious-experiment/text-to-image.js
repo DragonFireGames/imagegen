@@ -599,10 +599,10 @@ function validateGpuTensor(tensor, label, expectedShape) {
   return tensor;
 }
 
-function createGpuInput(device, dataType, data, dims, label) {
+function createGpuInput(device, dataType, data, dims, label, usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST) {
   const buffer = device.createBuffer({
     size: Math.max(4, data.byteLength),
-    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+    usage
   });
   try {
     device.queue.writeBuffer(buffer, 0, data);
@@ -644,7 +644,7 @@ function createGpuInputState(conditioning, width, height, batchSize, conditionin
       [batchSize, 6], "UNET_A time_ids");
     entries.cOutput = createGpuInput(device, "float16",
       new Float16Array(latentLength * batchSize), [batchSize, 4, latentHeight, latentWidth],
-      "UNET_C reusable output");
+      "UNET_C reusable output", GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC);
   } catch (error) {
     for (const entry of Object.values(entries)) entry.buffer.destroy();
     throw error;
