@@ -77,7 +77,7 @@
         <div class="fact"><span>Graph layout</span><strong>3-part SDXL UNet</strong></div>
         <div class="fact"><span>Adapter maps</span><strong>FP16 weights-index files</strong></div>
       </div>
-      <p class="notice">This is WAI Illustrious v17, a fine-tune based on Illustrious v0.1—not the untouched v0.1 base. The manifest lists 232 MB for CLIP-L, 1.39 GB for CLIP-bigG, 5.14 GB for the three FP16 UNet graphs, and about 167 MB for the VAE pair. The two INT4 UNet alternatives are additional files and are not the initial LoRA target. Each external-data shard is below 1 GB. The 4 GiB WebGPU buffer limit reported by this browser is a per-buffer limit, not a measurement of total available GPU memory. We will start with CLIP-L only.</p>
+      <p class="notice">This is WAI Illustrious v17, a fine-tune based on Illustrious v0.1—not the untouched v0.1 base. The manifest lists 232 MB for CLIP-L, 1.39 GB for CLIP-bigG, 5.14 GB for the three FP16 UNet graphs, and about 167 MB for the VAE pair. Each external-data shard is below 1 GB. The 4 GiB WebGPU buffer limit reported by this browser is a per-buffer limit, not a measurement of total available GPU memory. The main generator can apply compatible LoRAs across the indexed CLIP and split-UNet components.</p>
       <p><a href="https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0" target="_blank" rel="noreferrer">Original Illustrious XL v0.1 base</a> · <a href="https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17/blob/main/LICENSE.txt" target="_blank" rel="noreferrer">Candidate pack license</a></p>
     </section>
 
@@ -141,7 +141,7 @@
       <label for="loraPatchStrength">Test LoRA strength</label>
       <input class="number-input" id="loraPatchStrength" type="number" min="0" max="2" step="0.05" value="0.75">
       <button class="button" id="testSingleLoraPatch" type="button">Test one patched CLIP-L weight</button>
-      <p class="status" id="loraPatchStatus" data-type="info" aria-live="polite">Choose LoRA in the local .safetensors picker above first.</p>
+      <p class="status" id="loraPatchStatus" data-type="info" aria-live="polite">Choose a LoRA in the shared .safetensors picker above first.</p>
       <div class="data-list" id="loraPatchSummary" hidden></div>
       <pre class="inspect-output" id="loraPatchOutput" hidden></pre>
     </section>
@@ -149,11 +149,11 @@
     <section class="panel">
       <p class="eyebrow">Full CLIP-L adapter patch</p>
       <h2>Apply all mapped CLIP-L LoRA weights</h2>
-      <p>This applies all 66 shape-compatible CLIP-L LoRA pairs to the matching FP16 ONNX initializers. The six layer-11 pairs remain excluded because the graph exposes the penultimate hidden state and does not index that final block. It then loads both the original and patched CLIP-L sessions and compares their outputs.</p>
+      <p>This applies every compatible CLIP-L LoRA pair found in the selected adapter to its matching FP16 ONNX initializer. Targets not present in the graph index are skipped only when they belong to the unsupported final CLIP-L block. It then loads both the original and patched CLIP-L sessions and compares their outputs.</p>
       <p class="notice">This is the next validation stage, not full image generation. It downloads the CLIP-L external-data shard and reads the selected local adapter's CLIP-L factor tensors. The .safetensors file is not uploaded. CLIP-bigG and the three UNet partitions are not patched by this test.</p>
       <label for="fullClipLStrength">Full CLIP-L LoRA strength</label>
       <input class="number-input" id="fullClipLStrength" type="number" min="0" max="2" step="0.05" value="0.75">
-      <button class="button" id="testFullClipL" type="button">Test all 66 CLIP-L LoRA pairs</button>
+      <button class="button" id="testFullClipL" type="button">Test mapped CLIP-L LoRA pairs</button>
       <p class="status" id="fullClipLStatus" data-type="info" aria-live="polite">Select LoRA in the shared .safetensors picker above first.</p>
       <div class="data-list" id="fullClipLSummary" hidden></div>
       <pre class="inspect-output" id="fullClipLOutput" hidden></pre>
@@ -162,9 +162,9 @@
     <section class="panel">
       <p class="eyebrow">Full local adapter integrity check</p>
       <h2>Verify local BF16 adapter payload values</h2>
-      <p>Stream the entire selected .safetensors data block in 4 MiB chunks, validate every tensor's shape and byte range, and scan all BF16 values for NaN/Infinity. This checks the actual 218 MB adapter payload rather than just its JSON header.</p>
+      <p>Stream the entire selected .safetensors data block in 4 MiB chunks, validate every tensor's shape and byte range, and scan all BF16 values for NaN/Infinity. This checks the selected adapter's BF16 tensor payload rather than just its JSON header.</p>
       <p class="notice">All reads come directly from the local file selected above. The script does not upload the LoRA, does not fetch model weights, and does not allocate WebGPU. It scans in small chunks instead of loading the complete tensor payload into memory.</p>
-      <button class="button" id="verifyAllLoraPayloads" type="button">Verify all local BF16 payloads (about 218 MB)</button>
+      <button class="button" id="verifyAllLoraPayloads" type="button">Verify local BF16 payloads</button>
       <p class="status" id="loraIntegrityStatus" data-type="info" aria-live="polite">Choose the LoRA .safetensors file above first.</p>
       <div class="data-list" id="loraIntegritySummary" hidden></div>
     </section>
@@ -172,8 +172,8 @@
     <section class="panel">
       <p class="eyebrow">Browser-side LoRA format reference</p>
       <h2><a href="https://huggingface.co/aaaaaeeeee/blip-lora-sdxl-lightning8" target="_blank" rel="noreferrer">SDXL LoRA browser package</a></h2>
-      <p>The same publisher repacks a standard Kohya .safetensors LoRA into <code>lora.json</code> plus <code>lora.bin</code> for its browser runtime (FP16 factors; its example has 788 UNet layers). This is a custom format, not built-in ONNX Runtime support, and its layer map cannot be reused for LoRA.</p>
-      <p>We'll need to map the actual LoRA tensors onto the Illustrious ONNX graph, then validate the converted adapter against a Diffusers reference.</p>
+      <p>The same publisher repacks a standard Kohya .safetensors LoRA into <code>lora.json</code> plus <code>lora.bin</code> for its browser runtime (FP16 factors; its example has 788 UNet layers). This is a custom format, not built-in ONNX Runtime support, and its layer map cannot be reused with this model's ONNX weight indexes.</p>
+      <p>The weight mapper below compares the selected adapter's tensor names and shapes with the Illustrious ONNX graph indexes; use the offline exporter for a separate Diffusers reference.</p>
     </section>
 
     <section class="panel">
@@ -183,7 +183,7 @@
       <button class="button" id="testClipEncoder" type="button">Test CLIP-L (about 232 MB)</button>
       <p class="status" id="clipSmokeStatus" data-type="info" aria-live="polite">Not tested yet.</p>
       <div class="data-list" id="clipSmokeSummary" hidden></div>
-      <p class="notice">A successful result will verify that this browser can load one real SDXL ONNX graph with external data and execute it on WebGPU. It will not yet prove UNet operator coverage, full-model memory use, or LoRA LoRA compatibility.</p>
+      <p class="notice">A successful result will verify that this browser can load one real SDXL ONNX graph with external data and execute it on WebGPU. It will not yet prove UNet operator coverage, full-model memory use, or complete LoRA compatibility.</p>
     </section>
 
     <section class="panel">
