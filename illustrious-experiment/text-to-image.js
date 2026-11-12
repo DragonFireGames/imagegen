@@ -11,6 +11,7 @@ const VAE_SCALING_FACTOR = 0.18215; // The WAI pack's Kohaku XL beta5 base VAE c
 
 const runtimePreference = new URLSearchParams(window.location.search).get("runtime") || "auto";
 const graphCaptureEnabled = new URLSearchParams(window.location.search).get("graphCapture") === "1";
+const preferredUnetLayout = new URLSearchParams(window.location.search).get("layout") === "NHWC" ? "NHWC" : null;
 const JSPI_RUNTIME_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/";
 
 async function loadOrtRuntime() {
@@ -382,13 +383,16 @@ async function loadSession(
   label,
   patchedExternalData = null,
   preferredOutputLocation = null,
-  enableGraphCapture = false
+  enableGraphCapture = false,
+  preferredLayout = null
 ) {
   const component = manifest?.components?.[key];
   const started = performance.now();
   log("Loading " + label + " (" + formatBytes(component?.bytes) + ")…");
   const sessionOptions = {
-    executionProviders: ["webgpu"],
+    executionProviders: preferredLayout
+      ? [{ name: "webgpu", preferredLayout }]
+      : ["webgpu"],
     graphOptimizationLevel: "all",
     externalData: patchedExternalData || externalData(component)
   };
@@ -398,7 +402,8 @@ async function loadSession(
   log(label + " session created in " + ((performance.now() - started) / 1000).toFixed(2) +
     "s · inputs: " + session.inputNames.join(", ") +
     (preferredOutputLocation ? " · GPU-resident outputs enabled" : "") +
-    (enableGraphCapture ? " · WebGPU graph capture enabled" : ""));
+    (enableGraphCapture ? " · WebGPU graph capture enabled" : "") +
+    (preferredLayout ? " · preferred layout " + preferredLayout : ""));
   return session;
 }
 
@@ -1431,7 +1436,8 @@ async function buildUnetSessions(
   conditioningIndex,
   patchCache,
   useGpuScheduler = true,
-  enableGraphCapture = false
+  enableGraphCapture = false,
+  preferredLayout = null
 ) {
   const sessions = { a: null, b: null, c: null, gpuInputs: null, gpuOutputs: { a: null, b: null }, batchSize };
   const patchedComponent = async name => {
@@ -1460,14 +1466,16 @@ async function buildUnetSessions(
   try {
     const patchedA = await patchedComponent("unet_a");
     sessions.a = await loadSession(
-      manifest, "unet_a", "UNET_A", patchedA?.externalData, outputsA, enableGraphCapture
+      manifest, "unet_a", "UNET_A", patchedA?.externalData, outputsA,
+      enableGraphCapture, preferredLayout
     );
     sessions.gpuInputs = createGpuInputState(conditioning, width, height, batchSize, conditioningIndex);
     checkCancelled();
 
     const patchedB = await patchedComponent("unet_b");
     sessions.b = await loadSession(
-      manifest, "unet_b", "UNET_B", patchedB?.externalData, outputsB, enableGraphCapture
+      manifest, "unet_b", "UNET_B", patchedB?.externalData, outputsB,
+      enableGraphCapture, preferredLayout
     );
     checkCancelled();
 
@@ -1493,7 +1501,8 @@ async function buildUnetSessions(
     sessions.c = await loadSession(
       manifest, "unet_c", "UNET_C", patchedC?.externalData,
       sessions.gpuScheduler ? "gpu-buffer" : null,
-      enableGraphCapture
+      enableGraphCapture,
+      preferredLayout
     );
 
     validateSessionInputs(sessions.a, ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], "UNET_A");
@@ -1545,7 +1554,8 @@ async function ensureUnetSessions(manifest, lora, conditioning, width, height, c
   const conditioningIndex = cfg === 1 ? 1 : 0;
   const key = adapterCacheKey(lora) + "|" + width + "x" + height + "|batch" + batchSize +
     (useGpuScheduler ? "|gpu-scheduler" : "|cpu-scheduler") +
-    (graphCaptureEnabled ? "|graph-capture" : "|standard-dispatch");
+    (graphCaptureEnabled ? "|graph-capture" : "|standard-dispatch") +
+    "|" + (preferredUnetLayout || "default-layout");
   if (residentUnetSessions && residentUnetKey === key) {
     log("Reusing resident UNET_A, UNET_B, and UNET_C sessions.");
     residentUnetSessions.gpuInputs.updateConditioning(conditioning, conditioningIndex);
@@ -1585,7 +1595,7 @@ async function ensureUnetSessions(manifest, lora, conditioning, width, height, c
     try {
       sessions = await buildUnetSessions(
         manifest, lora, conditioning, width, height, batchSize, conditioningIndex,
-        patchCache, useGpuScheduler, graphCaptureEnabled
+        patchCache, useGpuScheduler, graphCaptureEnabled, preferredUnetLayout
       );
       log("UNET_A/B/C ready · " + (graphCaptureEnabled ? "graph-captured" : "standard") +
         " WebGPU dispatch with persistent GPU inputs and GPU-resident partition handoffs." +
@@ -1601,7 +1611,7 @@ async function ensureUnetSessions(manifest, lora, conditioning, width, height, c
         (captureError?.message || String(captureError)));
       sessions = await buildUnetSessions(
         manifest, lora, conditioning, width, height, batchSize, conditioningIndex,
-        patchCache, useGpuScheduler, false
+        patchCache, useGpuScheduler, false, preferredUnetLayout
       );
       await runWarmup();
     }
@@ -1928,6 +1938,7 @@ async function generate(options, infillData = null) {
 
   log(runtimeLabel + ".");
   if (runtimeNote) log(runtimeNote);
+  log("UNet preferred layout · " + (preferredUnetLayout || "NCHW (default)") + ".");
   if (graphCaptureEnabled) log("Static UNet WebGPU graph capture requested · initialization falls back to standard dispatch if capture fails.");
   if (gpuProfilingEnabled) {
     log("WebGPU kernel profiling enabled · inspect [profiling] entries in the browser console; timings include profiling overhead.");
