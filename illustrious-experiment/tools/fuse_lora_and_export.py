@@ -20,7 +20,7 @@ from collections import Counter
 
 
 DEFAULT_BASE = "OnomaAIResearch/Illustrious-xl-early-release-v0"
-ADAPTER_NAME = "personal-ami"
+ADAPTER_NAME = "sdxl-lora"
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lora", required=True, type=Path, help="Path to the local .safetensors LoRA file.")
     parser.add_argument("--output", required=True, type=Path, help="Output directory (keep this outside the Git repo).")
     parser.add_argument("--base-model", default=DEFAULT_BASE, help=f"Diffusers base model (default: {DEFAULT_BASE}).")
-    parser.add_argument("--strength", type=float, default=0.75, help="LoRA fuse scale (suggested Personal Ami range: 0.6–0.9).")
+    parser.add_argument("--strength", type=float, default=1.0, help="LoRA fuse scale (default: 1.0).")
     parser.add_argument("--dtype", choices=("float16", "bfloat16", "float32"), default="bfloat16", help="Illustrious v0.1 is published with BF16 weights; use float16 for hardware without reliable BF16 support.")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto", help="Device used for fusion/export. Auto prefers CUDA, then Apple MPS, then CPU.")
     parser.add_argument("--export-onnx", action="store_true", help="Run optimum-cli export after fusing.")
@@ -46,6 +46,7 @@ def inspect_lora_header(lora_path: Path, safe_open) -> dict:
         "lora_unet_": "unet",
         "lora_te1_": "text_encoder",
         "lora_te2_": "text_encoder_2",
+        "lora_te_": "text_encoder",
     }
     suffixes = (
         (".lora_down.weight", "down"),
@@ -104,12 +105,10 @@ def inspect_lora_header(lora_path: Path, safe_open) -> dict:
             continue
         ranks[down[0]] += 1
 
-    expected_components = {"unet", "text_encoder", "text_encoder_2"}
-    missing_components = sorted(expected_components - set(component_counts))
-    if missing_components:
+    if not component_counts:
         raise RuntimeError(
-            "The LoRA is missing expected SDXL component groups: "
-            + ", ".join(missing_components)
+            "No supported SDXL LoRA component groups were found. "
+            "Expected Kohya prefixes for UNet, CLIP-L, or CLIP-bigG."
         )
     if unknown_keys:
         sample = ", ".join(unknown_keys[:8])
@@ -240,12 +239,13 @@ def main() -> int:
             for component, names in adapter_map.items()
             if args.adapter_name in names
         ]
-        required_components = {"unet", "text_encoder", "text_encoder_2"}
-        missing_components = sorted(required_components - set(attached_components))
+        required_components = set(lora_header["component_tensor_counts"])
+        attached_required = required_components.intersection(attached_components)
+        missing_components = sorted(required_components - attached_required)
         if missing_components:
             raise RuntimeError(
-                "Diffusers did not attach all three components reported by the "
-                "header. Missing: " + ", ".join(missing_components)
+                "Diffusers did not attach the adapter components found in the "
+                "Safetensors header. Missing: " + ", ".join(missing_components)
             )
 
         print(
@@ -254,7 +254,7 @@ def main() -> int:
         )
         print(f"Fusing at strength {args.strength:g} with safe_fusing=True...", flush=True)
         pipe.fuse_lora(
-            components=["unet", "text_encoder", "text_encoder_2"],
+            components=sorted(required_components),
             lora_scale=args.strength,
             safe_fusing=True,
             adapter_names=[args.adapter_name],
