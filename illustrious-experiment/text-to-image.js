@@ -1008,12 +1008,12 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       if (tensor && typeof tensor.dispose === "function") tensor.dispose();
     }
   };
+  const usePersistentOutputs = Boolean(sessions.gpuOutputs?.a && sessions.gpuOutputs?.b);
 
   try {
     if (sessions.gpuScheduler) gpu.writeTimestep(timestep);
     else gpu.writeStep(batchSample, timestep);
     const startedA = performance.now();
-    const usePersistentOutputs = Boolean(sessions.gpuOutputs?.a && sessions.gpuOutputs?.b);
     outputsA = await sessions.a.run({
       sample: gpu.entries.sample.tensor,
       timestep: gpu.entries.timestep.tensor,
