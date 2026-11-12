@@ -22,6 +22,8 @@ const progressLabel = document.querySelector("#generationProgressLabel");
 const logOutput = document.querySelector("#generationLog");
 const image = document.querySelector("#generatedImage");
 const downloadLink = document.querySelector("#downloadGeneratedImage");
+const prepareEngineButton = document.querySelector("#prepareInferenceEngine");
+const releaseEngineButton = document.querySelector("#releaseInferenceEngine");
 
 const fields = {
   prompt: document.querySelector("#generationPrompt"),
@@ -40,6 +42,11 @@ const fields = {
 let cancelRequested = false;
 let generationStarted = 0;
 let imageObjectUrl = null;
+let residentUnetSessions = null;
+let residentUnetKey = null;
+let residentVaeSession = null;
+let residentEngineLock = false;
+const conditioningCache = new Map();
 
 function setStatus(message, type = "info") {
   status.textContent = message;
@@ -688,6 +695,202 @@ function readOptions() {
   };
 }
 
+
+function adapterCacheKey(personalAmi) {
+  if (!personalAmi) return "base";
+  const file = personalAmi.file;
+  return [
+    file.name,
+    file.size,
+    file.lastModified,
+    personalAmi.strength
+  ].join("|");
+}
+
+function conditioningCacheKey(options) {
+  return JSON.stringify([
+    options.prompt,
+    options.negative,
+    adapterCacheKey(options.personalAmi)
+  ]);
+}
+
+async function getConditioning(manifest, options) {
+  const key = conditioningCacheKey(options);
+  if (conditioningCache.has(key)) {
+    const cached = conditioningCache.get(key);
+    conditioningCache.delete(key);
+    conditioningCache.set(key, cached);
+    log("Reused cached CLIP conditioning · positive/negative prompt and adapter match.");
+    return cached;
+  }
+  const conditioning = await encodePrompts(
+    manifest,
+    options.prompt,
+    options.negative,
+    options.personalAmi
+  );
+  conditioningCache.set(key, conditioning);
+  while (conditioningCache.size > 8) {
+    conditioningCache.delete(conditioningCache.keys().next().value);
+  }
+  log("Cached prompt conditioning · " + conditioningCache.size + "/8 entries.");
+  return conditioning;
+}
+
+async function ensureUnetSessions(manifest, personalAmi) {
+  const key = adapterCacheKey(personalAmi);
+  if (residentUnetSessions && residentUnetKey === key) {
+    log("Reusing resident UNET_A, UNET_B, and UNET_C sessions.");
+    if (!residentEngineLock) {
+      releaseHeavyModelTest("full Illustrious image generation");
+      acquireHeavyModelTest("resident Illustrious inference engine");
+      residentEngineLock = true;
+    }
+    return residentUnetSessions;
+  }
+
+  if (residentUnetSessions) {
+    log("Adapter configuration changed · releasing the previous resident UNet before rebuilding it.");
+    await releaseSessions(residentUnetSessions);
+    residentUnetSessions = null;
+    residentUnetKey = null;
+  }
+
+  const sessions = { a: null, b: null, c: null };
+  try {
+    setProgress(8, "Preparing UNet partitions");
+    setStatus("Preparing UNET_A, UNET_B, and UNET_C. This requires several GiB of memory…");
+    const patchedA = personalAmi
+      ? await preparePersonalAmiComponent(personalAmi.file, manifest, "unet_a", personalAmi.strength, log, checkCancelled)
+      : null;
+    sessions.a = await loadSession(manifest, "unet_a", "UNET_A", patchedA?.externalData);
+    checkCancelled();
+
+    const patchedB = personalAmi
+      ? await preparePersonalAmiComponent(personalAmi.file, manifest, "unet_b", personalAmi.strength, log, checkCancelled)
+      : null;
+    sessions.b = await loadSession(manifest, "unet_b", "UNET_B", patchedB?.externalData);
+    checkCancelled();
+
+    const patchedC = personalAmi
+      ? await preparePersonalAmiComponent(personalAmi.file, manifest, "unet_c", personalAmi.strength, log, checkCancelled)
+      : null;
+    sessions.c = await loadSession(manifest, "unet_c", "UNET_C", patchedC?.externalData);
+
+    validateSessionInputs(sessions.a, ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], "UNET_A");
+    validateSessionInputs(sessions.b, ["hidden", "emb", "encoder_hidden_states", "skip_6", "skip_7", "skip_8"], "UNET_B");
+    validateSessionInputs(sessions.c, ["hidden", "emb", "encoder_hidden_states", "skip_0", "skip_1", "skip_2", "skip_3", "skip_4", "skip_5"], "UNET_C");
+
+    residentUnetSessions = sessions;
+    residentUnetKey = key;
+    log("UNet engine prepared · all three sessions will remain resident for subsequent images.");
+
+    if (!residentEngineLock) {
+      releaseHeavyModelTest("full Illustrious image generation");
+      acquireHeavyModelTest("resident Illustrious inference engine");
+      residentEngineLock = true;
+    }
+    return residentUnetSessions;
+  } catch (error) {
+    if (residentUnetSessions !== sessions) await releaseSessions(sessions);
+    throw error;
+  }
+}
+
+async function ensureVaeSession(manifest) {
+  if (residentVaeSession) {
+    log("Reusing resident VAE decoder session.");
+    return residentVaeSession;
+  }
+  residentVaeSession = await loadSession(manifest, "vae_decoder", "VAE decoder");
+  return residentVaeSession;
+}
+
+async function releaseInferenceEngine() {
+  if (residentVaeSession) {
+    try {
+      await residentVaeSession.release();
+      residentVaeSession = null;
+      await yieldFrames();
+      log("Released resident VAE decoder.");
+    } catch (error) {
+      log("Warning: failed to release VAE decoder: " + (error?.message || error));
+    }
+  }
+  if (residentUnetSessions) {
+    await releaseSessions(residentUnetSessions);
+    residentUnetSessions = null;
+    residentUnetKey = null;
+  }
+  if (residentEngineLock) {
+    releaseHeavyModelTest("resident Illustrious inference engine");
+    residentEngineLock = false;
+  }
+  log("Inference engine released. GPU model sessions are no longer resident.");
+}
+
+async function prepareInferenceEngine() {
+  const options = readOptions();
+  generationStarted = performance.now();
+  logOutput.textContent = "";
+  cancelRequested = false;
+  const acquiredHere = !residentEngineLock;
+  if (acquiredHere) {
+    acquireHeavyModelTest("resident Illustrious inference engine");
+    residentEngineLock = true;
+  }
+  prepareEngineButton.disabled = true;
+  releaseEngineButton.disabled = false;
+  button.disabled = true;
+  cancelButton.disabled = false;
+  try {
+    if (typeof Float16Array !== "function") throw new Error("This browser does not provide Float16Array.");
+    if (!navigator.gpu) throw new Error("WebGPU is not available in this browser.");
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+    if (!adapter) throw new Error("The browser did not return a WebGPU adapter.");
+    log("WebGPU adapter ready · maxBufferSize " + formatBytes(adapter.limits?.maxBufferSize || 0) +
+      " · maxStorageBufferBindingSize " + formatBytes(adapter.limits?.maxStorageBufferBindingSize || 0));
+
+    const manifest = await fetchJSON(MANIFEST_URL, "Model manifest");
+    setProgress(1, "Preparing model downloads");
+    setStatus("Downloading and verifying model files into persistent browser cache…");
+    const cacheResult = await prepareModelCache(manifest, log,
+      (value, path) => setProgress(1 + value * 5, "Caching model files · " + path),
+      checkCancelled);
+    log("Preload complete · " + cacheResult.downloaded + " new downloads, " +
+      cacheResult.reused + " cached files.");
+
+    setStatus("Precomputing prompt conditioning…");
+    setProgress(7, "Precomputing prompt conditioning");
+    await getConditioning(manifest, options);
+    checkCancelled();
+
+    setStatus("Preparing resident UNet sessions…");
+    await ensureUnetSessions(manifest, options.personalAmi);
+    checkCancelled();
+
+    setStatus("Preparing resident VAE decoder…");
+    setProgress(96, "Preparing VAE decoder");
+    await ensureVaeSession(manifest);
+    setProgress(100, "Engine ready");
+    setStatus("Inference engine prepared · UNet and VAE sessions are resident; prompt conditioning is cached.", "success");
+    log("Ready for repeated generation. Change prompt/adapter settings as needed; matching conditioning and model sessions will be reused.");
+  } catch (error) {
+    console.error("[Illustrious] Engine preparation failed:", error);
+    setStatus("Engine preparation failed: " + (error?.message || String(error)), "error");
+    log("ERROR: " + (error?.stack || error?.message || String(error)));
+    if (acquiredHere && !residentUnetSessions && !residentVaeSession) {
+      releaseHeavyModelTest("resident Illustrious inference engine");
+      residentEngineLock = false;
+    }
+  } finally {
+    prepareEngineButton.disabled = false;
+    button.disabled = false;
+    cancelButton.disabled = true;
+  }
+}
+
 async function generate(options) {
   const manifest = await fetchJSON(MANIFEST_URL, "Model manifest");
   setProgress(1, "Preparing model downloads");
@@ -715,7 +918,7 @@ async function generate(options) {
   checkCancelled();
   setProgress(2, "Encoding prompts");
   setStatus("Encoding positive and negative prompts…");
-  const conditioning = await encodePrompts(manifest, options.prompt, options.negative, options.personalAmi);
+  const conditioning = await getConditioning(manifest, options);
   checkCancelled();
 
   const scheduler = createEulerAncestralScheduler(schedulerConfig, options.steps);
@@ -730,62 +933,39 @@ async function generate(options) {
   const unetBytes = parts.reduce((sum, key) => sum + Number(manifest.components?.[key]?.bytes || 0), 0);
   log("UNet manifest payload total " + formatBytes(unetBytes) +
     " (not a direct VRAM measurement). Loading all partitions together…");
-  const sessions = { a: null, b: null, c: null };
+  const sessions = await ensureUnetSessions(manifest, options.personalAmi);
   let totalUnetExecutionSeconds = 0;
-  try {
-    setProgress(8, "Loading UNet partitions");
-    setStatus("Loading UNET_A, UNET_B, and UNET_C together. This requires several GiB of memory…");
-    const patchedA = options.personalAmi
-      ? await preparePersonalAmiComponent(options.personalAmi.file, manifest, "unet_a", options.personalAmi.strength, log, checkCancelled)
-      : null;
-    sessions.a = await loadSession(manifest, "unet_a", "UNET_A", patchedA?.externalData);
-    checkCancelled();
-    const patchedB = options.personalAmi
-      ? await preparePersonalAmiComponent(options.personalAmi.file, manifest, "unet_b", options.personalAmi.strength, log, checkCancelled)
-      : null;
-    sessions.b = await loadSession(manifest, "unet_b", "UNET_B", patchedB?.externalData);
-    checkCancelled();
-    const patchedC = options.personalAmi
-      ? await preparePersonalAmiComponent(options.personalAmi.file, manifest, "unet_c", options.personalAmi.strength, log, checkCancelled)
-      : null;
-    sessions.c = await loadSession(manifest, "unet_c", "UNET_C", patchedC?.externalData);
-    validateSessionInputs(sessions.a, ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], "UNET_A");
-    validateSessionInputs(sessions.b, ["hidden", "emb", "encoder_hidden_states", "skip_6", "skip_7", "skip_8"], "UNET_B");
-    validateSessionInputs(sessions.c, ["hidden", "emb", "encoder_hidden_states", "skip_0", "skip_1", "skip_2", "skip_3", "skip_4", "skip_5"], "UNET_C");
-    log("All three UNet sessions are resident. Beginning " + options.steps + " denoising steps.");
-    await yieldFrames();
+  log("All three UNet sessions are resident. Beginning " + options.steps + " denoising steps.");
+  await yieldFrames();
 
-    for (let step = 0; step < options.steps; step++) {
-      checkCancelled();
-      const stepStarted = performance.now();
-      const scaled = scheduler.scaleModelInput(latents, step);
-      const denoiser = await runUnetStep(
-        sessions,
-        conditioning,
-        scaled,
-        scheduler.timesteps[step],
-        options.width,
-        options.height,
-        options.cfg,
-        step
-      );
-      totalUnetExecutionSeconds += denoiser.timings.a + denoiser.timings.b + denoiser.timings.c;
-      const epsilon = denoiser.guided;
-      const noise = createNormalNoise(latentSize, options.seed + step + 1);
-      latents = scheduler.step(epsilon, step, latents, noise);
-      for (let i = 0; i < latents.length; i++) {
-        if (!Number.isFinite(latents[i])) throw new Error("Denoising produced a non-finite latent at " + i + ".");
-      }
-      const percent = 8 + ((step + 1) / options.steps) * 82;
-      setProgress(percent, "Denoising " + (step + 1) + " / " + options.steps);
-      setStatus("Denoising step " + (step + 1) + " of " + options.steps + "…");
-      log("Step " + (step + 1) + "/" + options.steps + " scheduler update " +
-        ((performance.now() - stepStarted) / 1000).toFixed(2) + "s · sigma " +
-        scheduler.sigmas[step].toFixed(5) + " → " + scheduler.sigmas[step + 1].toFixed(5));
-      await yieldFrames();
+  for (let step = 0; step < options.steps; step++) {
+    checkCancelled();
+    const stepStarted = performance.now();
+    const scaled = scheduler.scaleModelInput(latents, step);
+    const denoiser = await runUnetStep(
+      sessions,
+      conditioning,
+      scaled,
+      scheduler.timesteps[step],
+      options.width,
+      options.height,
+      options.cfg,
+      step
+    );
+    totalUnetExecutionSeconds += denoiser.timings.a + denoiser.timings.b + denoiser.timings.c;
+    const epsilon = denoiser.guided;
+    const noise = createNormalNoise(latentSize, options.seed + step + 1);
+    latents = scheduler.step(epsilon, step, latents, noise);
+    for (let i = 0; i < latents.length; i++) {
+      if (!Number.isFinite(latents[i])) throw new Error("Denoising produced a non-finite latent at " + i + ".");
     }
-  } finally {
-    await releaseSessions(sessions);
+    const percent = 8 + ((step + 1) / options.steps) * 82;
+    setProgress(percent, "Denoising " + (step + 1) + " / " + options.steps);
+    setStatus("Denoising step " + (step + 1) + " of " + options.steps + "…");
+    log("Step " + (step + 1) + "/" + options.steps + " scheduler update " +
+      ((performance.now() - stepStarted) / 1000).toFixed(2) + "s · sigma " +
+      scheduler.sigmas[step].toFixed(5) + " → " + scheduler.sigmas[step + 1].toFixed(5));
+    await yieldFrames();
   }
   log("Accumulated UNet execution time " + totalUnetExecutionSeconds.toFixed(2) +
     "s across " + options.steps + " steps (sum of A + B + C inference calls).");
@@ -794,43 +974,50 @@ async function generate(options) {
   log("Denoising complete. Loading VAE decoder after releasing all UNet partitions.");
   setProgress(92, "Loading VAE decoder");
   setStatus("Loading VAE decoder…");
-  let vaeSession;
-  try {
-    vaeSession = await loadSession(manifest, "vae_decoder", "VAE decoder");
-    checkCancelled();
-    const scaledLatents = new Float16Array(latents.length);
-    for (let i = 0; i < latents.length; i++) {
-      scaledLatents[i] = latents[i] / VAE_SCALING_FACTOR;
-    }
-    const inputName = vaeSession.inputNames[0];
-    if (!inputName) throw new Error("VAE decoder graph has no input.");
-    const inputIndex = vaeSession.inputNames.indexOf(inputName);
-    validateStaticShape(vaeSession.inputMetadata?.[inputIndex],
-      [1, 4, latentHeight, latentWidth], "VAE decoder input");
-    const started = performance.now();
-    log("Decoding latent [1,4," + latentHeight + "," + latentWidth +
-      "] · VAE scaling factor " + VAE_SCALING_FACTOR + ".");
-    const outputs = await vaeSession.run({
-      [inputName]: new ort.Tensor("float16", scaledLatents, [1, 4, latentHeight, latentWidth])
-    });
-    const outputName = vaeSession.outputNames[0];
-    if (!outputName || !outputs[outputName]) throw new Error("VAE decoder returned no image tensor.");
-    const canvas = renderImage(outputs[outputName], options.width, options.height);
-    log("VAE decode + canvas conversion " + ((performance.now() - started) / 1000).toFixed(2) + "s.");
-    setProgress(100, "Complete");
-    return canvas;
-  } finally {
-    if (vaeSession) {
-      try {
-        await vaeSession.release();
-        await yieldFrames();
-        log("Released VAE decoder.");
-      } catch (error) {
-        log("Warning: could not release VAE decoder: " + (error?.message || error));
-      }
-    }
+  const vaeSession = await ensureVaeSession(manifest);
+  checkCancelled();
+  const scaledLatents = new Float16Array(latents.length);
+  for (let i = 0; i < latents.length; i++) {
+    scaledLatents[i] = latents[i] / VAE_SCALING_FACTOR;
   }
+  const inputName = vaeSession.inputNames[0];
+  if (!inputName) throw new Error("VAE decoder graph has no input.");
+  const inputIndex = vaeSession.inputNames.indexOf(inputName);
+  validateStaticShape(vaeSession.inputMetadata?.[inputIndex],
+    [1, 4, latentHeight, latentWidth], "VAE decoder input");
+  const started = performance.now();
+  log("Decoding latent [1,4," + latentHeight + "," + latentWidth +
+    "] · VAE scaling factor " + VAE_SCALING_FACTOR + ".");
+  const outputs = await vaeSession.run({
+    [inputName]: new ort.Tensor("float16", scaledLatents, [1, 4, latentHeight, latentWidth])
+  });
+  const outputName = vaeSession.outputNames[0];
+  if (!outputName || !outputs[outputName]) throw new Error("VAE decoder returned no image tensor.");
+  const canvas = renderImage(outputs[outputName], options.width, options.height);
+  log("VAE decode + canvas conversion " + ((performance.now() - started) / 1000).toFixed(2) + "s.");
+  setProgress(100, "Complete");
+  return canvas;
 }
+
+prepareEngineButton.addEventListener("click", prepareInferenceEngine);
+
+releaseEngineButton.addEventListener("click", async () => {
+  if (button.disabled || prepareEngineButton.disabled) return;
+  releaseEngineButton.disabled = true;
+  button.disabled = true;
+  prepareEngineButton.disabled = true;
+  try {
+    await releaseInferenceEngine();
+    setStatus("Inference engine released. The downloaded model files remain cached.", "success");
+    setProgress(0, "Engine released");
+  } catch (error) {
+    setStatus("Could not fully release inference engine: " + (error?.message || String(error)), "error");
+    log("ERROR releasing engine: " + (error?.stack || error?.message || String(error)));
+  } finally {
+    button.disabled = false;
+    prepareEngineButton.disabled = false;
+  }
+});
 
 button.addEventListener("click", async () => {
   let options;
@@ -851,8 +1038,10 @@ button.addEventListener("click", async () => {
   let lockAcquired = false;
 
   try {
-    acquireHeavyModelTest("full Illustrious image generation");
-    lockAcquired = true;
+    if (!residentEngineLock) {
+      acquireHeavyModelTest("full Illustrious image generation");
+      lockAcquired = true;
+    }
     if (typeof Float16Array !== "function") throw new Error("This browser does not provide Float16Array.");
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser.");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
