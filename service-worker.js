@@ -54,7 +54,7 @@ self.addEventListener("activate", event => {
 });
 
 function isRefreshableAppSource(url) {
-  return /\\.(?:html|js|mjs|css)$/.test(url.pathname);
+  return /\.(?:html|js|mjs|css)$/.test(url.pathname);
 }
 
 self.addEventListener("fetch", event => {
