@@ -23,6 +23,7 @@ A browser-local FLUX.2 Klein 4B image generator. The application, JavaScript run
 - scripts/vendor-assets.sh: reproducible asset-vendoring script.
 - .github/workflows/: Pages deployment and dependency-vendoring workflows.
 - waifu2x-unlimited/: standalone browser-local Waifu2x Unlimited copy; ONNX model archives are installed separately.
+- background-removal-experiment/: local AI and color-key background removal with mask refinement.
 
 The vendor workflow fetches pinned npm distributions and the upstream tokenizer, commits them into vendor/ and models/, then deploys the static site. To refresh these dependencies, run **Actions → Vendor browser dependencies**.
 

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101114">
+  <meta name="description" content="Experiment with local AI background removal, color-key flood fill, and manual mask cleanup.">
+  <title>Background Removal Lab — Imagegen</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <a class="brand" href="../" aria-label="Back to Imagegen">
+        <span class="brand-mark" aria-hidden="true">✂</span>
+        <span><span class="eyebrow">Imagegen experiment</span><strong>Background Removal Lab</strong></span>
+      </a>
+      <div class="runtime"><span class="dot" id="runtime-dot"></span><span id="runtime-status">Browser-local processing</span></div>
+    </header>
+
+    <section class="intro">
+      <div>
+        <span class="eyebrow">Segmentation · Color key · Mask painting</span>
+        <h1>Cut out the subject.</h1>
+        <p>Remove a background with a local segmentation model, or use a simple sampled-color tool. Refine the result with a restore/erase brush, then export a transparent PNG.</p>
+      </div>
+      <div class="privacy-note"><span class="privacy-icon">◈</span><span><strong>Runs in this tab</strong><small>Your image is not uploaded. The model files are downloaded once and cached by the browser.</small></span></div>
+    </section>
+
+    <main class="layout">
+      <aside class="panel controls">
+        <section class="control-section">
+          <div class="section-heading"><h2>1. Image</h2><span class="step">INPUT</span></div>
+          <div class="dropzone" id="dropzone">
+            <div class="drop-icon">＋</div>
+            <strong>Drop an image here</strong>
+            <span>or choose a file / paste from clipboard</span>
+            <button class="secondary" type="button" id="choose-image">Choose image</button>
+            <input id="file-input" type="file" accept="image/*" hidden>
+          </div>
+          <div class="file-meta" id="file-meta">No image loaded</div>
+        </section>
+
+        <section class="control-section">
+          <div class="section-heading"><h2>2. Remove background</h2><span class="step">METHOD</span></div>
+          <button class="primary" type="button" id="ai-remove" disabled>
+            <span>✧</span><span><strong>AI remove background</strong><small>RMBG-1.4 · WebGPU / WASM</small></span>
+          </button>
+          <p class="hint license-hint">RMBG-1.4 is licensed for non-commercial use. Commercial use requires a separate agreement with BRIA.</p>
+          <div class="divider-label"><span>OR WITHOUT AI</span></div>
+          <button class="secondary wide" type="button" id="pick-background" disabled>Pick background color from image</button>
+          <p class="hint" id="pick-hint">Click the background in the Original panel. Connected areas of a similar color will be removed.</p>
+          <label for="backend">AI backend</label>
+          <select id="backend">
+            <option value="auto" selected>Auto · WebGPU, then WASM</option>
+            <option value="webgpu">WebGPU only</option>
+            <option value="wasm">WebAssembly CPU</option>
+          </select>
+        </section>
+
+        <section class="control-section">
+          <div class="section-heading"><h2>3. Refine</h2><span class="step">MASK</span></div>
+          <div class="tool-row">
+            <button class="tool active" type="button" data-brush="none" id="brush-view" disabled>View</button>
+            <button class="tool" type="button" data-brush="restore" id="brush-restore" disabled>Restore</button>
+            <button class="tool" type="button" data-brush="erase" id="brush-erase" disabled>Erase</button>
+          </div>
+          <div class="range-head"><label for="brush-size">Brush size</label><output id="brush-size-value">28 px</output></div>
+          <input id="brush-size" type="range" min="4" max="120" value="28" disabled>
+          <div class="range-head"><label for="feather">Edge feather</label><output id="feather-value">1 px</output></div>
+          <input id="feather" type="range" min="0" max="12" value="1" disabled>
+          <div class="range-head"><label for="tolerance">Color tolerance</label><output id="tolerance-value">34</output></div>
+          <input id="tolerance" type="range" min="4" max="150" value="34">
+          <div class="range-head"><label for="color-softness">Color edge softness</label><output id="color-softness-value">18</output></div>
+          <input id="color-softness" type="range" min="0" max="80" value="18">
+          <p class="hint">Color tolerance and softness affect the sampled-color tool. Edge feather is applied to either method.</p>
+          <div class="tool-row actions">
+            <button class="secondary" type="button" id="undo" disabled>Undo stroke</button>
+            <button class="secondary" type="button" id="reset-mask" disabled>Reset mask</button>
+          </div>
+        </section>
+
+        <section class="control-section last">
+          <div class="section-heading"><h2>4. Export</h2><span class="step">PNG</span></div>
+          <button class="export" type="button" id="download" disabled>Download transparent PNG</button>
+          <p class="hint">Exports at the original image dimensions. The preview uses a checkerboard to show transparency.</p>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <div class="workspace-head">
+          <div><h2>Workspace</h2><p id="workspace-status" aria-live="polite">Choose an image to begin.</p></div>
+          <div class="status-pill" id="model-status">Model not loaded</div>
+        </div>
+        <div class="previews">
+          <article class="image-card">
+            <div class="card-head"><strong>Original</strong><span id="original-dimensions">—</span></div>
+            <div class="image-frame" id="source-frame">
+              <div class="empty-state" id="source-empty"><span>▧</span><strong>No image yet</strong><small>Choose, drop, or paste an image</small></div>
+              <img id="source-preview" alt="Original image" hidden>
+            </div>
+            <div class="card-foot"><span id="source-tip">The source stays unchanged.</span><span>INPUT</span></div>
+          </article>
+          <article class="image-card">
+            <div class="card-head"><strong>Transparent cutout</strong><span id="output-dimensions">—</span></div>
+            <div class="image-frame transparent-bg" id="output-frame">
+              <div class="empty-state" id="output-empty"><span>✧</span><strong>Your cutout appears here</strong><small>Run AI removal or sample a background color</small></div>
+              <canvas id="result-canvas" hidden aria-label="Cutout preview; use the restore or erase brush to edit its mask"></canvas>
+            </div>
+            <div class="card-foot"><span id="brush-tip">Mask edits affect the exported PNG.</span><span>OUTPUT</span></div>
+          </article>
+        </div>
+        <div class="progress-wrap">
+          <div class="progress-top"><span id="progress-label">Ready</span><span id="progress-detail">—</span></div>
+          <div class="progress-track"><div id="progress-bar"></div></div>
+        </div>
+        <div class="runtime-log" id="runtime-log" aria-live="polite">Local model loads only when you press “AI remove background.”</div>
+      </section>
+    </main>
+
+    <footer>
+      <span>Background Removal Lab · local browser inference</span>
+      <span><a href="../">Imagegen home</a> · <a href="https://huggingface.co/briaai/RMBG-1.4" target="_blank" rel="noreferrer">RMBG-1.4 model card &amp; license</a> · <a href="https://huggingface.co/docs/transformers.js" target="_blank" rel="noreferrer">Transformers.js</a> · <a href="https://github.com/DragonFireGames/imagegen" target="_blank" rel="noreferrer">Source</a></span>
+    </footer>
+  </div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
