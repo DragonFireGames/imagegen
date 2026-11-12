@@ -910,7 +910,7 @@ async function generate(options) {
   log("Prompt: " + options.prompt);
   log("Negative: " + (options.negative || "(empty)"));
   log("Seed " + options.seed + " · CFG " + options.cfg);
-  log("CLIP encoders run sequentially; all three UNet sessions stay resident through denoising; VAE loads after UNet release.");
+  log("CLIP encoders run sequentially; UNet and VAE sessions remain resident between generations; matching prompt conditioning is cached.");
   if (options.personalAmi) {
     log("Personal Ami enabled · " + options.personalAmi.file.name + " · strength " + options.personalAmi.strength.toFixed(3) + " · all 980 mapped pairs will be patched.");
   } else {
