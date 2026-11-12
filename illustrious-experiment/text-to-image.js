@@ -17,6 +17,13 @@ ort.env.logLevel = "warning";
 // This must be set before ORT creates its first WebGPU session.
 if (ort.env.webgpu) ort.env.webgpu.powerPreference = "high-performance";
 
+// Optional WebGPU operator profiling. Enable with ?gpuProfile=1 before loading
+// the page; profiling adds overhead and should not be used for final benchmarks.
+const gpuProfilingEnabled = new URLSearchParams(window.location.search).get("gpuProfile") === "1";
+if (gpuProfilingEnabled && ort.env.webgpu) {
+  ort.env.webgpu.profiling = { mode: "default" };
+}
+
 const button = document.querySelector("#generateImage");
 const cancelButton = document.querySelector("#cancelGeneration");
 const status = document.querySelector("#generationStatus");
@@ -300,27 +307,18 @@ function fp16Values(tensor, label, shape) {
   return new Float16Array(values);
 }
 
-function tensorAsFloat32(tensor, label) {
+function imageTensorValues(tensor, label) {
   if (!tensor?.data || !Array.isArray(tensor.dims)) throw new Error(label + " has no readable tensor data.");
-  let source;
   if (tensor.type === "float16") {
-    source = tensor.data instanceof Float16Array
-      ? tensor.data
-      : new Float16Array(tensor.data.buffer.slice(
-        tensor.data.byteOffset, tensor.data.byteOffset + tensor.data.byteLength
-      ));
-  } else if (tensor.type === "float32") {
-    source = tensor.data instanceof Float32Array ? tensor.data : Float32Array.from(tensor.data);
-  } else {
-    throw new Error(label + " has unsupported dtype " + tensor.type + ".");
+    if (tensor.data instanceof Float16Array) return tensor.data;
+    if (tensor.data instanceof Uint16Array) {
+      return new Float16Array(tensor.data.buffer, tensor.data.byteOffset, tensor.data.length);
+    }
+  } else if (tensor.type === "float32" && tensor.data instanceof Float32Array) {
+    return tensor.data;
   }
-  const output = new Float32Array(source.length);
-  for (let i = 0; i < source.length; i++) {
-    const value = Number(source[i]);
-    if (!Number.isFinite(value)) throw new Error(label + " contains a non-finite value at " + i + ".");
-    output[i] = value;
-  }
-  return output;
+  throw new Error(label + " has unsupported backing data " + tensor.data.constructor.name +
+    " for dtype " + tensor.type + ".");
 }
 
 function externalData(component) {
@@ -1043,12 +1041,13 @@ async function releaseSessions(sessions) {
 }
 
 function renderImage(tensor, width, height) {
-  const values = tensorAsFloat32(tensor, "VAE decoded image");
-  if (tensor.dims.length !== 4 || tensor.dims[0] !== 1 ||
-      tensor.dims[1] !== 3 || tensor.dims[2] !== height || tensor.dims[3] !== width) {
-    throw new Error("VAE output shape [" + tensor.dims.join(", ") +
+  if (!Array.isArray(tensor?.dims) || tensor.dims.length !== 4 ||
+      tensor.dims[0] !== 1 || tensor.dims[1] !== 3 ||
+      tensor.dims[2] !== height || tensor.dims[3] !== width) {
+    throw new Error("VAE output shape [" + (tensor?.dims || []).join(", ") +
       "] does not match expected [1, 3, " + height + ", " + width + "].");
   }
+  const values = imageTensorValues(tensor, "VAE decoded image");
 
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -1058,9 +1057,15 @@ function renderImage(tensor, width, height) {
   const pixels = context.createImageData(width, height);
   const planeSize = width * height;
   for (let pixel = 0; pixel < planeSize; pixel++) {
-    const r = Math.max(0, Math.min(255, Math.round((values[pixel] * 0.5 + 0.5) * 255)));
-    const g = Math.max(0, Math.min(255, Math.round((values[planeSize + pixel] * 0.5 + 0.5) * 255)));
-    const b = Math.max(0, Math.min(255, Math.round((values[planeSize * 2 + pixel] * 0.5 + 0.5) * 255)));
+    const sourceR = values[pixel];
+    const sourceG = values[planeSize + pixel];
+    const sourceB = values[planeSize * 2 + pixel];
+    if (!Number.isFinite(sourceR) || !Number.isFinite(sourceG) || !Number.isFinite(sourceB)) {
+      throw new Error("VAE decoded image contains a non-finite channel at pixel " + pixel + ".");
+    }
+    const r = Math.max(0, Math.min(255, Math.round((sourceR * 0.5 + 0.5) * 255)));
+    const g = Math.max(0, Math.min(255, Math.round((sourceG * 0.5 + 0.5) * 255)));
+    const b = Math.max(0, Math.min(255, Math.round((sourceB * 0.5 + 0.5) * 255)));
     const offset = pixel * 4;
     pixels.data[offset] = r;
     pixels.data[offset + 1] = g;
@@ -1249,7 +1254,7 @@ function readOptions() {
       throw new Error("Personal Ami strength must be between 0 and 2.");
     }
   }
-  const adapterPrompt = fields.personalAmi.checked && !/\\bpersonal\\s+ami\\b/i.test(prompt)
+  const adapterPrompt = fields.personalAmi.checked && !/\bpersonal\s+ami\b/i.test(prompt)
     ? prompt + ", personal ami"
     : prompt;
   return {
@@ -1567,7 +1572,10 @@ async function generate(options) {
   const latentSize = 4 * latentWidth * latentHeight;
   const rngNoiseSeeds = options.seed;
 
-  log("Model " + (manifest.packageId || MODEL_ID) + " · WebGPU · " +
+  if (gpuProfilingEnabled) {
+    log("WebGPU kernel profiling enabled · inspect [profiling] entries in the browser console; timings include profiling overhead.");
+  }
+  log("Model " + (manifest.packageId || MODEL_ID) + " · WebGPU · "
     options.width + "×" + options.height + " · " + options.steps + " steps.");
   log("Prompt: " + options.prompt);
   log("Negative: " + (options.negative || "(empty)"));
@@ -1654,7 +1662,7 @@ async function generate(options) {
   }
 
   checkCancelled();
-  log("Denoising complete. Loading VAE decoder after releasing all UNet partitions.");
+  log("Denoising complete. Loading the transient VAE decoder for final image decode; UNet sessions remain resident.");
   setProgress(92, "Loading VAE decoder");
   setStatus("Loading VAE decoder…");
   const vaeSession = await ensureVaeSession(manifest);
@@ -1668,18 +1676,22 @@ async function generate(options) {
   const inputIndex = vaeSession.inputNames.indexOf(inputName);
   validateStaticShape(vaeSession.inputMetadata?.[inputIndex],
     [1, 4, latentHeight, latentWidth], "VAE decoder input");
-  const started = performance.now();
   log("Decoding latent [1,4," + latentHeight + "," + latentWidth +
     "] · VAE scaling factor " + VAE_SCALING_FACTOR + ".");
   let outputs = null;
   try {
+    const decodeStarted = performance.now();
     outputs = await vaeSession.run({
       [inputName]: new ort.Tensor("float16", scaledLatents, [1, 4, latentHeight, latentWidth])
     });
+    const decodeSeconds = (performance.now() - decodeStarted) / 1000;
     const outputName = vaeSession.outputNames[0];
     if (!outputName || !outputs[outputName]) throw new Error("VAE decoder returned no image tensor.");
+    const renderStarted = performance.now();
     const canvas = renderImage(outputs[outputName], options.width, options.height);
-    log("VAE decode + canvas conversion " + ((performance.now() - started) / 1000).toFixed(2) + "s.");
+    const renderSeconds = (performance.now() - renderStarted) / 1000;
+    log("VAE inference " + decodeSeconds.toFixed(2) + "s · pixel conversion " +
+      renderSeconds.toFixed(2) + "s · combined " + (decodeSeconds + renderSeconds).toFixed(2) + "s.");
     setProgress(100, "Complete");
     return canvas;
   } finally {
