@@ -539,21 +539,18 @@ function createEulerAncestralScheduler(config, steps) {
   };
 }
 
-function makeBatchSample(scaled, latentHeight, latentWidth) {
+function makeBatchSample(scaled, latentHeight, latentWidth, batchSize = 2) {
   const oneSize = 4 * latentHeight * latentWidth;
-  const batch = new Float16Array(oneSize * 2);
-  for (let i = 0; i < oneSize; i++) {
-    batch[i] = scaled[i];
-    batch[oneSize + i] = scaled[i];
-  }
+  const batch = new Float16Array(oneSize * batchSize);
+  batch.set(scaled, 0);
+  if (batchSize === 2) batch.set(scaled, oneSize);
   return batch;
 }
 
-function makeBatchTimeIds(height, width) {
+function makeBatchTimeIds(height, width, batchSize = 2) {
   const one = [height, width, 0, 0, height, width];
-  const batch = new Float32Array(12);
-  batch.set(one, 0);
-  batch.set(one, 6);
+  const batch = new Float32Array(batchSize * 6);
+  for (let index = 0; index < batchSize; index++) batch.set(one, index * 6);
   return batch;
 }
 
@@ -608,7 +605,7 @@ function createGpuInput(device, dataType, data, dims, label) {
   }
 }
 
-function createGpuInputState(conditioning, width, height) {
+function createGpuInputState(conditioning, width, height, batchSize, conditioningIndex) {
   const device = ort.env.webgpu?.device;
   if (!device || typeof ort.Tensor.fromGpuBuffer !== "function") {
     throw new Error("ONNX Runtime did not expose the GPUDevice/Tensor.fromGpuBuffer API required for reusable GPU inputs.");
@@ -616,18 +613,26 @@ function createGpuInputState(conditioning, width, height) {
   const latentWidth = width / 8;
   const latentHeight = height / 8;
   const latentLength = 4 * latentHeight * latentWidth;
+  const hiddenLength = 77 * 2048;
+  const pooledLength = 1280;
+  const hiddenInput = batchSize === 1
+    ? conditioning.encoderHidden.subarray(conditioningIndex * hiddenLength, (conditioningIndex + 1) * hiddenLength)
+    : conditioning.encoderHidden;
+  const pooledInput = batchSize === 1
+    ? conditioning.textEmbeds.subarray(conditioningIndex * pooledLength, (conditioningIndex + 1) * pooledLength)
+    : conditioning.textEmbeds;
   const entries = {};
   try {
-    entries.sample = createGpuInput(device, "float16", new Float16Array(latentLength * 2),
-      [2, 4, latentHeight, latentWidth], "UNET_A sample");
-    entries.timestep = createGpuInput(device, "float32", new Float32Array(2),
-      [2], "UNET_A timestep");
-    entries.encoderHidden = createGpuInput(device, "float16", conditioning.encoderHidden,
-      [2, 77, 2048], "shared encoder_hidden_states");
-    entries.textEmbeds = createGpuInput(device, "float16", conditioning.textEmbeds,
-      [2, 1280], "UNET_A text_embeds");
-    entries.timeIds = createGpuInput(device, "float32", makeBatchTimeIds(height, width),
-      [2, 6], "UNET_A time_ids");
+    entries.sample = createGpuInput(device, "float16", new Float16Array(latentLength * batchSize),
+      [batchSize, 4, latentHeight, latentWidth], "UNET_A sample");
+    entries.timestep = createGpuInput(device, "float32", new Float32Array(batchSize),
+      [batchSize], "UNET_A timestep");
+    entries.encoderHidden = createGpuInput(device, "float16", hiddenInput,
+      [batchSize, 77, 2048], "shared encoder_hidden_states");
+    entries.textEmbeds = createGpuInput(device, "float16", pooledInput,
+      [batchSize, 1280], "UNET_A text_embeds");
+    entries.timeIds = createGpuInput(device, "float32", makeBatchTimeIds(height, width, batchSize),
+      [batchSize, 6], "UNET_A time_ids");
   } catch (error) {
     for (const entry of Object.values(entries)) entry.buffer.destroy();
     throw error;
@@ -635,22 +640,28 @@ function createGpuInputState(conditioning, width, height) {
   return {
     device,
     entries,
+    batchSize,
     writeStep(sample, timestep) {
       if (sample.byteLength !== entries.sample.buffer.size) {
         throw new Error("Latent input size changed while the UNet engine was resident.");
       }
-      entries.timestep.data[0] = timestep;
-      entries.timestep.data[1] = timestep;
+      entries.timestep.data.fill(timestep);
       device.queue.writeBuffer(entries.sample.buffer, 0, sample);
       device.queue.writeBuffer(entries.timestep.buffer, 0, entries.timestep.data);
     },
-    updateConditioning(next) {
-      if (next.encoderHidden.byteLength !== entries.encoderHidden.buffer.size ||
-          next.textEmbeds.byteLength !== entries.textEmbeds.buffer.size) {
+    updateConditioning(next, nextConditioningIndex = conditioningIndex) {
+      const hidden = batchSize === 1
+        ? next.encoderHidden.subarray(nextConditioningIndex * hiddenLength, (nextConditioningIndex + 1) * hiddenLength)
+        : next.encoderHidden;
+      const pooled = batchSize === 1
+        ? next.textEmbeds.subarray(nextConditioningIndex * pooledLength, (nextConditioningIndex + 1) * pooledLength)
+        : next.textEmbeds;
+      if (hidden.byteLength !== entries.encoderHidden.buffer.size ||
+          pooled.byteLength !== entries.textEmbeds.buffer.size) {
         throw new Error("Prompt conditioning dimensions changed while the UNet engine was resident.");
       }
-      device.queue.writeBuffer(entries.encoderHidden.buffer, 0, next.encoderHidden);
-      device.queue.writeBuffer(entries.textEmbeds.buffer, 0, next.textEmbeds);
+      device.queue.writeBuffer(entries.encoderHidden.buffer, 0, hidden);
+      device.queue.writeBuffer(entries.textEmbeds.buffer, 0, pooled);
     },
     destroy() {
       for (const entry of Object.values(entries)) entry.buffer.destroy();
@@ -667,8 +678,8 @@ function disposeOutput(outputs, name) {
 async function runUnetStep(sessions, conditioning, scaledLatents, timestep, width, height, cfg, noiseStep) {
   const latentWidth = width / 8;
   const latentHeight = height / 8;
-  const batchSample = makeBatchSample(scaledLatents, latentHeight, latentWidth);
-  const batch = 2;
+  const batch = sessions.batchSize || 2;
+  const batchSample = makeBatchSample(scaledLatents, latentHeight, latentWidth, batch);
   const shape = (channels, h, w) => [batch, channels, h, w];
   const timings = {};
   const gpu = sessions.gpuInputs;
@@ -751,10 +762,14 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       [batch, 4, latentHeight, latentWidth]);
     const latentSize = 4 * latentHeight * latentWidth;
     const guided = new Float32Array(latentSize);
-    for (let i = 0; i < latentSize; i++) {
-      const unconditional = noisePrediction[i];
-      const conditional = noisePrediction[latentSize + i];
-      guided[i] = unconditional + cfg * (conditional - unconditional);
+    if (batch === 1) {
+      for (let i = 0; i < latentSize; i++) guided[i] = noisePrediction[i];
+    } else {
+      for (let i = 0; i < latentSize; i++) {
+        const unconditional = noisePrediction[i];
+        const conditional = noisePrediction[latentSize + i];
+        guided[i] = unconditional + cfg * (conditional - unconditional);
+      }
     }
 
     log("Step denoiser timing · A " + timings.a.toFixed(2) + "s · B " +
@@ -912,8 +927,8 @@ async function getConditioning(manifest, options) {
   return conditioning;
 }
 
-async function buildUnetSessions(manifest, personalAmi, conditioning, width, height, graphCapture, patchCache) {
-  const sessions = { a: null, b: null, c: null, gpuInputs: null, graphCapture };
+async function buildUnetSessions(manifest, personalAmi, conditioning, width, height, batchSize, conditioningIndex, graphCapture, patchCache) {
+  const sessions = { a: null, b: null, c: null, gpuInputs: null, graphCapture, batchSize };
   const patchedComponent = async name => {
     if (!personalAmi) return null;
     if (!patchCache.has(name)) {
@@ -941,7 +956,7 @@ async function buildUnetSessions(manifest, personalAmi, conditioning, width, hei
     const patchedA = await patchedComponent("unet_a");
     sessions.a = await loadSession(manifest, "unet_a", "UNET_A", patchedA?.externalData,
       outputsA, graphCapture);
-    sessions.gpuInputs = createGpuInputState(conditioning, width, height);
+    sessions.gpuInputs = createGpuInputState(conditioning, width, height, batchSize, conditioningIndex);
     checkCancelled();
 
     const patchedB = await patchedComponent("unet_b");
@@ -963,11 +978,13 @@ async function buildUnetSessions(manifest, personalAmi, conditioning, width, hei
   }
 }
 
-async function ensureUnetSessions(manifest, personalAmi, conditioning, width, height) {
-  const key = adapterCacheKey(personalAmi) + "|" + width + "x" + height;
+async function ensureUnetSessions(manifest, personalAmi, conditioning, width, height, cfg) {
+  const batchSize = cfg === 0 || cfg === 1 ? 1 : 2;
+  const conditioningIndex = cfg === 1 ? 1 : 0;
+  const key = adapterCacheKey(personalAmi) + "|" + width + "x" + height + "|batch" + batchSize;
   if (residentUnetSessions && residentUnetKey === key) {
     log("Reusing resident UNET_A, UNET_B, and UNET_C sessions.");
-    residentUnetSessions.gpuInputs.updateConditioning(conditioning);
+    residentUnetSessions.gpuInputs.updateConditioning(conditioning, conditioningIndex);
     if (!residentEngineLock) {
       releaseHeavyModelTest("full Illustrious image generation");
       acquireHeavyModelTest("resident Illustrious inference engine");
@@ -989,11 +1006,12 @@ async function ensureUnetSessions(manifest, personalAmi, conditioning, width, he
   let sessions;
   try {
     try {
-      sessions = await buildUnetSessions(manifest, personalAmi, conditioning, width, height, true, patchCache);
+      sessions = await buildUnetSessions(manifest, personalAmi, conditioning, width, height, batchSize, conditioningIndex, true, patchCache);
       const latentSize = 4 * (height / 8) * (width / 8);
       log("Warming fixed-shape UNet graphs and capturing WebGPU command sequences…");
-      await runUnetStep(sessions, conditioning, new Float32Array(latentSize), 0, width, height, 1, 0);
-      log("UNET_A/B/C graph capture warm-up complete. Repeated denoising steps can replay captured GPU work.");
+      await runUnetStep(sessions, conditioning, new Float32Array(latentSize), 0, width, height, cfg, 0);
+      log("UNET_A/B/C graph capture warm-up complete. Repeated denoising steps can replay captured GPU work." +
+        (batchSize === 1 ? " Single-branch CFG path · batch=1." : " Classifier-free guidance path · batch=2."));
     } catch (graphError) {
       if (sessions) {
         await releaseSessions(sessions);
@@ -1001,7 +1019,7 @@ async function ensureUnetSessions(manifest, personalAmi, conditioning, width, he
       }
       log("Graph capture unavailable for this model/device/shape; rebuilding with standard WebGPU dispatch. Reason: " +
         (graphError?.message || String(graphError)));
-      sessions = await buildUnetSessions(manifest, personalAmi, conditioning, width, height, false, patchCache);
+      sessions = await buildUnetSessions(manifest, personalAmi, conditioning, width, height, batchSize, conditioningIndex, false, patchCache);
     }
 
     if (personalAmi) {
@@ -1104,7 +1122,7 @@ async function prepareInferenceEngine() {
     checkCancelled();
 
     setStatus("Preparing resident UNet sessions…");
-    await ensureUnetSessions(manifest, options.personalAmi, conditioning, options.width, options.height);
+    await ensureUnetSessions(manifest, options.personalAmi, conditioning, options.width, options.height, options.cfg);
     checkCancelled();
 
     setStatus("Preparing resident VAE decoder…");
@@ -1146,7 +1164,7 @@ async function generate(options) {
   log("Prompt: " + options.prompt);
   log("Negative: " + (options.negative || "(empty)"));
   log("Seed " + options.seed + " · CFG " + options.cfg);
-  log("CLIP positive/negative prompts are batched when the graph supports batch=2; fixed-shape UNet graphs use WebGPU capture/replay when supported, with reusable GPU inputs.");
+  log("CLIP positive/negative prompts are batched when supported. CFG 0 or 1 uses one UNet branch (batch 1); other CFG values use both branches (batch 2). Fixed-shape UNet graphs use WebGPU capture/replay when supported.");
   if (options.personalAmi) {
     log("Personal Ami enabled · " + options.personalAmi.file.name + " · strength " + options.personalAmi.strength.toFixed(3) + " · all 980 mapped pairs will be patched.");
   } else {
@@ -1171,7 +1189,7 @@ async function generate(options) {
   const unetBytes = parts.reduce((sum, key) => sum + Number(manifest.components?.[key]?.bytes || 0), 0);
   log("UNet manifest payload total " + formatBytes(unetBytes) +
     " (not a direct VRAM measurement). Loading all partitions together…");
-  const sessions = await ensureUnetSessions(manifest, options.personalAmi, conditioning, options.width, options.height);
+  const sessions = await ensureUnetSessions(manifest, options.personalAmi, conditioning, options.width, options.height, options.cfg);
   let totalUnetExecutionSeconds = 0;
   log("All three UNet sessions are resident. Beginning " + options.steps + " denoising steps.");
   await yieldFrames();
