@@ -73,8 +73,7 @@ const status = document.querySelector("#generationStatus");
 const progress = document.querySelector("#generationProgress");
 const progressLabel = document.querySelector("#generationProgressLabel");
 const logOutput = document.querySelector("#generationLog");
-const image = document.querySelector("#generatedImage");
-const downloadLink = document.querySelector("#downloadGeneratedImage");
+const generatedResults = document.querySelector("#generatedResults");
 const prepareEngineButton = document.querySelector("#prepareInferenceEngine");
 const releaseEngineButton = document.querySelector("#releaseInferenceEngine");
 
@@ -87,6 +86,7 @@ const fields = {
   steps: document.querySelector("#generationSteps"),
   cfg: document.querySelector("#generationCfg"),
   seed: document.querySelector("#generationSeed"),
+  batch: document.querySelector("#generationBatch"),
   lora: document.querySelector("#generationLoraEnabled"),
   loraStrength: document.querySelector("#generationLoraStrength"),
   loraFile: document.querySelector("#loraFile")
@@ -116,7 +116,8 @@ fields.loraFile?.addEventListener("change", updateAdapterFileLabel);
 
 let cancelRequested = false;
 let generationStarted = 0;
-let imageObjectUrl = null;
+let generatedImageUrls = [];
+let activeBatch = null;
 let residentUnetSessions = null;
 let residentUnetKey = null;
 let residentVaeSession = null;
@@ -124,13 +125,50 @@ let residentEngineLock = false;
 const conditioningCache = new Map();
 
 function setStatus(message, type = "info") {
-  status.textContent = message;
+  status.textContent = activeBatch
+    ? "Image " + (activeBatch.index + 1) + "/" + activeBatch.count + " · " + message
+    : message;
   status.dataset.type = type;
 }
 
 function setProgress(value, label) {
-  progress.value = value;
-  progressLabel.textContent = label;
+  progress.value = activeBatch
+    ? ((activeBatch.index + Math.max(0, Math.min(100, value)) / 100) / activeBatch.count) * 100
+    : value;
+  progressLabel.textContent = activeBatch
+    ? "Batch " + (activeBatch.index + 1) + "/" + activeBatch.count + " · " + label
+    : label;
+}
+
+function clearGeneratedResults() {
+  for (const url of generatedImageUrls) URL.revokeObjectURL(url);
+  generatedImageUrls = [];
+  generatedResults?.replaceChildren();
+}
+
+function appendGeneratedResult(blob, options, index, count) {
+  if (!generatedResults) throw new Error("The generated-results gallery is missing.");
+  const url = URL.createObjectURL(blob);
+  generatedImageUrls.push(url);
+
+  const item = document.createElement("article");
+  item.className = "generated-item";
+  const preview = document.createElement("img");
+  preview.src = url;
+  preview.alt = "Generated image " + (index + 1);
+  preview.loading = "lazy";
+
+  const metadata = document.createElement("p");
+  metadata.textContent = "Image " + (index + 1) + "/" + count + " · " +
+    options.width + "×" + options.height + " · seed " + options.seed;
+
+  const download = document.createElement("a");
+  download.href = url;
+  download.download = "illustrious-seed-" + options.seed + ".png";
+  download.textContent = "Download PNG · seed " + options.seed;
+
+  item.append(preview, metadata, download);
+  generatedResults.append(item);
 }
 
 function log(message) {
@@ -1179,7 +1217,7 @@ function renderImage(tensor, width, height) {
 }
 
 const GENERATION_SETTINGS_FORMAT = "dragonfiregames.illustrious-generation-settings";
-const GENERATION_SETTINGS_VERSION = 2;
+const GENERATION_SETTINGS_VERSION = 3;
 const settingsExportButton = document.querySelector("#exportGenerationSettings");
 const settingsImportButton = document.querySelector("#importGenerationSettings");
 const settingsImportInput = document.querySelector("#importGenerationSettingsFile");
@@ -1206,6 +1244,7 @@ function buildGenerationSettings() {
       steps: fields.steps.value === "" ? null : Number(fields.steps.value),
       cfgScale: fields.cfg.value === "" ? null : Number(fields.cfg.value),
       seed: fields.seed.value === "" ? null : Number(fields.seed.value),
+      batchCount: fields.batch.value === "" ? null : Number(fields.batch.value),
       lora: {
         enabled: fields.lora.checked,
         strength: fields.loraStrength.value === "" ? null : Number(fields.loraStrength.value),
@@ -1221,9 +1260,9 @@ function buildGenerationSettings() {
 function validateGenerationSettings(settings) {
   if (!settings || typeof settings !== "object" ||
       settings.format !== GENERATION_SETTINGS_FORMAT ||
-      settings.version !== GENERATION_SETTINGS_VERSION) {
+      (settings.version !== 2 && settings.version !== GENERATION_SETTINGS_VERSION)) {
     throw new Error("Unsupported settings file. Expected " + GENERATION_SETTINGS_FORMAT +
-      " version " + GENERATION_SETTINGS_VERSION + ".");
+      " version 2 or " + GENERATION_SETTINGS_VERSION + ".");
   }
   if (!settings.model || typeof settings.model.id !== "string") {
     throw new Error("Settings file is missing its model identifier.");
@@ -1239,6 +1278,7 @@ function validateGenerationSettings(settings) {
   }
 
   const { width, height, steps, cfgScale, seed, lora } = generation;
+  const batchCount = generation.batchCount ?? 1;
   if (!Number.isInteger(width) || width < 512 || width > 1024 || width % 64 !== 0) {
     throw new Error("Imported width must be 512–1024 and divisible by 64.");
   }
@@ -1253,6 +1293,12 @@ function validateGenerationSettings(settings) {
   }
   if (!Number.isSafeInteger(seed) || (seed !== -1 && (seed < 0 || seed > 4294967295))) {
     throw new Error("Imported seed must be -1 (random) or an integer from 0 to 4294967295.");
+  }
+  if (!Number.isInteger(batchCount) || batchCount < 1 || batchCount > 20) {
+    throw new Error("Imported batch count must be an integer from 1 to 20.");
+  }
+  if (seed !== -1 && seed + batchCount - 1 > 4294967295) {
+    throw new Error("Imported batch seed range exceeds the maximum 32-bit seed.");
   }
   if (!lora || typeof lora.enabled !== "boolean" ||
       !Number.isFinite(lora.strength) || lora.strength < 0 || lora.strength > 2) {
@@ -1276,8 +1322,8 @@ function downloadGenerationSettings() {
   const link = document.createElement("a");
   link.href = url;
   link.download = "illustrious-settings-" + settings.generation.width + "x" +
-    settings.generation.height + "-seed-" +
-    (settings.generation.seed === -1 ? "random" : settings.generation.seed) + ".json";
+    settings.generation.height + "-batch-" + settings.generation.batchCount +
+    "-seed-" + (settings.generation.seed === -1 ? "random" : settings.generation.seed) + ".json";
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
   settingsStatus.textContent = "Exported generation settings JSON. The LoRA .safetensors file is referenced by name and size, not embedded.";
@@ -1296,6 +1342,7 @@ async function importGenerationSettings(file) {
   fields.steps.value = String(generation.steps);
   fields.cfg.value = String(generation.cfgScale);
   fields.seed.value = String(generation.seed);
+  fields.batch.value = String(generation.batchCount ?? 1);
   fields.lora.checked = generation.lora.enabled;
   fields.loraStrength.value = String(generation.lora.strength);
   fields.loraStrength.disabled = !generation.lora.enabled;
@@ -1343,6 +1390,7 @@ function readOptions() {
   const steps = Number(fields.steps.value);
   const cfg = Number(fields.cfg.value);
   const seed = Number(fields.seed.value);
+  const batchCount = Number(fields.batch.value);
   if (!prompt) throw new Error("Enter a prompt first.");
   if (!Number.isInteger(width) || width < 512 || width > 1024 || width % 64 !== 0) {
     throw new Error("Width must be 512–1024 and divisible by 64.");
@@ -1354,6 +1402,12 @@ function readOptions() {
   if (!Number.isFinite(cfg) || cfg < 0 || cfg > 20) throw new Error("CFG scale must be between 0 and 20.");
   if (!Number.isSafeInteger(seed) || (seed !== -1 && (seed < 0 || seed > 4294967295))) {
     throw new Error("Seed must be -1 (random) or an integer from 0 to 4294967295.");
+  }
+  if (!Number.isInteger(batchCount) || batchCount < 1 || batchCount > 20) {
+    throw new Error("Batch must be an integer from 1 to 20.");
+  }
+  if (seed !== -1 && seed + batchCount - 1 > 4294967295) {
+    throw new Error("Batch seed range exceeds the maximum 32-bit seed. Lower the batch count or choose a smaller starting seed.");
   }
   if (fields.lora.checked) {
     const adapterFile = fields.loraFile.files?.[0] || null;
@@ -1375,6 +1429,7 @@ function readOptions() {
     steps,
     cfg,
     seed,
+    batchCount,
     lora: fields.lora.checked ? {
       file: fields.loraFile.files?.[0] || null,
       strength: Number(fields.loraStrength.value)
@@ -2129,27 +2184,31 @@ releaseEngineButton.addEventListener("click", async () => {
 
 button.addEventListener("click", async () => {
   let options;
-  let randomSeed = false;
   try {
     options = readOptions();
-    randomSeed = options.seed === -1;
-    options = { ...options, seed: resolveGenerationSeed(options.seed) };
   } catch (error) {
     setStatus(error.message || String(error), "error");
     return;
   }
+
+  const batchCount = options.batchCount;
+  const randomSeed = options.seed === -1;
+  const baseSeed = options.seed;
+  const completedSeeds = [];
+  let completedCount = 0;
 
   button.disabled = true;
   prepareEngineButton.disabled = true;
   releaseEngineButton.disabled = true;
   cancelButton.disabled = false;
   cancelRequested = false;
+  clearGeneratedResults();
   logOutput.textContent = "";
   progress.value = 0;
-  setProgress(0, "Starting");
+  activeBatch = null;
+  setProgress(0, batchCount === 1 ? "Starting" : "Starting batch · " + batchCount + " images");
   generationStarted = performance.now();
   let lockAcquired = false;
-  if (randomSeed) log("Random seed selected · using seed " + options.seed + ".");
 
   try {
     if (!residentEngineLock) {
@@ -2167,36 +2226,55 @@ button.addEventListener("click", async () => {
     if (adapterLabel) log("WebGPU adapter identity · " + adapterLabel);
     log("WebGPU adapter ready · maxBufferSize " + formatBytes(adapter.limits?.maxBufferSize || 0) +
       " · maxStorageBufferBindingSize " + formatBytes(adapter.limits?.maxStorageBufferBindingSize || 0));
-    setStatus("Starting browser-side inference…");
+    log("Starting sequential batch · " + batchCount + " image(s) · " +
+      (randomSeed ? "a new random seed per image." : "starting seed " + baseSeed + " · increment by one per image."));
     const infillData = window.__illustriousInfill?.getPayload?.() || null;
-    const canvas = await generate(options, infillData);
-    if (cancelRequested) throw new Error("Generation cancelled by user.");
-    const blob = await new Promise((resolve, reject) => canvas.toBlob(value =>
-      value ? resolve(value) : reject(new Error("Could not encode the generated canvas as PNG.")), "image/png"));
-    if (imageObjectUrl) URL.revokeObjectURL(imageObjectUrl);
-    imageObjectUrl = URL.createObjectURL(blob);
-    image.src = imageObjectUrl;
-    image.hidden = false;
-    downloadLink.href = imageObjectUrl;
-    downloadLink.download = "illustrious-seed-" + options.seed + ".png";
-    downloadLink.textContent = "Download PNG · seed " + options.seed;
-    downloadLink.hidden = false;
-    setStatus("Image generated · " + options.width + "×" + options.height +
-      " · seed " + options.seed + (randomSeed ? " (random)" : "") + " · " +
+
+    for (let index = 0; index < batchCount; index++) {
+      checkCancelled();
+      const seed = randomSeed ? resolveGenerationSeed(-1) : baseSeed + index;
+      const imageOptions = { ...options, seed };
+      activeBatch = { index, count: batchCount };
+      log("Batch image " + (index + 1) + "/" + batchCount + " · seed " + seed + ".");
+      if (randomSeed) log("Random seed selected · using seed " + seed + ".");
+      setProgress(0, "Starting");
+      setStatus("Starting image " + (index + 1) + " of " + batchCount + "…");
+
+      const canvas = await generate(imageOptions, infillData);
+      checkCancelled();
+      const blob = await new Promise((resolve, reject) => canvas.toBlob(value =>
+        value ? resolve(value) : reject(new Error("Could not encode image " + (index + 1) + " as PNG.")), "image/png"));
+      appendGeneratedResult(blob, imageOptions, index, batchCount);
+      completedSeeds.push(seed);
+      completedCount++;
+      log("Batch image " + (index + 1) + "/" + batchCount + " saved · PNG " + formatBytes(blob.size) + ".");
+      await yieldFrames();
+    }
+
+    activeBatch = null;
+    setProgress(100, "Completed " + completedCount + " image(s)");
+    setStatus("Generated " + completedCount + " image(s) · " + options.width + "×" + options.height +
+      " · seeds " + completedSeeds.join(", ") + " · " +
       ((performance.now() - generationStarted) / 1000).toFixed(1) + "s.", "success");
-    log("Generation finished successfully. PNG size " + formatBytes(blob.size) + ".");
+    log("Batch finished successfully · " + completedCount + "/" + batchCount + " image(s).");
   } catch (error) {
-    console.error("[Illustrious] Full generation failed:", error);
+    console.error("[Illustrious] Image batch failed:", error);
     const cancelled = cancelRequested || (error?.message || "").includes("cancelled");
-    setStatus((cancelled ? "Cancelled: " : "Generation failed: ") + (error?.message || String(error)), cancelled ? "info" : "error");
-    log((cancelled ? "Cancelled: " : "ERROR: ") + (error?.stack || error?.message || String(error)));
+    activeBatch = null;
+    setProgress(batchCount ? completedCount / batchCount * 100 : 0,
+      (cancelled ? "Cancelled" : "Stopped") + " after " + completedCount + "/" + batchCount + " image(s)");
+    setStatus((cancelled ? "Batch cancelled" : "Batch stopped after an error") +
+      " · " + completedCount + "/" + batchCount + " image(s) completed. " +
+      (error?.message || String(error)), cancelled ? "info" : "error");
+    log((cancelled ? "Batch cancelled: " : "BATCH ERROR: ") +
+      (error?.stack || error?.message || String(error)));
   } finally {
+    activeBatch = null;
     if (lockAcquired) releaseHeavyModelTest("full Illustrious image generation");
     button.disabled = false;
     prepareEngineButton.disabled = false;
     releaseEngineButton.disabled = !residentEngineLock;
     cancelButton.disabled = true;
-    if (progress.value < 100 && cancelRequested) setProgress(progress.value, "Cancelled");
   }
 });
 
