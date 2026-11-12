@@ -26,10 +26,10 @@ export async function fetchModelResource(url, options = {}) {
   return response;
 }
 
-function generationPaths(manifest) {
+function generationPaths(manifest, includeVaeEncoder = false) {
   const paths = new Set(["manifest.json"]);
   const componentNames = ["text_encoder", "text_encoder_2", "unet_a", "unet_b", "unet_c", "vae_decoder"];
-  if (manifest.components?.vae_encoder) componentNames.push("vae_encoder");
+  if (includeVaeEncoder && manifest.components?.vae_encoder) componentNames.push("vae_encoder");
   for (const name of componentNames) {
     const component = manifest.components?.[name];
     if (!component) throw new Error("Model manifest is missing " + name + ".");
