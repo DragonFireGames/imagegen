@@ -1,4 +1,3 @@
-import * as ort from "../vendor/onnxruntime-web/ort.webgpu.min.mjs";
 import { CLIPTokenizer } from "../vendor/transformers/transformers.min.js";
 import { acquireHeavyModelTest, releaseHeavyModelTest } from "./heavy-model-test-lock.js";
 import { prepareLoraComponent, releaseLoraPayload } from "./lora-patcher.js";
@@ -10,9 +9,58 @@ const MANIFEST_URL = MODEL_BASE + "manifest.json";
 const SCHEDULER_URL = "https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0/resolve/b41f1c324e32e03f9e104bd9ace0992e4e135597/scheduler/scheduler_config.json";
 const VAE_SCALING_FACTOR = 0.18215; // The WAI pack's Kohaku XL beta5 base VAE config.
 
-ort.env.wasm.wasmPaths = new URL("../vendor/onnxruntime-web/", import.meta.url).href;
-ort.env.wasm.numThreads = 1;
-ort.env.logLevel = "warning";
+const runtimePreference = new URLSearchParams(window.location.search).get("runtime") || "auto";
+const graphCaptureEnabled = new URLSearchParams(window.location.search).get("graphCapture") === "1";
+const JSPI_RUNTIME_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/";
+
+async function loadOrtRuntime() {
+  const jspiSupported = typeof WebAssembly.Suspending === "function" &&
+    typeof WebAssembly.promising === "function";
+  if (runtimePreference !== "asyncify" && jspiSupported) {
+    try {
+      const runtime = await import(JSPI_RUNTIME_BASE + "ort.jspi.min.mjs");
+      runtime.env.wasm.wasmPaths = JSPI_RUNTIME_BASE;
+      runtime.env.wasm.numThreads = 0;
+      runtime.env.logLevel = "warning";
+      return {
+        ort: runtime,
+        label: "ONNX Runtime Web 1.31.1 · native WebGPU · JSPI",
+        note: ""
+      };
+    } catch (error) {
+      if (runtimePreference === "jspi") {
+        throw new Error("Could not load the JSPI runtime from jsDelivr: " +
+          (error?.message || String(error)) + ". Remove ?runtime=jspi to use automatic fallback.");
+      }
+      const fallbackReason = error?.message || String(error);
+      const runtime = await import("../vendor/onnxruntime-web/ort.webgpu.min.mjs");
+      runtime.env.wasm.wasmPaths = new URL("../vendor/onnxruntime-web/", import.meta.url).href;
+      runtime.env.wasm.numThreads = 0;
+      runtime.env.logLevel = "warning";
+      return {
+        ort: runtime,
+        label: "ONNX Runtime Web 1.31.1 · native WebGPU · Asyncify fallback",
+        note: "JSPI runtime import failed; using the locally bundled Asyncify runtime (" + fallbackReason + ")."
+      };
+    }
+  }
+  if (runtimePreference === "jspi" && !jspiSupported) {
+    throw new Error("This browser does not expose WebAssembly JSPI. Remove ?runtime=jspi to use the local Asyncify runtime.");
+  }
+  const runtime = await import("../vendor/onnxruntime-web/ort.webgpu.min.mjs");
+  runtime.env.wasm.wasmPaths = new URL("../vendor/onnxruntime-web/", import.meta.url).href;
+  runtime.env.wasm.numThreads = 0;
+  runtime.env.logLevel = "warning";
+  return {
+    ort: runtime,
+    label: "ONNX Runtime Web 1.31.1 · native WebGPU · Asyncify",
+    note: runtimePreference === "asyncify"
+      ? "Local Asyncify runtime explicitly selected with ?runtime=asyncify."
+      : "This browser does not expose WebAssembly JSPI; using the local Asyncify runtime."
+  };
+}
+
+const { ort, label: runtimeLabel, note: runtimeNote } = await loadOrtRuntime();
 // Select the discrete/high-performance GPU where the browser exposes a choice.
 // This must be set before ORT creates its first WebGPU session.
 if (ort.env.webgpu) ort.env.webgpu.powerPreference = "high-performance";
@@ -335,7 +383,14 @@ function externalData(component) {
   }));
 }
 
-async function loadSession(manifest, key, label, patchedExternalData = null, preferredOutputLocation = null) {
+async function loadSession(
+  manifest,
+  key,
+  label,
+  patchedExternalData = null,
+  preferredOutputLocation = null,
+  enableGraphCapture = false
+) {
   const component = manifest?.components?.[key];
   const started = performance.now();
   log("Loading " + label + " (" + formatBytes(component?.bytes) + ")…");
@@ -345,10 +400,12 @@ async function loadSession(manifest, key, label, patchedExternalData = null, pre
     externalData: patchedExternalData || externalData(component)
   };
   if (preferredOutputLocation) sessionOptions.preferredOutputLocation = preferredOutputLocation;
+  if (enableGraphCapture) sessionOptions.enableGraphCapture = true;
   const session = await ort.InferenceSession.create(MODEL_BASE + component.onnx, sessionOptions);
   log(label + " session created in " + ((performance.now() - started) / 1000).toFixed(2) +
     "s · inputs: " + session.inputNames.join(", ") +
-    (preferredOutputLocation ? " · GPU-resident outputs enabled" : ""));
+    (preferredOutputLocation ? " · GPU-resident outputs enabled" : "") +
+    (enableGraphCapture ? " · WebGPU graph capture enabled" : ""));
   return session;
 }
 
@@ -1371,7 +1428,18 @@ async function getConditioning(manifest, options) {
   return conditioning;
 }
 
-async function buildUnetSessions(manifest, lora, conditioning, width, height, batchSize, conditioningIndex, patchCache, useGpuScheduler = true) {
+async function buildUnetSessions(
+  manifest,
+  lora,
+  conditioning,
+  width,
+  height,
+  batchSize,
+  conditioningIndex,
+  patchCache,
+  useGpuScheduler = true,
+  enableGraphCapture = false
+) {
   const sessions = { a: null, b: null, c: null, gpuInputs: null, gpuOutputs: { a: null, b: null }, batchSize };
   const patchedComponent = async name => {
     if (!lora) return null;
@@ -1398,12 +1466,16 @@ async function buildUnetSessions(manifest, lora, conditioning, width, height, ba
   const outputsB = { hidden_out: "gpu-buffer" };
   try {
     const patchedA = await patchedComponent("unet_a");
-    sessions.a = await loadSession(manifest, "unet_a", "UNET_A", patchedA?.externalData, outputsA);
+    sessions.a = await loadSession(
+      manifest, "unet_a", "UNET_A", patchedA?.externalData, outputsA, enableGraphCapture
+    );
     sessions.gpuInputs = createGpuInputState(conditioning, width, height, batchSize, conditioningIndex);
     checkCancelled();
 
     const patchedB = await patchedComponent("unet_b");
-    sessions.b = await loadSession(manifest, "unet_b", "UNET_B", patchedB?.externalData, outputsB);
+    sessions.b = await loadSession(
+      manifest, "unet_b", "UNET_B", patchedB?.externalData, outputsB, enableGraphCapture
+    );
     checkCancelled();
 
     const patchedC = await patchedComponent("unet_c");
@@ -1427,7 +1499,8 @@ async function buildUnetSessions(manifest, lora, conditioning, width, height, ba
     }
     sessions.c = await loadSession(
       manifest, "unet_c", "UNET_C", patchedC?.externalData,
-      sessions.gpuScheduler ? "gpu-buffer" : null
+      sessions.gpuScheduler ? "gpu-buffer" : null,
+      enableGraphCapture
     );
 
     validateSessionInputs(sessions.a, ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], "UNET_A");
@@ -1478,7 +1551,8 @@ async function ensureUnetSessions(manifest, lora, conditioning, width, height, c
   const batchSize = cfg === 0 || cfg === 1 ? 1 : 2;
   const conditioningIndex = cfg === 1 ? 1 : 0;
   const key = adapterCacheKey(lora) + "|" + width + "x" + height + "|batch" + batchSize +
-    (useGpuScheduler ? "|gpu-scheduler" : "|cpu-scheduler");
+    (useGpuScheduler ? "|gpu-scheduler" : "|cpu-scheduler") +
+    (graphCaptureEnabled ? "|graph-capture" : "|standard-dispatch");
   if (residentUnetSessions && residentUnetKey === key) {
     log("Reusing resident UNET_A, UNET_B, and UNET_C sessions.");
     residentUnetSessions.gpuInputs.updateConditioning(conditioning, conditioningIndex);
@@ -1502,23 +1576,42 @@ async function ensureUnetSessions(manifest, lora, conditioning, width, height, c
   const patchCache = new Map();
   let sessions;
   try {
-    sessions = await buildUnetSessions(
-      manifest, lora, conditioning, width, height, batchSize, conditioningIndex, patchCache, useGpuScheduler
-    );
-    log("UNET_A/B/C ready · standard WebGPU dispatch with persistent GPU inputs and GPU-resident partition handoffs." +
-      (batchSize === 1 ? " Single-branch CFG path · batch=1." : " Classifier-free guidance path · batch=2."));
+    const runWarmup = async () => {
+      const warmupStarted = performance.now();
+      const warmupLatents = new Float32Array(4 * (height / 8) * (width / 8));
+      log("Compiling UNet GPU pipelines with one disposable zero-latent warm-up" +
+        (graphCaptureEnabled ? " and recording the static WebGPU command graphs…" : "…"));
+      const warmup = await runUnetStep(
+        sessions, conditioning, warmupLatents, 0, width, height, cfg, 0
+      );
+      log("UNet pipeline warm-up finished in " + ((performance.now() - warmupStarted) / 1000).toFixed(2) +
+        "s · A " + warmup.timings.a.toFixed(2) + "s · B " + warmup.timings.b.toFixed(2) +
+        "s · C " + warmup.timings.c.toFixed(2) + "s. Subsequent images reuse the compiled pipelines.");
+    };
 
-    // Run one ordinary dispatch while preparing the engine so ORT/WGSL kernels
-    // compile before the first requested image. No graph capture is enabled.
-    const warmupStarted = performance.now();
-    const warmupLatents = new Float32Array(4 * (height / 8) * (width / 8));
-    log("Compiling UNet GPU pipelines with one disposable zero-latent warm-up…");
-    const warmup = await runUnetStep(
-      sessions, conditioning, warmupLatents, 0, width, height, cfg, 0
-    );
-    log("UNet pipeline warm-up finished in " + ((performance.now() - warmupStarted) / 1000).toFixed(2) +
-      "s · A " + warmup.timings.a.toFixed(2) + "s · B " + warmup.timings.b.toFixed(2) +
-      "s · C " + warmup.timings.c.toFixed(2) + "s. Subsequent images reuse the compiled pipelines.");
+    try {
+      sessions = await buildUnetSessions(
+        manifest, lora, conditioning, width, height, batchSize, conditioningIndex,
+        patchCache, useGpuScheduler, graphCaptureEnabled
+      );
+      log("UNET_A/B/C ready · " + (graphCaptureEnabled ? "graph-captured" : "standard") +
+        " WebGPU dispatch with persistent GPU inputs and GPU-resident partition handoffs." +
+        (batchSize === 1 ? " Single-branch CFG path · batch=1." : " Classifier-free guidance path · batch=2."));
+      await runWarmup();
+    } catch (captureError) {
+      if (!graphCaptureEnabled) throw captureError;
+      if (sessions) {
+        await releaseSessions(sessions);
+        sessions = null;
+      }
+      log("Graph capture was unavailable for this UNet shape/operator combination; retrying with standard WebGPU dispatch. Reason: " +
+        (captureError?.message || String(captureError)));
+      sessions = await buildUnetSessions(
+        manifest, lora, conditioning, width, height, batchSize, conditioningIndex,
+        patchCache, useGpuScheduler, false
+      );
+      await runWarmup();
+    }
 
     if (lora) {
       releaseLoraPayload(lora.file);
@@ -1840,6 +1933,9 @@ async function generate(options, infillData = null) {
     sourceNoise = createNormalNoise(latentSize, options.seed ^ 0x5f3759df);
   }
 
+  log(runtimeLabel + ".");
+  if (runtimeNote) log(runtimeNote);
+  if (graphCaptureEnabled) log("Static UNet WebGPU graph capture requested · initialization falls back to standard dispatch if capture fails.");
   if (gpuProfilingEnabled) {
     log("WebGPU kernel profiling enabled · inspect [profiling] entries in the browser console; timings include profiling overhead.");
   }
@@ -1931,7 +2027,7 @@ async function generate(options, infillData = null) {
     log("Step " + (step + 1) + "/" + options.steps + " scheduler update " +
       ((performance.now() - stepStarted) / 1000).toFixed(2) + "s · sigma " +
       scheduler.sigmas[step].toFixed(5) + " → " + scheduler.sigmas[step + 1].toFixed(5));
-    await yieldFrames();
+    if ((step + 1) % 2 === 0 || step === options.steps - 1) await yieldFrames();
   }
   log("Accumulated UNet execution time " + totalUnetExecutionSeconds.toFixed(2) +
     "s across " + options.steps + " steps (sum of A + B + C inference calls).");
