@@ -308,17 +308,22 @@ function externalData(component) {
   }));
 }
 
-async function loadSession(manifest, key, label, patchedExternalData = null) {
+async function loadSession(manifest, key, label, patchedExternalData = null, preferredOutputLocation = null) {
   const component = manifest?.components?.[key];
   const started = performance.now();
   log("Loading " + label + " (" + formatBytes(component?.bytes) + ")…");
-  const session = await ort.InferenceSession.create(MODEL_BASE + component.onnx, {
+  const sessionOptions = {
     executionProviders: ["webgpu"],
     graphOptimizationLevel: "basic",
     externalData: patchedExternalData || externalData(component)
-  });
+  };
+  if (preferredOutputLocation) {
+    sessionOptions.preferredOutputLocation = preferredOutputLocation;
+  }
+  const session = await ort.InferenceSession.create(MODEL_BASE + component.onnx, sessionOptions);
   log(label + " session created in " + ((performance.now() - started) / 1000).toFixed(2) +
-    "s · inputs: " + session.inputNames.join(", "));
+    "s · inputs: " + session.inputNames.join(", ") +
+    (preferredOutputLocation ? " · GPU-resident outputs enabled" : ""));
   return session;
 }
 
@@ -517,6 +522,26 @@ function validateStaticShape(metadata, expected, label) {
   }
 }
 
+function validateGpuTensor(tensor, label, expectedShape) {
+  if (!tensor || tensor.type !== "float16" || tensor.location !== "gpu-buffer") {
+    throw new Error(label + " was not returned as a GPU-resident FP16 tensor (location: " +
+      (tensor?.location || "missing") + "). The ONNX Runtime WebGPU handoff is unavailable.");
+  }
+  if (!Array.isArray(tensor.dims) || tensor.dims.length !== expectedShape.length ||
+      tensor.dims.some((dimension, index) => dimension !== expectedShape[index])) {
+    throw new Error(label + " returned shape [" + (tensor?.dims || []).join(", ") +
+      "], expected [" + expectedShape.join(", ") + "].");
+  }
+  if (!tensor.gpuBuffer) throw new Error(label + " reports GPU residency but exposes no GPUBuffer.");
+  return tensor;
+}
+
+function disposeOutput(outputs, name) {
+  const tensor = outputs?.[name];
+  if (tensor && typeof tensor.dispose === "function") tensor.dispose();
+  if (outputs) delete outputs[name];
+}
+
 async function runUnetStep(sessions, conditioning, scaledLatents, timestep, width, height, cfg, noiseStep) {
   const latentWidth = width / 8;
   const latentHeight = height / 8;
@@ -524,85 +549,94 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
   const batch = 2;
   const shape = (channels, h, w) => [batch, channels, h, w];
   const timings = {};
-  let outputsA;
-  let outputsB;
-  let outputsC;
+  let outputsA = null;
+  let outputsB = null;
+  let outputsC = null;
+  const disposeRemaining = outputs => {
+    if (!outputs) return;
+    for (const tensor of Object.values(outputs)) {
+      if (tensor && typeof tensor.dispose === "function") tensor.dispose();
+    }
+  };
 
-  const startedA = performance.now();
-  outputsA = await sessions.a.run({
-    sample: new ort.Tensor("float16", batchSample, [batch, 4, latentHeight, latentWidth]),
-    timestep: new ort.Tensor("float32", new Float32Array([timestep, timestep]), [batch]),
-    encoder_hidden_states: new ort.Tensor("float16", conditioning.encoderHidden, [batch, 77, 2048]),
-    text_embeds: new ort.Tensor("float16", conditioning.textEmbeds, [batch, 1280]),
-    time_ids: new ort.Tensor("float32", makeBatchTimeIds(height, width), [batch, 6])
-  });
-  timings.a = (performance.now() - startedA) / 1000;
-  checkCancelled();
+  try {
+    const startedA = performance.now();
+    outputsA = await sessions.a.run({
+      sample: new ort.Tensor("float16", batchSample, [batch, 4, latentHeight, latentWidth]),
+      timestep: new ort.Tensor("float32", new Float32Array([timestep, timestep]), [batch]),
+      encoder_hidden_states: new ort.Tensor("float16", conditioning.encoderHidden, [batch, 77, 2048]),
+      text_embeds: new ort.Tensor("float16", conditioning.textEmbeds, [batch, 1280]),
+      time_ids: new ort.Tensor("float32", makeBatchTimeIds(height, width), [batch, 6])
+    });
+    timings.a = (performance.now() - startedA) / 1000;
+    checkCancelled();
 
-  const aHidden = fp16Values(outputsA.hidden, "UNET_A hidden", shape(1280, latentHeight / 4, latentWidth / 4));
-  const aEmb = fp16Values(outputsA.emb, "UNET_A emb", [batch, 1280]);
-  const skips = {};
-  for (const index of [0, 1, 2]) {
-    skips[index] = fp16Values(outputsA["skip_" + index], "UNET_A skip_" + index,
-      shape(320, latentHeight, latentWidth));
+    validateGpuTensor(outputsA.hidden, "UNET_A hidden", shape(1280, latentHeight / 4, latentWidth / 4));
+    validateGpuTensor(outputsA.emb, "UNET_A emb", [batch, 1280]);
+    for (const index of [0, 1, 2]) {
+      validateGpuTensor(outputsA["skip_" + index], "UNET_A skip_" + index,
+        shape(320, latentHeight, latentWidth));
+    }
+    validateGpuTensor(outputsA.skip_3, "UNET_A skip_3", shape(320, latentHeight / 2, latentWidth / 2));
+    validateGpuTensor(outputsA.skip_4, "UNET_A skip_4", shape(640, latentHeight / 2, latentWidth / 2));
+    validateGpuTensor(outputsA.skip_5, "UNET_A skip_5", shape(640, latentHeight / 2, latentWidth / 2));
+    validateGpuTensor(outputsA.skip_6, "UNET_A skip_6", shape(640, latentHeight / 4, latentWidth / 4));
+    validateGpuTensor(outputsA.skip_7, "UNET_A skip_7", shape(1280, latentHeight / 4, latentWidth / 4));
+    validateGpuTensor(outputsA.skip_8, "UNET_A skip_8", shape(1280, latentHeight / 4, latentWidth / 4));
+
+    const startedB = performance.now();
+    outputsB = await sessions.b.run({
+      hidden: outputsA.hidden,
+      emb: outputsA.emb,
+      encoder_hidden_states: new ort.Tensor("float16", conditioning.encoderHidden, [batch, 77, 2048]),
+      skip_6: outputsA.skip_6,
+      skip_7: outputsA.skip_7,
+      skip_8: outputsA.skip_8
+    });
+    timings.b = (performance.now() - startedB) / 1000;
+    checkCancelled();
+    validateGpuTensor(outputsB.hidden_out, "UNET_B hidden_out",
+      shape(1280, latentHeight / 2, latentWidth / 2));
+
+    // A's deep hidden/skip tensors are consumed by B and are no longer needed.
+    for (const name of ["hidden", "skip_6", "skip_7", "skip_8"]) {
+      disposeOutput(outputsA, name);
+    }
+
+    const startedC = performance.now();
+    outputsC = await sessions.c.run({
+      hidden: outputsB.hidden_out,
+      emb: outputsA.emb,
+      encoder_hidden_states: new ort.Tensor("float16", conditioning.encoderHidden, [batch, 77, 2048]),
+      skip_0: outputsA.skip_0,
+      skip_1: outputsA.skip_1,
+      skip_2: outputsA.skip_2,
+      skip_3: outputsA.skip_3,
+      skip_4: outputsA.skip_4,
+      skip_5: outputsA.skip_5
+    });
+    timings.c = (performance.now() - startedC) / 1000;
+    checkCancelled();
+
+    const noisePrediction = fp16Values(outputsC.out_sample, "UNET_C out_sample",
+      [batch, 4, latentHeight, latentWidth]);
+    const latentSize = 4 * latentHeight * latentWidth;
+    const guided = new Float32Array(latentSize);
+    for (let i = 0; i < latentSize; i++) {
+      const unconditional = noisePrediction[i];
+      const conditional = noisePrediction[latentSize + i];
+      guided[i] = unconditional + cfg * (conditional - unconditional);
+    }
+
+    log("Step denoiser timing · A " + timings.a.toFixed(2) + "s · B " +
+      timings.b.toFixed(2) + "s · C " + timings.c.toFixed(2) +
+      "s · CFG " + cfg + " · A→B→C intermediates GPU-resident");
+    return { guided, timings };
+  } finally {
+    disposeRemaining(outputsC);
+    disposeRemaining(outputsB);
+    disposeRemaining(outputsA);
   }
-  skips[3] = fp16Values(outputsA.skip_3, "UNET_A skip_3",
-    shape(320, latentHeight / 2, latentWidth / 2));
-  skips[4] = fp16Values(outputsA.skip_4, "UNET_A skip_4",
-    shape(640, latentHeight / 2, latentWidth / 2));
-  skips[5] = fp16Values(outputsA.skip_5, "UNET_A skip_5",
-    shape(640, latentHeight / 2, latentWidth / 2));
-  skips[6] = fp16Values(outputsA.skip_6, "UNET_A skip_6",
-    shape(640, latentHeight / 4, latentWidth / 4));
-  skips[7] = fp16Values(outputsA.skip_7, "UNET_A skip_7",
-    shape(1280, latentHeight / 4, latentWidth / 4));
-  skips[8] = fp16Values(outputsA.skip_8, "UNET_A skip_8",
-    shape(1280, latentHeight / 4, latentWidth / 4));
-  outputsA = null;
-
-  const startedB = performance.now();
-  outputsB = await sessions.b.run({
-    hidden: new ort.Tensor("float16", aHidden, shape(1280, latentHeight / 4, latentWidth / 4)),
-    emb: new ort.Tensor("float16", aEmb, [batch, 1280]),
-    encoder_hidden_states: new ort.Tensor("float16", conditioning.encoderHidden, [batch, 77, 2048]),
-    skip_6: new ort.Tensor("float16", skips[6], shape(640, latentHeight / 4, latentWidth / 4)),
-    skip_7: new ort.Tensor("float16", skips[7], shape(1280, latentHeight / 4, latentWidth / 4)),
-    skip_8: new ort.Tensor("float16", skips[8], shape(1280, latentHeight / 4, latentWidth / 4))
-  });
-  timings.b = (performance.now() - startedB) / 1000;
-  checkCancelled();
-  const hiddenOut = fp16Values(outputsB.hidden_out, "UNET_B hidden_out",
-    shape(1280, latentHeight / 2, latentWidth / 2));
-  outputsB = null;
-
-  const startedC = performance.now();
-  outputsC = await sessions.c.run({
-    hidden: new ort.Tensor("float16", hiddenOut, shape(1280, latentHeight / 2, latentWidth / 2)),
-    emb: new ort.Tensor("float16", aEmb, [batch, 1280]),
-    encoder_hidden_states: new ort.Tensor("float16", conditioning.encoderHidden, [batch, 77, 2048]),
-    skip_0: new ort.Tensor("float16", skips[0], shape(320, latentHeight, latentWidth)),
-    skip_1: new ort.Tensor("float16", skips[1], shape(320, latentHeight, latentWidth)),
-    skip_2: new ort.Tensor("float16", skips[2], shape(320, latentHeight, latentWidth)),
-    skip_3: new ort.Tensor("float16", skips[3], shape(320, latentHeight / 2, latentWidth / 2)),
-    skip_4: new ort.Tensor("float16", skips[4], shape(640, latentHeight / 2, latentWidth / 2)),
-    skip_5: new ort.Tensor("float16", skips[5], shape(640, latentHeight / 2, latentWidth / 2))
-  });
-  timings.c = (performance.now() - startedC) / 1000;
-  const noisePrediction = fp16Values(outputsC.out_sample, "UNET_C out_sample",
-    [batch, 4, latentHeight, latentWidth]);
-  outputsC = null;
-
-  const latentSize = 4 * latentHeight * latentWidth;
-  const guided = new Float32Array(latentSize);
-  for (let i = 0; i < latentSize; i++) {
-    const unconditional = noisePrediction[i];
-    const conditional = noisePrediction[latentSize + i];
-    guided[i] = unconditional + cfg * (conditional - unconditional);
-  }
-
-  log("Step denoiser timing · A " + timings.a.toFixed(2) + "s · B " +
-    timings.b.toFixed(2) + "s · C " + timings.c.toFixed(2) + "s · CFG " + cfg);
-  return { guided, timings };
 }
 
 async function releaseSessions(sessions) {
@@ -770,13 +804,27 @@ async function ensureUnetSessions(manifest, personalAmi) {
     const patchedA = personalAmi
       ? await preparePersonalAmiComponent(personalAmi.file, manifest, "unet_a", personalAmi.strength, log, checkCancelled)
       : null;
-    sessions.a = await loadSession(manifest, "unet_a", "UNET_A", patchedA?.externalData);
+    sessions.a = await loadSession(manifest, "unet_a", "UNET_A", patchedA?.externalData, {
+      hidden: "gpu-buffer",
+      emb: "gpu-buffer",
+      skip_0: "gpu-buffer",
+      skip_1: "gpu-buffer",
+      skip_2: "gpu-buffer",
+      skip_3: "gpu-buffer",
+      skip_4: "gpu-buffer",
+      skip_5: "gpu-buffer",
+      skip_6: "gpu-buffer",
+      skip_7: "gpu-buffer",
+      skip_8: "gpu-buffer"
+    });
     checkCancelled();
 
     const patchedB = personalAmi
       ? await preparePersonalAmiComponent(personalAmi.file, manifest, "unet_b", personalAmi.strength, log, checkCancelled)
       : null;
-    sessions.b = await loadSession(manifest, "unet_b", "UNET_B", patchedB?.externalData);
+    sessions.b = await loadSession(manifest, "unet_b", "UNET_B", patchedB?.externalData, {
+      hidden_out: "gpu-buffer"
+    });
     checkCancelled();
 
     const patchedC = personalAmi
