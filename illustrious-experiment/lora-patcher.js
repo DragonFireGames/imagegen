@@ -146,14 +146,13 @@ export function releaseLoraPayload(file) {
 function readBf16(buffer, label, byteOffset = 0, byteLength = buffer.byteLength - byteOffset) {
   if (byteLength % 2) throw new Error(label + " has odd BF16 byte length.");
   const view = new DataView(buffer, byteOffset, byteLength);
-  const values = new Float32Array(byteLength / 2);
-  for (let i = 0; i < values.length; i++) {
-    const bits = view.getUint16(i * 2, true);
-    if ((bits & 0x7f80) === 0x7f80) throw new Error(label + " contains NaN/Infinity.");
-    const expanded = new Uint32Array([bits << 16]);
-    values[i] = new Float32Array(expanded.buffer)[0];
+  const bits = new Uint32Array(byteLength / 2);
+  for (let i = 0; i < bits.length; i++) {
+    const value = view.getUint16(i * 2, true);
+    if ((value & 0x7f80) === 0x7f80) throw new Error(label + " contains NaN/Infinity.");
+    bits[i] = value << 16;
   }
-  return values;
+  return new Float32Array(bits.buffer);
 }
 
 function halfToFloat(bits) {
@@ -202,10 +201,11 @@ async function readTensor(file, dataStart, name, info, payloadBuffer = null) {
       (payloadBuffer && end > payloadBuffer.byteLength)) {
     throw new Error("Invalid byte range for " + name + ".");
   }
-  const source = payloadBuffer || await file.slice(dataStart, file.size).arrayBuffer();
-  if (info.dtype === "BF16") return readBf16(source, name, start, end - start);
-  if (info.dtype === "F16") return readF16(source, name, start, end - start);
-  return readF32(source, name, start, end - start);
+  const source = payloadBuffer || await file.slice(dataStart + start, dataStart + end).arrayBuffer();
+  const offset = payloadBuffer ? start : 0;
+  if (info.dtype === "BF16") return readBf16(source, name, offset, end - start);
+  if (info.dtype === "F16") return readF16(source, name, offset, end - start);
+  return readF32(source, name, offset, end - start);
 }
 
 function resolveShard(entry, component) {
