@@ -317,23 +317,46 @@ function externalData(component) {
   }));
 }
 
-async function loadSession(manifest, key, label, patchedExternalData = null, preferredOutputLocation = null) {
+async function loadSession(manifest, key, label, patchedExternalData = null, preferredOutputLocation = null, enableGraphCapture = false) {
   const component = manifest?.components?.[key];
   const started = performance.now();
   log("Loading " + label + " (" + formatBytes(component?.bytes) + ")…");
   const sessionOptions = {
     executionProviders: ["webgpu"],
-    graphOptimizationLevel: "basic",
+    graphOptimizationLevel: "all",
     externalData: patchedExternalData || externalData(component)
   };
-  if (preferredOutputLocation) {
+  if (enableGraphCapture) {
+    sessionOptions.enableGraphCapture = true;
+    sessionOptions.preferredOutputLocation = "gpu-buffer";
+  } else if (preferredOutputLocation) {
     sessionOptions.preferredOutputLocation = preferredOutputLocation;
   }
   const session = await ort.InferenceSession.create(MODEL_BASE + component.onnx, sessionOptions);
   log(label + " session created in " + ((performance.now() - started) / 1000).toFixed(2) +
     "s · inputs: " + session.inputNames.join(", ") +
-    (preferredOutputLocation ? " · GPU-resident outputs enabled" : ""));
+    (enableGraphCapture ? " · graph capture enabled" : preferredOutputLocation ? " · GPU-resident outputs enabled" : ""));
   return session;
+}
+
+function canBatchEncoder(session, inputName) {
+  const index = session.inputNames.indexOf(inputName);
+  const firstDimension = session.inputMetadata?.[index]?.shape?.[0];
+  return typeof firstDimension !== "number" || firstDimension < 0 || firstDimension >= 2;
+}
+
+function combineTokenBatches(positive, negative, label) {
+  if (positive.length !== 77 || negative.length !== 77) {
+    throw new Error(label + " tokenizers must return exactly 77 IDs per prompt.");
+  }
+  const batch = new BigInt64Array(154);
+  batch.set(positive, 0);
+  batch.set(negative, 77);
+  return batch;
+}
+
+function splitFp16Batch(values, sampleSize, batchIndex) {
+  return new Float16Array(values.subarray(batchIndex * sampleSize, (batchIndex + 1) * sampleSize));
 }
 
 async function encodePrompts(manifest, prompt, negativePrompt, personalAmi) {
@@ -353,10 +376,21 @@ async function encodePrompts(manifest, prompt, negativePrompt, personalAmi) {
       ? await preparePersonalAmiComponent(personalAmi.file, manifest, "text_encoder", personalAmi.strength, log, checkCancelled)
       : null;
     sessionL = await loadSession(manifest, "text_encoder", "CLIP-L", patchedL?.externalData);
-    const positive = await sessionL.run({ input_ids: new ort.Tensor("int64", idsL, [1, 77]) });
-    hiddenL = fp16Values(positive.penultimate_hidden_state, "CLIP-L positive hidden", [1, 77, 768]);
-    const negative = await sessionL.run({ input_ids: new ort.Tensor("int64", negativeIdsL, [1, 77]) });
-    negativeHiddenL = fp16Values(negative.penultimate_hidden_state, "CLIP-L negative hidden", [1, 77, 768]);
+    if (canBatchEncoder(sessionL, "input_ids")) {
+      const outputs = await sessionL.run({
+        input_ids: new ort.Tensor("int64", combineTokenBatches(idsL, negativeIdsL, "CLIP-L"), [2, 77])
+      });
+      const combined = fp16Values(outputs.penultimate_hidden_state, "CLIP-L positive/negative hidden", [2, 77, 768]);
+      hiddenL = splitFp16Batch(combined, 77 * 768, 0);
+      negativeHiddenL = splitFp16Batch(combined, 77 * 768, 1);
+      log("CLIP-L encoded both prompts in one batch.");
+    } else {
+      const positive = await sessionL.run({ input_ids: new ort.Tensor("int64", idsL, [1, 77]) });
+      hiddenL = fp16Values(positive.penultimate_hidden_state, "CLIP-L positive hidden", [1, 77, 768]);
+      const negative = await sessionL.run({ input_ids: new ort.Tensor("int64", negativeIdsL, [1, 77]) });
+      negativeHiddenL = fp16Values(negative.penultimate_hidden_state, "CLIP-L negative hidden", [1, 77, 768]);
+      log("CLIP-L graph has a fixed batch of one; used two compatible calls.");
+    }
   } finally {
     if (sessionL) await sessionL.release();
   }
@@ -380,12 +414,26 @@ async function encodePrompts(manifest, prompt, negativePrompt, personalAmi) {
       ? await preparePersonalAmiComponent(personalAmi.file, manifest, "text_encoder_2", personalAmi.strength, log, checkCancelled)
       : null;
     sessionG = await loadSession(manifest, "text_encoder_2", "CLIP-bigG", patchedG?.externalData);
-    const positive = await sessionG.run({ input_ids: new ort.Tensor("int64", idsG, [1, 77]) });
-    hiddenG = fp16Values(positive.penultimate_hidden_state, "CLIP-bigG positive hidden", [1, 77, 1280]);
-    pooledG = fp16Values(positive.text_embeds, "CLIP-bigG positive pooled", [1, 1280]);
-    const negative = await sessionG.run({ input_ids: new ort.Tensor("int64", negativeIdsG, [1, 77]) });
-    negativeHiddenG = fp16Values(negative.penultimate_hidden_state, "CLIP-bigG negative hidden", [1, 77, 1280]);
-    negativePooledG = fp16Values(negative.text_embeds, "CLIP-bigG negative pooled", [1, 1280]);
+    if (canBatchEncoder(sessionG, "input_ids")) {
+      const outputs = await sessionG.run({
+        input_ids: new ort.Tensor("int64", combineTokenBatches(idsG, negativeIdsG, "CLIP-bigG"), [2, 77])
+      });
+      const combinedHidden = fp16Values(outputs.penultimate_hidden_state, "CLIP-bigG positive/negative hidden", [2, 77, 1280]);
+      const combinedPooled = fp16Values(outputs.text_embeds, "CLIP-bigG positive/negative pooled", [2, 1280]);
+      hiddenG = splitFp16Batch(combinedHidden, 77 * 1280, 0);
+      negativeHiddenG = splitFp16Batch(combinedHidden, 77 * 1280, 1);
+      pooledG = splitFp16Batch(combinedPooled, 1280, 0);
+      negativePooledG = splitFp16Batch(combinedPooled, 1280, 1);
+      log("CLIP-bigG encoded both prompts in one batch.");
+    } else {
+      const positive = await sessionG.run({ input_ids: new ort.Tensor("int64", idsG, [1, 77]) });
+      hiddenG = fp16Values(positive.penultimate_hidden_state, "CLIP-bigG positive hidden", [1, 77, 1280]);
+      pooledG = fp16Values(positive.text_embeds, "CLIP-bigG positive pooled", [1, 1280]);
+      const negative = await sessionG.run({ input_ids: new ort.Tensor("int64", negativeIdsG, [1, 77]) });
+      negativeHiddenG = fp16Values(negative.penultimate_hidden_state, "CLIP-bigG negative hidden", [1, 77, 1280]);
+      negativePooledG = fp16Values(negative.text_embeds, "CLIP-bigG negative pooled", [1, 1280]);
+      log("CLIP-bigG graph has a fixed batch of one; used two compatible calls.");
+    }
   } finally {
     if (sessionG) await sessionG.release();
   }
@@ -545,6 +593,71 @@ function validateGpuTensor(tensor, label, expectedShape) {
   return tensor;
 }
 
+function createGpuInput(device, dataType, data, dims, label) {
+  const buffer = device.createBuffer({
+    size: Math.max(4, data.byteLength),
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+  });
+  try {
+    device.queue.writeBuffer(buffer, 0, data);
+    const tensor = ort.Tensor.fromGpuBuffer(buffer, { dataType, dims });
+    return { buffer, tensor, data, label };
+  } catch (error) {
+    buffer.destroy();
+    throw new Error("Could not create GPU input " + label + ": " + (error?.message || error));
+  }
+}
+
+function createGpuInputState(conditioning, width, height) {
+  const device = ort.env.webgpu?.device;
+  if (!device || typeof ort.Tensor.fromGpuBuffer !== "function") {
+    throw new Error("ONNX Runtime did not expose the GPUDevice/Tensor.fromGpuBuffer API required for reusable GPU inputs.");
+  }
+  const latentWidth = width / 8;
+  const latentHeight = height / 8;
+  const latentLength = 4 * latentHeight * latentWidth;
+  const entries = {};
+  try {
+    entries.sample = createGpuInput(device, "float16", new Float16Array(latentLength * 2),
+      [2, 4, latentHeight, latentWidth], "UNET_A sample");
+    entries.timestep = createGpuInput(device, "float32", new Float32Array(2),
+      [2], "UNET_A timestep");
+    entries.encoderHidden = createGpuInput(device, "float16", conditioning.encoderHidden,
+      [2, 77, 2048], "shared encoder_hidden_states");
+    entries.textEmbeds = createGpuInput(device, "float16", conditioning.textEmbeds,
+      [2, 1280], "UNET_A text_embeds");
+    entries.timeIds = createGpuInput(device, "float32", makeBatchTimeIds(height, width),
+      [2, 6], "UNET_A time_ids");
+  } catch (error) {
+    for (const entry of Object.values(entries)) entry.buffer.destroy();
+    throw error;
+  }
+  return {
+    device,
+    entries,
+    writeStep(sample, timestep) {
+      if (sample.byteLength !== entries.sample.buffer.size) {
+        throw new Error("Latent input size changed while the UNet engine was resident.");
+      }
+      entries.timestep.data[0] = timestep;
+      entries.timestep.data[1] = timestep;
+      device.queue.writeBuffer(entries.sample.buffer, 0, sample);
+      device.queue.writeBuffer(entries.timestep.buffer, 0, entries.timestep.data);
+    },
+    updateConditioning(next) {
+      if (next.encoderHidden.byteLength !== entries.encoderHidden.buffer.size ||
+          next.textEmbeds.byteLength !== entries.textEmbeds.buffer.size) {
+        throw new Error("Prompt conditioning dimensions changed while the UNet engine was resident.");
+      }
+      device.queue.writeBuffer(entries.encoderHidden.buffer, 0, next.encoderHidden);
+      device.queue.writeBuffer(entries.textEmbeds.buffer, 0, next.textEmbeds);
+    },
+    destroy() {
+      for (const entry of Object.values(entries)) entry.buffer.destroy();
+    }
+  };
+}
+
 function disposeOutput(outputs, name) {
   const tensor = outputs?.[name];
   if (tensor && typeof tensor.dispose === "function") tensor.dispose();
@@ -558,6 +671,8 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
   const batch = 2;
   const shape = (channels, h, w) => [batch, channels, h, w];
   const timings = {};
+  const gpu = sessions.gpuInputs;
+  if (!gpu) throw new Error("Reusable GPU input buffers are missing from the resident UNet engine.");
   let outputsA = null;
   let outputsB = null;
   let outputsC = null;
@@ -569,13 +684,14 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
   };
 
   try {
+    gpu.writeStep(batchSample, timestep);
     const startedA = performance.now();
     outputsA = await sessions.a.run({
-      sample: new ort.Tensor("float16", batchSample, [batch, 4, latentHeight, latentWidth]),
-      timestep: new ort.Tensor("float32", new Float32Array([timestep, timestep]), [batch]),
-      encoder_hidden_states: new ort.Tensor("float16", conditioning.encoderHidden, [batch, 77, 2048]),
-      text_embeds: new ort.Tensor("float16", conditioning.textEmbeds, [batch, 1280]),
-      time_ids: new ort.Tensor("float32", makeBatchTimeIds(height, width), [batch, 6])
+      sample: gpu.entries.sample.tensor,
+      timestep: gpu.entries.timestep.tensor,
+      encoder_hidden_states: gpu.entries.encoderHidden.tensor,
+      text_embeds: gpu.entries.textEmbeds.tensor,
+      time_ids: gpu.entries.timeIds.tensor
     });
     timings.a = (performance.now() - startedA) / 1000;
     checkCancelled();
@@ -597,7 +713,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
     outputsB = await sessions.b.run({
       hidden: outputsA.hidden,
       emb: outputsA.emb,
-      encoder_hidden_states: new ort.Tensor("float16", conditioning.encoderHidden, [batch, 77, 2048]),
+      encoder_hidden_states: gpu.entries.encoderHidden.tensor,
       skip_6: outputsA.skip_6,
       skip_7: outputsA.skip_7,
       skip_8: outputsA.skip_8
@@ -607,7 +723,6 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
     validateGpuTensor(outputsB.hidden_out, "UNET_B hidden_out",
       shape(1280, latentHeight / 2, latentWidth / 2));
 
-    // A's deep hidden/skip tensors are consumed by B and are no longer needed.
     for (const name of ["hidden", "skip_6", "skip_7", "skip_8"]) {
       disposeOutput(outputsA, name);
     }
@@ -616,7 +731,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
     outputsC = await sessions.c.run({
       hidden: outputsB.hidden_out,
       emb: outputsA.emb,
-      encoder_hidden_states: new ort.Tensor("float16", conditioning.encoderHidden, [batch, 77, 2048]),
+      encoder_hidden_states: gpu.entries.encoderHidden.tensor,
       skip_0: outputsA.skip_0,
       skip_1: outputsA.skip_1,
       skip_2: outputsA.skip_2,
@@ -627,7 +742,12 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
     timings.c = (performance.now() - startedC) / 1000;
     checkCancelled();
 
-    const noisePrediction = fp16Values(outputsC.out_sample, "UNET_C out_sample",
+    let outputTensor = outputsC.out_sample;
+    if (sessions.graphCapture) {
+      validateGpuTensor(outputTensor, "UNET_C out_sample", shape(4, latentHeight, latentWidth));
+      outputTensor = { type: outputTensor.type, dims: outputTensor.dims, data: await outputTensor.getData() };
+    }
+    const noisePrediction = fp16Values(outputTensor, "UNET_C out_sample",
       [batch, 4, latentHeight, latentWidth]);
     const latentSize = 4 * latentHeight * latentWidth;
     const guided = new Float32Array(latentSize);
@@ -639,7 +759,8 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
 
     log("Step denoiser timing · A " + timings.a.toFixed(2) + "s · B " +
       timings.b.toFixed(2) + "s · C " + timings.c.toFixed(2) +
-      "s · CFG " + cfg + " · A→B→C intermediates GPU-resident");
+      "s · CFG " + cfg + " · A→B→C GPU-resident" +
+      (sessions.graphCapture ? " · graph capture replay" : " · standard dispatch"));
     return { guided, timings };
   } finally {
     disposeRemaining(outputsC);
@@ -666,6 +787,10 @@ async function releaseSessions(sessions) {
   }
   if (failures.length) {
     throw new Error("One or more UNet sessions could not be released: " + failures.join("; "));
+  }
+  if (sessions.gpuInputs) {
+    sessions.gpuInputs.destroy();
+    sessions.gpuInputs = null;
   }
 }
 
@@ -787,10 +912,62 @@ async function getConditioning(manifest, options) {
   return conditioning;
 }
 
-async function ensureUnetSessions(manifest, personalAmi) {
-  const key = adapterCacheKey(personalAmi);
+async function buildUnetSessions(manifest, personalAmi, conditioning, width, height, graphCapture, patchCache) {
+  const sessions = { a: null, b: null, c: null, gpuInputs: null, graphCapture };
+  const patchedComponent = async name => {
+    if (!personalAmi) return null;
+    if (!patchCache.has(name)) {
+      patchCache.set(name, await preparePersonalAmiComponent(
+        personalAmi.file, manifest, name, personalAmi.strength, log, checkCancelled
+      ));
+    }
+    return patchCache.get(name);
+  };
+  const outputsA = graphCapture ? "gpu-buffer" : {
+    hidden: "gpu-buffer",
+    emb: "gpu-buffer",
+    skip_0: "gpu-buffer",
+    skip_1: "gpu-buffer",
+    skip_2: "gpu-buffer",
+    skip_3: "gpu-buffer",
+    skip_4: "gpu-buffer",
+    skip_5: "gpu-buffer",
+    skip_6: "gpu-buffer",
+    skip_7: "gpu-buffer",
+    skip_8: "gpu-buffer"
+  };
+  const outputsB = graphCapture ? "gpu-buffer" : { hidden_out: "gpu-buffer" };
+  try {
+    const patchedA = await patchedComponent("unet_a");
+    sessions.a = await loadSession(manifest, "unet_a", "UNET_A", patchedA?.externalData,
+      outputsA, graphCapture);
+    sessions.gpuInputs = createGpuInputState(conditioning, width, height);
+    checkCancelled();
+
+    const patchedB = await patchedComponent("unet_b");
+    sessions.b = await loadSession(manifest, "unet_b", "UNET_B", patchedB?.externalData,
+      outputsB, graphCapture);
+    checkCancelled();
+
+    const patchedC = await patchedComponent("unet_c");
+    sessions.c = await loadSession(manifest, "unet_c", "UNET_C", patchedC?.externalData,
+      graphCapture ? "gpu-buffer" : null, graphCapture);
+
+    validateSessionInputs(sessions.a, ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], "UNET_A");
+    validateSessionInputs(sessions.b, ["hidden", "emb", "encoder_hidden_states", "skip_6", "skip_7", "skip_8"], "UNET_B");
+    validateSessionInputs(sessions.c, ["hidden", "emb", "encoder_hidden_states", "skip_0", "skip_1", "skip_2", "skip_3", "skip_4", "skip_5"], "UNET_C");
+    return sessions;
+  } catch (error) {
+    await releaseSessions(sessions);
+    throw error;
+  }
+}
+
+async function ensureUnetSessions(manifest, personalAmi, conditioning, width, height) {
+  const key = adapterCacheKey(personalAmi) + "|" + width + "x" + height;
   if (residentUnetSessions && residentUnetKey === key) {
     log("Reusing resident UNET_A, UNET_B, and UNET_C sessions.");
+    residentUnetSessions.gpuInputs.updateConditioning(conditioning);
     if (!residentEngineLock) {
       releaseHeavyModelTest("full Illustrious image generation");
       acquireHeavyModelTest("resident Illustrious inference engine");
@@ -800,55 +977,37 @@ async function ensureUnetSessions(manifest, personalAmi) {
   }
 
   if (residentUnetSessions) {
-    log("Adapter configuration changed · releasing the previous resident UNet before rebuilding it.");
+    log("Adapter or resolution changed · releasing the previous resident UNet before rebuilding it.");
     await releaseSessions(residentUnetSessions);
     residentUnetSessions = null;
     residentUnetKey = null;
   }
 
-  const sessions = { a: null, b: null, c: null };
+  setProgress(8, "Preparing UNet partitions");
+  setStatus("Preparing UNET_A, UNET_B, and UNET_C. This requires several GiB of memory…");
+  const patchCache = new Map();
+  let sessions;
   try {
-    setProgress(8, "Preparing UNet partitions");
-    setStatus("Preparing UNET_A, UNET_B, and UNET_C. This requires several GiB of memory…");
-    const patchedA = personalAmi
-      ? await preparePersonalAmiComponent(personalAmi.file, manifest, "unet_a", personalAmi.strength, log, checkCancelled)
-      : null;
-    sessions.a = await loadSession(manifest, "unet_a", "UNET_A", patchedA?.externalData, {
-      hidden: "gpu-buffer",
-      emb: "gpu-buffer",
-      skip_0: "gpu-buffer",
-      skip_1: "gpu-buffer",
-      skip_2: "gpu-buffer",
-      skip_3: "gpu-buffer",
-      skip_4: "gpu-buffer",
-      skip_5: "gpu-buffer",
-      skip_6: "gpu-buffer",
-      skip_7: "gpu-buffer",
-      skip_8: "gpu-buffer"
-    });
-    checkCancelled();
-
-    const patchedB = personalAmi
-      ? await preparePersonalAmiComponent(personalAmi.file, manifest, "unet_b", personalAmi.strength, log, checkCancelled)
-      : null;
-    sessions.b = await loadSession(manifest, "unet_b", "UNET_B", patchedB?.externalData, {
-      hidden_out: "gpu-buffer"
-    });
-    checkCancelled();
-
-    const patchedC = personalAmi
-      ? await preparePersonalAmiComponent(personalAmi.file, manifest, "unet_c", personalAmi.strength, log, checkCancelled)
-      : null;
-    sessions.c = await loadSession(manifest, "unet_c", "UNET_C", patchedC?.externalData);
-
-    validateSessionInputs(sessions.a, ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], "UNET_A");
-    validateSessionInputs(sessions.b, ["hidden", "emb", "encoder_hidden_states", "skip_6", "skip_7", "skip_8"], "UNET_B");
-    validateSessionInputs(sessions.c, ["hidden", "emb", "encoder_hidden_states", "skip_0", "skip_1", "skip_2", "skip_3", "skip_4", "skip_5"], "UNET_C");
+    try {
+      sessions = await buildUnetSessions(manifest, personalAmi, conditioning, width, height, true, patchCache);
+      const latentSize = 4 * (height / 8) * (width / 8);
+      log("Warming fixed-shape UNet graphs and capturing WebGPU command sequences…");
+      await runUnetStep(sessions, conditioning, new Float32Array(latentSize), 0, width, height, 1, 0);
+      log("UNET_A/B/C graph capture warm-up complete. Repeated denoising steps can replay captured GPU work.");
+    } catch (graphError) {
+      if (sessions) {
+        await releaseSessions(sessions);
+        sessions = null;
+      }
+      log("Graph capture unavailable for this model/device/shape; rebuilding with standard WebGPU dispatch. Reason: " +
+        (graphError?.message || String(graphError)));
+      sessions = await buildUnetSessions(manifest, personalAmi, conditioning, width, height, false, patchCache);
+    }
 
     residentUnetSessions = sessions;
     residentUnetKey = key;
     releaseEngineButton.disabled = false;
-    log("UNet engine prepared · all three sessions will remain resident for subsequent images.");
+    log("UNet engine prepared · all three sessions remain resident for subsequent images.");
 
     if (!residentEngineLock) {
       releaseHeavyModelTest("full Illustrious image generation");
@@ -857,7 +1016,7 @@ async function ensureUnetSessions(manifest, personalAmi) {
     }
     return residentUnetSessions;
   } catch (error) {
-    if (residentUnetSessions !== sessions) await releaseSessions(sessions);
+    if (sessions) await releaseSessions(sessions);
     throw error;
   }
 }
@@ -937,11 +1096,11 @@ async function prepareInferenceEngine() {
 
     setStatus("Precomputing prompt conditioning…");
     setProgress(7, "Precomputing prompt conditioning");
-    await getConditioning(manifest, options);
+    const conditioning = await getConditioning(manifest, options);
     checkCancelled();
 
     setStatus("Preparing resident UNet sessions…");
-    await ensureUnetSessions(manifest, options.personalAmi);
+    await ensureUnetSessions(manifest, options.personalAmi, conditioning, options.width, options.height);
     checkCancelled();
 
     setStatus("Preparing resident VAE decoder…");
@@ -983,7 +1142,7 @@ async function generate(options) {
   log("Prompt: " + options.prompt);
   log("Negative: " + (options.negative || "(empty)"));
   log("Seed " + options.seed + " · CFG " + options.cfg);
-  log("CLIP encoders run sequentially; UNet and VAE sessions remain resident between generations; matching prompt conditioning is cached.");
+  log("CLIP positive/negative prompts are batched when the graph supports batch=2; fixed-shape UNet graphs use WebGPU capture/replay when supported, with reusable GPU inputs.");
   if (options.personalAmi) {
     log("Personal Ami enabled · " + options.personalAmi.file.name + " · strength " + options.personalAmi.strength.toFixed(3) + " · all 980 mapped pairs will be patched.");
   } else {
@@ -1008,7 +1167,7 @@ async function generate(options) {
   const unetBytes = parts.reduce((sum, key) => sum + Number(manifest.components?.[key]?.bytes || 0), 0);
   log("UNet manifest payload total " + formatBytes(unetBytes) +
     " (not a direct VRAM measurement). Loading all partitions together…");
-  const sessions = await ensureUnetSessions(manifest, options.personalAmi);
+  const sessions = await ensureUnetSessions(manifest, options.personalAmi, conditioning, options.width, options.height);
   let totalUnetExecutionSeconds = 0;
   log("All three UNet sessions are resident. Beginning " + options.steps + " denoising steps.");
   await yieldFrames();
