@@ -10,6 +10,7 @@ on:
   pull_request:
     paths:
       - "illustrious-experiment/**"
+      - "service-worker.js"
       - ".github/workflows/illustrious-browser-checks.yml"
   workflow_dispatch:
 
