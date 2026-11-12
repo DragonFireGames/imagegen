@@ -1287,6 +1287,16 @@ async function ensureVaeSession(manifest) {
   return residentVaeSession;
 }
 
+async function releaseVaeSession(reason) {
+  if (!residentVaeSession) return;
+  const session = residentVaeSession;
+  log("Releasing resident VAE decoder" + (reason ? " · " + reason : "") + " to free GPU memory.");
+  await session.release();
+  residentVaeSession = null;
+  await yieldFrames();
+  log("Released VAE decoder session.");
+}
+
 async function releaseInferenceEngine() {
   const failures = [];
   if (residentVaeSession) {
@@ -1360,12 +1370,12 @@ async function prepareInferenceEngine() {
     await ensureUnetSessions(manifest, options.personalAmi, conditioning, options.width, options.height, options.cfg);
     checkCancelled();
 
-    setStatus("Preparing resident VAE decoder…");
-    setProgress(96, "Preparing VAE decoder");
-    await ensureVaeSession(manifest);
+    // Keep the multi-part UNet resident, but do not pin the VAE beside its
+    // 4.79 GiB of external weights. Load VAE only for decode, then release it.
+    await releaseVaeSession("UNet engine takes priority");
     setProgress(100, "Engine ready");
-    setStatus("Inference engine prepared · UNet and VAE sessions are resident; prompt conditioning is cached.", "success");
-    log("Ready for repeated generation. Change prompt/adapter settings as needed; matching conditioning and model sessions will be reused.");
+    setStatus("Inference engine prepared · UNet sessions are resident; prompt conditioning is cached.", "success");
+    log("Ready for repeated generation. The VAE decoder will be loaded only after denoising to reduce GPU memory contention.");
   } catch (error) {
     console.error("[Illustrious] Engine preparation failed:", error);
     setStatus("Engine preparation failed: " + (error?.message || String(error)), "error");
@@ -1424,6 +1434,9 @@ async function generate(options) {
   const unetBytes = parts.reduce((sum, key) => sum + Number(manifest.components?.[key]?.bytes || 0), 0);
   log("UNet manifest payload total " + formatBytes(unetBytes) +
     " (not a direct VRAM measurement). Loading all partitions together…");
+  // A resident VAE competes with the three large UNet partitions for GPU
+  // resources. Keep the UNet resident and make VAE a decode-only session.
+  await releaseVaeSession("starting UNet denoising");
   const sessions = await ensureUnetSessions(manifest, options.personalAmi, conditioning, options.width, options.height, options.cfg);
   const gpuScheduler = sessions.gpuScheduler;
   if (gpuScheduler) {
@@ -1495,15 +1508,25 @@ async function generate(options) {
   const started = performance.now();
   log("Decoding latent [1,4," + latentHeight + "," + latentWidth +
     "] · VAE scaling factor " + VAE_SCALING_FACTOR + ".");
-  const outputs = await vaeSession.run({
-    [inputName]: new ort.Tensor("float16", scaledLatents, [1, 4, latentHeight, latentWidth])
-  });
-  const outputName = vaeSession.outputNames[0];
-  if (!outputName || !outputs[outputName]) throw new Error("VAE decoder returned no image tensor.");
-  const canvas = renderImage(outputs[outputName], options.width, options.height);
-  log("VAE decode + canvas conversion " + ((performance.now() - started) / 1000).toFixed(2) + "s.");
-  setProgress(100, "Complete");
-  return canvas;
+  let outputs = null;
+  try {
+    outputs = await vaeSession.run({
+      [inputName]: new ort.Tensor("float16", scaledLatents, [1, 4, latentHeight, latentWidth])
+    });
+    const outputName = vaeSession.outputNames[0];
+    if (!outputName || !outputs[outputName]) throw new Error("VAE decoder returned no image tensor.");
+    const canvas = renderImage(outputs[outputName], options.width, options.height);
+    log("VAE decode + canvas conversion " + ((performance.now() - started) / 1000).toFixed(2) + "s.");
+    setProgress(100, "Complete");
+    return canvas;
+  } finally {
+    if (outputs) {
+      for (const tensor of Object.values(outputs)) {
+        if (tensor && typeof tensor.dispose === "function") tensor.dispose();
+      }
+    }
+    await releaseVaeSession("decode complete; retain UNet for the next image");
+  }
 }
 
 prepareEngineButton.addEventListener("click", prepareInferenceEngine);
