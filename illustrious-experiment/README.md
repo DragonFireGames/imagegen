@@ -62,6 +62,20 @@ opt-in; the default releases VAE after each image. Releasing the inference
 engine frees it, and changing the adapter or resolution releases it before
 rebuilding the UNet.
 
+## Sequential image batches
+
+Set **Batch** to generate 1–20 images sequentially with the same prompt,
+dimensions, sampler settings, and adapter. Each result is added to the gallery
+as soon as it finishes, with its own PNG download link and actual seed. The
+resident UNet engine and conditioning cache are reused across the batch.
+
+For a fixed starting seed, each image uses the next 32-bit seed in sequence
+(starting seed, starting seed + 1, and so on). The batch is rejected if that
+sequence would exceed the maximum 32-bit seed. With seed `-1`, each image
+gets a separately generated random seed. Cancelling stops the batch and keeps
+all images that already completed; an error also stops further images without
+removing earlier results.
+
 ## Brush infill experiment
 
 The standalone brush page uses the same WAI Illustrious v17 ONNX model pack.
@@ -107,9 +121,10 @@ of the user supplying it.
 ## Settings JSON
 
 The generator can export and import prompt, negative prompt, positive suffix,
-dimensions, step count, CFG scale, seed, and LoRA enablement/strength plus
-adapter filename/size metadata. The local model cache and the adapter payload
-are not embedded in the JSON.
+dimensions, step count, CFG scale, seed, batch count, and LoRA enablement/strength
+plus adapter filename/size metadata. Version 3 settings files retain backward
+compatibility with version 2 files; older files default to a batch count of one.
+The local model cache and the adapter payload are not embedded in the JSON.
 
 ## Offline reference exporter
 
