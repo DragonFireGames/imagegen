@@ -938,7 +938,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       "s · CFG " + cfg + " · batch " + batch + " · A→B→C GPU-resident · reusable GPU inputs · standard dispatch");
     return { guided, timings };
   } finally {
-    disposeRemaining(outputsC);
+    if (!sessions.gpuScheduler) disposeRemaining(outputsC);
     disposeRemaining(outputsB);
     disposeRemaining(outputsA);
   }
