@@ -5,9 +5,12 @@ generator in the rest of this repository.
 
 ## Pages
 
-- `index.html` is the generation interface: model cache setup, prompt and
+- `index.html` is the text-to-image interface: model cache setup, prompt and
   sampling controls, optional local LoRA selection, engine preparation/release,
   image generation, and JSON settings import/export.
+- `infill.html` is a separate brush-mask image editing experiment. Upload an
+  image, paint/erase the region to replace, set an edit prompt and strength, and
+  run the local Illustrious model.
 - `diagnostics.html` contains standalone browser checks for the model runtime,
   Safetensors headers and payloads, SDXL LoRA-to-ONNX weight mapping, and
   single/full CLIP-L patch validation.
@@ -29,6 +32,22 @@ afterward to reduce competition with the resident UNet sessions.
 Use `?gpuProfile=1` to enable ONNX Runtime WebGPU operator profiling. Profiling
 adds overhead, so use it to identify expensive operators, not to record final
 generation benchmarks.
+
+## Brush infill experiment
+
+The standalone brush page uses the same WAI Illustrious v17 ONNX model pack.
+It encodes the source image through the pack's VAE encoder, applies a soft brush
+mask at latent resolution, and blends the source latents back into unpainted
+areas during denoising. The final composite also restores unpainted source
+pixels exactly. The VAE encoder is included in the browser cache only when an
+infill generation is requested; the regular text-to-image path is unchanged.
+
+This is a masked-latent experiment using the regular four-channel SDXL UNet,
+not a purpose-trained nine-channel inpainting checkpoint. It is useful for
+testing the brush workflow and local infill behavior, but may produce weaker
+semantic continuity around the painted boundary than a dedicated inpainting
+model. Infill uses the CPU latent scheduler path so the source latents can be
+blended at each denoising step; the normal generator retains its GPU scheduler.
 
 ## Local SDXL LoRA adapters
 
