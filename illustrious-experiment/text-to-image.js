@@ -940,7 +940,8 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
 
     log("Step denoiser timing · A " + timings.a.toFixed(2) + "s · B " +
       timings.b.toFixed(2) + "s · C " + timings.c.toFixed(2) +
-      "s · CFG " + cfg + " · batch " + batch + " · A→B→C GPU-resident · reusable GPU inputs · standard dispatch");
+      "s · CFG " + cfg + " · batch " + batch + " · A→B→C GPU-resident · reusable GPU inputs · standard dispatch" +
+      (sessions.gpuScheduler ? " · GPU CFG/Euler" : " · CPU CFG/Euler"));
     return { guided, timings };
   } finally {
     if (!sessions.gpuScheduler) disposeRemaining(outputsC);
