@@ -22,10 +22,11 @@ A browser-local FLUX.2 Klein 4B image generator. The application, JavaScript run
 - models/qwen3-4b-tokenizer/: local tokenizer/configuration files.
 - scripts/vendor-assets.sh: reproducible asset-vendoring script.
 - .github/workflows/: Pages deployment and dependency-vendoring workflows.
+- waifu2x-unlimited/: standalone browser-local Waifu2x Unlimited copy; ONNX model archives are installed separately.
 
 The vendor workflow fetches pinned npm distributions and the upstream tokenizer, commits them into vendor/ and models/, then deploys the static site. To refresh these dependencies, run **Actions → Vendor browser dependencies**.
 
-There are no third-party script or WASM CDNs at application runtime. The source is ordinary browser JavaScript modules; no build step is needed to run it.
+The main FLUX.2 generator has no third-party script or WASM CDNs at runtime. The separate waifu2x-unlimited experiment retains its pinned upstream ONNX Runtime Web script from jsDelivr. Both apps are ordinary browser JavaScript; no build step is needed.
 
 ## Model weights and GitHub Pages
 
@@ -58,3 +59,5 @@ The application does not apply its own prompt moderation or blocklist. The curre
 The app source in this repository is MIT-licensed. Third-party runtime distributions and tokenizer assets retain their upstream licenses; see THIRD_PARTY_NOTICES.md and the license files inside vendor/ and models/qwen3-4b-tokenizer/.
 
 The model weights are supplied by cgb under Apache-2.0 as stated in its model card. Read that model repository's license and notices before redistributing the weights separately.
+
+The waifu2x-unlimited application files are copied from nagadomi/nunif under MIT; see waifu2x-unlimited/LICENSE-nunif. Waifu2x model archives remain upstream release assets and are not included in this repository.
