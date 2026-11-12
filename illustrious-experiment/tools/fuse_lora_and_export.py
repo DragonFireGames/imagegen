@@ -53,6 +53,8 @@ def inspect_lora_header(lora_path: Path, safe_open) -> dict:
         (".lora_up.weight", "up"),
         (".lora_A.weight", "down"),
         (".lora_B.weight", "up"),
+        (".lora_A.default.weight", "down"),
+        (".lora_B.default.weight", "up"),
     )
     component_counts = Counter()
     pair_shapes = {}
