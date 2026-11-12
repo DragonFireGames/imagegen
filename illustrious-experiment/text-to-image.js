@@ -1244,7 +1244,7 @@ function readOptions() {
   }
   if (fields.lora.checked) {
     const adapterFile = fields.loraFile.files?.[0] || null;
-    if (!adapterFile) throw new Error("Choose the LoRA .safetensors file in the adapter inspector above.");
+    if (!adapterFile) throw new Error("Choose a LoRA .safetensors file in the adapter selector above.");
     if (expectedAdapterFile && !adapterFileMatches(adapterFile, expectedAdapterFile)) {
       throw new Error("The selected LoRA file does not match the adapter recorded in the imported settings JSON. Select " +
         expectedAdapterFile.name + " (" + formatBytes(expectedAdapterFile.sizeBytes) + ").");
