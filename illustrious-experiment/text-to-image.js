@@ -317,7 +317,7 @@ function externalData(component) {
   }));
 }
 
-async function loadSession(manifest, key, label, patchedExternalData = null, preferredOutputLocation = null, enableGraphCapture = false) {
+async function loadSession(manifest, key, label, patchedExternalData = null, preferredOutputLocation = null) {
   const component = manifest?.components?.[key];
   const started = performance.now();
   log("Loading " + label + " (" + formatBytes(component?.bytes) + ")…");
@@ -326,16 +326,11 @@ async function loadSession(manifest, key, label, patchedExternalData = null, pre
     graphOptimizationLevel: "all",
     externalData: patchedExternalData || externalData(component)
   };
-  if (enableGraphCapture) {
-    sessionOptions.enableGraphCapture = true;
-    sessionOptions.preferredOutputLocation = "gpu-buffer";
-  } else if (preferredOutputLocation) {
-    sessionOptions.preferredOutputLocation = preferredOutputLocation;
-  }
+  if (preferredOutputLocation) sessionOptions.preferredOutputLocation = preferredOutputLocation;
   const session = await ort.InferenceSession.create(MODEL_BASE + component.onnx, sessionOptions);
   log(label + " session created in " + ((performance.now() - started) / 1000).toFixed(2) +
     "s · inputs: " + session.inputNames.join(", ") +
-    (enableGraphCapture ? " · graph capture enabled" : preferredOutputLocation ? " · GPU-resident outputs enabled" : ""));
+    (preferredOutputLocation ? " · GPU-resident outputs enabled" : ""));
   return session;
 }
 
@@ -753,14 +748,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
     timings.c = (performance.now() - startedC) / 1000;
     checkCancelled();
 
-    let outputTensor = outputsC.out_sample;
-    if (sessions.graphCapture) {
-      validateGpuTensor(outputTensor, "UNET_C out_sample", shape(4, latentHeight, latentWidth));
-      const readbackStarted = performance.now();
-      outputTensor = { type: outputTensor.type, dims: outputTensor.dims, data: await outputTensor.getData() };
-      timings.readback = (performance.now() - readbackStarted) / 1000;
-    }
-    const noisePrediction = fp16Values(outputTensor, "UNET_C out_sample",
+    const noisePrediction = fp16Values(outputsC.out_sample, "UNET_C out_sample",
       [batch, 4, latentHeight, latentWidth]);
     const latentSize = 4 * latentHeight * latentWidth;
     const guided = new Float32Array(latentSize);
@@ -776,8 +764,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
 
     log("Step denoiser timing · A " + timings.a.toFixed(2) + "s · B " +
       timings.b.toFixed(2) + "s · C " + timings.c.toFixed(2) +
-      "s · CFG " + cfg + " · batch " + batch + " · A→B→C GPU-resident" +
-      (sessions.graphCapture ? " · graph capture replay · C readback " + timings.readback.toFixed(3) + "s" : " · standard dispatch"));
+      "s · CFG " + cfg + " · batch " + batch + " · A→B→C GPU-resident · reusable GPU inputs · standard dispatch");
     return { guided, timings };
   } finally {
     disposeRemaining(outputsC);
@@ -929,8 +916,8 @@ async function getConditioning(manifest, options) {
   return conditioning;
 }
 
-async function buildUnetSessions(manifest, personalAmi, conditioning, width, height, batchSize, conditioningIndex, graphCapture, patchCache) {
-  const sessions = { a: null, b: null, c: null, gpuInputs: null, graphCapture, batchSize };
+async function buildUnetSessions(manifest, personalAmi, conditioning, width, height, batchSize, conditioningIndex, patchCache) {
+  const sessions = { a: null, b: null, c: null, gpuInputs: null, batchSize };
   const patchedComponent = async name => {
     if (!personalAmi) return null;
     if (!patchCache.has(name)) {
@@ -940,7 +927,7 @@ async function buildUnetSessions(manifest, personalAmi, conditioning, width, hei
     }
     return patchCache.get(name);
   };
-  const outputsA = graphCapture ? "gpu-buffer" : {
+  const outputsA = {
     hidden: "gpu-buffer",
     emb: "gpu-buffer",
     skip_0: "gpu-buffer",
@@ -953,22 +940,19 @@ async function buildUnetSessions(manifest, personalAmi, conditioning, width, hei
     skip_7: "gpu-buffer",
     skip_8: "gpu-buffer"
   };
-  const outputsB = graphCapture ? "gpu-buffer" : { hidden_out: "gpu-buffer" };
+  const outputsB = { hidden_out: "gpu-buffer" };
   try {
     const patchedA = await patchedComponent("unet_a");
-    sessions.a = await loadSession(manifest, "unet_a", "UNET_A", patchedA?.externalData,
-      outputsA, graphCapture);
+    sessions.a = await loadSession(manifest, "unet_a", "UNET_A", patchedA?.externalData, outputsA);
     sessions.gpuInputs = createGpuInputState(conditioning, width, height, batchSize, conditioningIndex);
     checkCancelled();
 
     const patchedB = await patchedComponent("unet_b");
-    sessions.b = await loadSession(manifest, "unet_b", "UNET_B", patchedB?.externalData,
-      outputsB, graphCapture);
+    sessions.b = await loadSession(manifest, "unet_b", "UNET_B", patchedB?.externalData, outputsB);
     checkCancelled();
 
     const patchedC = await patchedComponent("unet_c");
-    sessions.c = await loadSession(manifest, "unet_c", "UNET_C", patchedC?.externalData,
-      graphCapture ? "gpu-buffer" : null, graphCapture);
+    sessions.c = await loadSession(manifest, "unet_c", "UNET_C", patchedC?.externalData);
 
     validateSessionInputs(sessions.a, ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], "UNET_A");
     validateSessionInputs(sessions.b, ["hidden", "emb", "encoder_hidden_states", "skip_6", "skip_7", "skip_8"], "UNET_B");
@@ -1007,22 +991,11 @@ async function ensureUnetSessions(manifest, personalAmi, conditioning, width, he
   const patchCache = new Map();
   let sessions;
   try {
-    try {
-      sessions = await buildUnetSessions(manifest, personalAmi, conditioning, width, height, batchSize, conditioningIndex, true, patchCache);
-      const latentSize = 4 * (height / 8) * (width / 8);
-      log("Warming fixed-shape UNet graphs and capturing WebGPU command sequences…");
-      await runUnetStep(sessions, conditioning, new Float32Array(latentSize), 0, width, height, cfg, 0);
-      log("UNET_A/B/C graph capture warm-up complete. Repeated denoising steps can replay captured GPU work." +
-        (batchSize === 1 ? " Single-branch CFG path · batch=1." : " Classifier-free guidance path · batch=2."));
-    } catch (graphError) {
-      if (sessions) {
-        await releaseSessions(sessions);
-        sessions = null;
-      }
-      log("Graph capture unavailable for this model/device/shape; rebuilding with standard WebGPU dispatch. Reason: " +
-        (graphError?.message || String(graphError)));
-      sessions = await buildUnetSessions(manifest, personalAmi, conditioning, width, height, batchSize, conditioningIndex, false, patchCache);
-    }
+    sessions = await buildUnetSessions(
+      manifest, personalAmi, conditioning, width, height, batchSize, conditioningIndex, patchCache
+    );
+    log("UNET_A/B/C ready · standard WebGPU dispatch with persistent GPU inputs and GPU-resident partition handoffs." +
+      (batchSize === 1 ? " Single-branch CFG path · batch=1." : " Classifier-free guidance path · batch=2."));
 
     if (personalAmi) {
       releasePersonalAmiPayload(personalAmi.file);
@@ -1031,7 +1004,7 @@ async function ensureUnetSessions(manifest, personalAmi, conditioning, width, he
     residentUnetSessions = sessions;
     residentUnetKey = key;
     releaseEngineButton.disabled = false;
-    log("UNet engine prepared · all three sessions remain resident for subsequent images.");
+    log("UNet engine prepared · all three sessions remain resident for subsequent images. No warm-up inference required.");
 
     if (!residentEngineLock) {
       releaseHeavyModelTest("full Illustrious image generation");
@@ -1166,7 +1139,7 @@ async function generate(options) {
   log("Prompt: " + options.prompt);
   log("Negative: " + (options.negative || "(empty)"));
   log("Seed " + options.seed + " · CFG " + options.cfg);
-  log("CLIP positive/negative prompts are batched when supported. CFG 0 or 1 uses one UNet branch (batch 1); other CFG values use both branches (batch 2). Fixed-shape UNet graphs use WebGPU capture/replay when supported.");
+  log("CLIP positive/negative prompts are batched when supported. CFG 0 or 1 uses one UNet branch (batch 1); other CFG values use both branches (batch 2). Reusable GPU inputs and A→B→C GPU-resident handoffs are enabled.");
   if (options.personalAmi) {
     log("Personal Ami enabled · " + options.personalAmi.file.name + " · strength " + options.personalAmi.strength.toFixed(3) + " · all 980 mapped pairs will be patched.");
   } else {
