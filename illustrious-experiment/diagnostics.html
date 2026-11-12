@@ -139,7 +139,7 @@
       <p>Read one shape-compatible BF16 down/up pair and its alpha from the selected local adapter, apply its low-rank delta to the indexed FP16 CLIP-L initializer, and give ONNX Runtime a patched external-data Blob. The test runs the same token IDs through the original and patched CLIP-L sessions and compares their outputs.</p>
       <p class="notice">This downloads the 232 MB CLIP-L external-data shard and temporarily composes a patched Blob. Only one representative matrix is changed; the full adapter is not applied. The local .safetensors bytes remain in this browser and are never uploaded.</p>
       <label for="loraPatchStrength">Test LoRA strength</label>
-      <input class="number-input" id="loraPatchStrength" type="number" min="0" max="2" step="0.05" value="0.75">
+      <input class="number-input" id="loraPatchStrength" type="number" min="0" max="2" step="0.05" value="1.0">
       <button class="button" id="testSingleLoraPatch" type="button">Test one patched CLIP-L weight</button>
       <p class="status" id="loraPatchStatus" data-type="info" aria-live="polite">Choose a LoRA in the shared .safetensors picker above first.</p>
       <div class="data-list" id="loraPatchSummary" hidden></div>
@@ -152,7 +152,7 @@
       <p>This applies every compatible CLIP-L LoRA pair found in the selected adapter to its matching FP16 ONNX initializer. Targets not present in the graph index are skipped only when they belong to the unsupported final CLIP-L block. It then loads both the original and patched CLIP-L sessions and compares their outputs.</p>
       <p class="notice">This is the next validation stage, not full image generation. It downloads the CLIP-L external-data shard and reads the selected local adapter's CLIP-L factor tensors. The .safetensors file is not uploaded. CLIP-bigG and the three UNet partitions are not patched by this test.</p>
       <label for="fullClipLStrength">Full CLIP-L LoRA strength</label>
-      <input class="number-input" id="fullClipLStrength" type="number" min="0" max="2" step="0.05" value="0.75">
+      <input class="number-input" id="fullClipLStrength" type="number" min="0" max="2" step="0.05" value="1.0">
       <button class="button" id="testFullClipL" type="button">Test mapped CLIP-L LoRA pairs</button>
       <p class="status" id="fullClipLStatus" data-type="info" aria-live="polite">Select LoRA in the shared .safetensors picker above first.</p>
       <div class="data-list" id="fullClipLSummary" hidden></div>
