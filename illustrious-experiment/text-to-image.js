@@ -14,7 +14,7 @@ const graphCaptureEnabled = new URLSearchParams(window.location.search).get("gra
 const keepVaeResident = new URLSearchParams(window.location.search).get("keepVae") === "1";
 const preferredUnetLayout = new URLSearchParams(window.location.search).get("layout") === "NHWC" ? "NHWC" : null;
 const requestedUnetValidationMode = new URLSearchParams(window.location.search).get("validation");
-const preferredUnetValidationMode = ["basic", "wgpuOnly", "full"].includes(requestedUnetValidationMode)
+const preferredUnetValidationMode = ["disabled", "wgpuOnly", "basic", "full"].includes(requestedUnetValidationMode)
   ? requestedUnetValidationMode
   : null;
 const LOCAL_ORT_BASE = new URL("../vendor/onnxruntime-web/", import.meta.url).href;
@@ -1202,7 +1202,8 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
 
     log("Step denoiser timing · A " + timings.a.toFixed(2) + "s · B " +
       timings.b.toFixed(2) + "s · C " + timings.c.toFixed(2) +
-      "s · CFG " + cfg + " · " + imageCount + " image(s) · model batch " + batch + " · A→B→C GPU-resident · reusable GPU inputs · standard dispatch" +
+      "s · CFG " + cfg + " · " + imageCount + " image(s) · model batch " + batch + " · A→B→C GPU-resident · reusable GPU inputs" +
+      (sessions.graphCaptureRequested ? " · graph capture enabled" : " · standard dispatch") +
       (sessions.gpuScheduler ? " · GPU CFG/Euler" : " · CPU CFG/Euler"));
     return { guided, timings };
   } finally {
@@ -1580,7 +1581,8 @@ async function buildUnetSessions(
 ) {
   const sessions = {
     a: null, b: null, c: null, gpuInputs: null, gpuOutputs: { a: null, b: null },
-    batchSize, imageCount, branchCount
+    batchSize, imageCount, branchCount,
+    graphCaptureRequested: enableGraphCapture
   };
   const patchedComponent = async name => {
     if (!lora) return null;
@@ -2106,7 +2108,11 @@ async function generateMany(imageOptionsList, infillData = null, onImage = null)
   if (runtimeNote) log(runtimeNote);
   log("UNet preferred layout · " + (preferredUnetLayout || "NCHW (default)") + ".");
   log("UNet validation mode · " + (preferredUnetValidationMode || "ORT default (basic)") +
-    (preferredUnetValidationMode === "wgpuOnly" ? " · retains WebGPU/Dawn validation; skips additional ONNX basic validation." : "."));
+    (preferredUnetValidationMode === "wgpuOnly"
+      ? " · retains WebGPU/Dawn validation; skips additional ONNX basic validation."
+      : preferredUnetValidationMode === "disabled"
+        ? " · all WebGPU validation disabled; benchmark-only because GPU errors are harder to diagnose."
+        : "."));
   if (graphCaptureEnabled) log("Static UNet WebGPU graph capture requested · initialization falls back to standard dispatch if capture fails.");
   if (gpuProfilingRequested) {
     log("Per-operator GPU profiling is not exposed to JavaScript by the bundled ONNX Runtime 1.31.1 native WebGPU provider. No [profiling] entries are expected; the A/B/C wall-clock timings below remain available.");
@@ -2229,11 +2235,14 @@ async function generateMany(imageOptionsList, infillData = null, onImage = null)
   log("Accumulated UNet execution time " + totalUnetExecutionSeconds.toFixed(2) +
     "s across " + options.steps + " steps · " + imageCount + " image(s).");
   if (gpuScheduler) {
+    const readbackStarted = performance.now();
     latents = await gpuScheduler.readLatents();
+    const readbackSeconds = (performance.now() - readbackStarted) / 1000;
     for (let i = 0; i < latents.length; i++) {
       if (!Number.isFinite(latents[i])) throw new Error("GPU scheduler produced a non-finite latent at " + i + ".");
     }
-    log("GPU scheduler final latent readback complete · no per-step latent readback.");
+    log("GPU scheduler final latent readback complete · " + readbackSeconds.toFixed(2) +
+      "s including outstanding GPU queue completion and buffer mapping; no per-step latent readback.");
   }
 
   checkCancelled();
