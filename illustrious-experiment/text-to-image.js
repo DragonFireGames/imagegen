@@ -39,6 +39,15 @@ const fields = {
   loraFile: document.querySelector("#loraFile")
 };
 
+const adapterFileLabel = document.querySelector("#fileName");
+fields.loraFile?.addEventListener("change", () => {
+  const file = fields.loraFile.files?.[0];
+  if (!adapterFileLabel) return;
+  adapterFileLabel.textContent = file
+    ? file.name + " · " + (file.size / 1024 ** 2).toFixed(1) + " MiB"
+    : "No adapter selected";
+});
+
 let cancelRequested = false;
 let generationStarted = 0;
 let imageObjectUrl = null;
