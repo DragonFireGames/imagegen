@@ -784,6 +784,7 @@ async function ensureUnetSessions(manifest, personalAmi) {
 
     residentUnetSessions = sessions;
     residentUnetKey = key;
+    releaseEngineButton.disabled = false;
     log("UNet engine prepared · all three sessions will remain resident for subsequent images.");
 
     if (!residentEngineLock) {
@@ -831,20 +832,20 @@ async function releaseInferenceEngine() {
 }
 
 async function prepareInferenceEngine() {
-  const options = readOptions();
   generationStarted = performance.now();
   logOutput.textContent = "";
   cancelRequested = false;
   const acquiredHere = !residentEngineLock;
-  if (acquiredHere) {
-    acquireHeavyModelTest("resident Illustrious inference engine");
-    residentEngineLock = true;
-  }
   prepareEngineButton.disabled = true;
-  releaseEngineButton.disabled = false;
+  releaseEngineButton.disabled = true;
   button.disabled = true;
   cancelButton.disabled = false;
   try {
+    const options = readOptions();
+    if (acquiredHere) {
+      acquireHeavyModelTest("resident Illustrious inference engine");
+      residentEngineLock = true;
+    }
     if (typeof Float16Array !== "function") throw new Error("This browser does not provide Float16Array.");
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser.");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
@@ -886,6 +887,7 @@ async function prepareInferenceEngine() {
     }
   } finally {
     prepareEngineButton.disabled = false;
+    releaseEngineButton.disabled = !residentEngineLock;
     button.disabled = false;
     cancelButton.disabled = true;
   }
@@ -1029,6 +1031,8 @@ button.addEventListener("click", async () => {
   }
 
   button.disabled = true;
+  prepareEngineButton.disabled = true;
+  releaseEngineButton.disabled = true;
   cancelButton.disabled = false;
   cancelRequested = false;
   logOutput.textContent = "";
@@ -1071,6 +1075,8 @@ button.addEventListener("click", async () => {
   } finally {
     if (lockAcquired) releaseHeavyModelTest("full Illustrious image generation");
     button.disabled = false;
+    prepareEngineButton.disabled = false;
+    releaseEngineButton.disabled = !residentEngineLock;
     cancelButton.disabled = true;
     if (progress.value < 100 && cancelRequested) setProgress(progress.value, "Cancelled");
   }
