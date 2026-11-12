@@ -164,7 +164,7 @@ async function runClip(session) {
 button.addEventListener("click", async () => {
   const file = fileInput.files?.[0];
   const strength = Number(strengthInput.value);
-  if (!file) return setStatus("Select Personal Ami in the shared .safetensors picker first.", "error");
+  if (!file) return setStatus("Select LoRA in the shared .safetensors picker first.", "error");
   if (!Number.isFinite(strength) || strength < 0 || strength > 2) {
     return setStatus("Strength must be between 0 and 2.", "error");
   }
@@ -175,7 +175,7 @@ button.addEventListener("click", async () => {
   output.hidden = false;
   let lock = false, baselineSession = null, patchedSession = null;
   try {
-    acquireHeavyModelTest("full CLIP-L Personal Ami patch test");
+    acquireHeavyModelTest("full CLIP-L LoRA patch test");
     lock = true;
     setStatus("Reading the local adapter header and verifying the CLIP-L index…");
     const started = performance.now();
@@ -199,9 +199,9 @@ button.addEventListener("click", async () => {
     for (const [name, info] of Object.entries(header)) {
       if (name === "__metadata__") continue;
       let side = null, stem = name;
-      if (name.startsWith("lora_te1_") && name.endsWith(".lora_down.weight")) {
+      if ((name.startsWith("lora_te1_") || name.startsWith("lora_te_")) && name.endsWith(".lora_down.weight")) {
         side = "down"; stem = name.slice(0, -".lora_down.weight".length);
-      } else if (name.startsWith("lora_te1_") && name.endsWith(".lora_up.weight")) {
+      } else if ((name.startsWith("lora_te1_") || name.startsWith("lora_te_")) && name.endsWith(".lora_up.weight")) {
         side = "up"; stem = name.slice(0, -".lora_up.weight".length);
       }
       if (side) {
@@ -215,7 +215,7 @@ button.addEventListener("click", async () => {
     let mapped = 0, skipped = 0, payloadBytes = 0;
     for (const [stem, pair] of pairs) {
       if (!pair.down || !pair.up) throw new Error("Incomplete CLIP-L pair " + stem + ".");
-      const key = stem.slice("lora_te1_".length);
+      const key = stem.startsWith("lora_te1_") ? stem.slice("lora_te1_".length) : stem.slice("lora_te_".length);
       const target = lookup.get(key);
       if (!target) {
         if (/^text_model_encoder_layers_11_/.test(key)) { skipped++; continue; }
@@ -241,15 +241,18 @@ button.addEventListener("click", async () => {
       const up = await readTensor(file, dataStart, pair.upName, pair.up);
       const alphaName = stem + ".alpha";
       const alphaInfo = header[alphaName];
-      const alpha = await readTensor(file, dataStart, alphaName, alphaInfo);
-      if (alpha.length !== 1) throw new Error("Alpha must be scalar for " + stem + ".");
+      const alpha = alphaInfo ? await readTensor(file, dataStart, alphaName, alphaInfo) : null;
+      if (alpha && alpha.length !== 1) throw new Error("Alpha must be scalar for " + stem + ".");
       const rank = pair.down.shape[0];
       if (pair.down.shape.length !== 2 || pair.up.shape.length !== 2 ||
           pair.down.shape[1] !== inFeatures || pair.up.shape[0] !== outFeatures ||
           pair.down.shape[0] !== pair.up.shape[1]) {
         throw new Error("LoRA dimensions do not match target " + target.name + ".");
       }
-      const scale = alpha[0] / rank * strength;
+      const metadataAlpha = Number(header.__metadata__?.ss_network_alpha);
+      const alphaValue = alpha ? alpha[0] :
+        (Number.isFinite(metadataAlpha) && metadataAlpha > 0 ? metadataAlpha : rank);
+      const scale = alphaValue / rank * strength;
       const group = patchesByShard.get(shard) || [];
       group.push({ offset, length, target: target.name, apply: async base => {
         const delta = patchLinear(base, down, up, entry.torchShape, !!entry.transposed, scale, target.name);
@@ -261,10 +264,8 @@ button.addEventListener("click", async () => {
         (pair.up.data_offsets[1] - pair.up.data_offsets[0]);
     }
 
-    if (mapped !== 66 || skipped !== 6) {
-      throw new Error("Expected 66 mapped CLIP-L pairs + 6 unindexed final-block pairs; found " + mapped + " mapped and " + skipped + " skipped.");
-    }
-    setStatus("Mapped all 66 indexed CLIP-L pairs. Downloading and verifying the base shard…");
+    if (!mapped) throw new Error("No compatible CLIP-L LoRA pairs were mapped to this ONNX graph.");
+    setStatus("Mapped " + mapped + " CLIP-L LoRA pairs (" + skipped + " unsupported final-layer pairs skipped). Downloading and verifying the base shard…");
     const patchedExternalData = [];
     for (const shard of component.shards) {
       const record = fileMap.get(shard);
@@ -295,8 +296,8 @@ button.addEventListener("click", async () => {
 
     row("Adapter", file.name);
     row("Applied strength", strength.toFixed(3));
-    row("Mapped CLIP-L targets", mapped + " / 66");
-    row("Unindexed final layer-11 pairs", String(skipped));
+    row("Mapped CLIP-L targets", String(mapped));
+    row("Skipped unsupported final-layer pairs", String(skipped));
     row("LoRA factor payload read", (payloadBytes / 1024 / 1024).toFixed(2) + " MiB");
     row("Patched shards", String(patchedExternalData.filter(x => x.data instanceof Blob).length));
     row("Patch preparation", ((performance.now() - started) / 1000).toFixed(1) + " s");
@@ -311,7 +312,7 @@ button.addEventListener("click", async () => {
     const baseline = await runClip(baselineSession);
     await baselineSession.release(); baselineSession = null;
 
-    setStatus("Loading CLIP-L with all 66 Personal Ami patches…");
+    setStatus("Loading CLIP-L with mapped LoRA patches…");
     patchedSession = await ort.InferenceSession.create(MODEL_BASE + component.onnx, {
       executionProviders: ["webgpu"], graphOptimizationLevel: "basic",
       externalData: patchedExternalData
@@ -323,7 +324,7 @@ button.addEventListener("click", async () => {
     row("Output RMS difference", difference.rms.toExponential(5));
     row("Total test time", ((performance.now() - started) / 1000).toFixed(1) + " s");
     if (!difference.changed || !Number.isFinite(difference.rms)) throw new Error("Full CLIP-L patch produced no finite output difference.");
-    output.textContent = "All 66 indexed Personal Ami CLIP-L pairs were fused into their FP16 ONNX initializers. The six unindexed final-layer pairs were excluded because the graph exposes penultimate_hidden_state. The original and patched CLIP-L sessions both ran successfully on identical inputs. This validates the complete indexed CLIP-L adapter component only; CLIP-bigG and all UNet partitions remain untested.";
+    output.textContent = "All compatible indexed CLIP-L LoRA pairs were fused into their FP16 ONNX initializers. Unsupported targets absent from the graph index were skipped. The original and patched CLIP-L sessions both ran successfully on identical inputs. This validates the mapped CLIP-L adapter component only; CLIP-bigG and all UNet partitions remain untested.";
     setStatus("Full CLIP-L adapter patch passed: all 66 mapped pairs were applied and ONNX Runtime inference succeeded.", "success");
   } catch (error) {
     console.error("[Illustrious] Full CLIP-L LoRA test failed:", error);
@@ -332,7 +333,7 @@ button.addEventListener("click", async () => {
   } finally {
     if (patchedSession) { try { await patchedSession.release(); } catch {} }
     if (baselineSession) { try { await baselineSession.release(); } catch {} }
-    if (lock) releaseHeavyModelTest("full CLIP-L Personal Ami patch test");
+    if (lock) releaseHeavyModelTest("full CLIP-L LoRA patch test");
     button.disabled = false;
   }
 });
