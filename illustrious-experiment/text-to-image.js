@@ -13,6 +13,9 @@ const VAE_SCALING_FACTOR = 0.18215; // The WAI pack's Kohaku XL beta5 base VAE c
 ort.env.wasm.wasmPaths = new URL("../vendor/onnxruntime-web/", import.meta.url).href;
 ort.env.wasm.numThreads = 1;
 ort.env.logLevel = "warning";
+// Select the discrete/high-performance GPU where the browser exposes a choice.
+// This must be set before ORT creates its first WebGPU session.
+if (ort.env.webgpu) ort.env.webgpu.powerPreference = "high-performance";
 
 const button = document.querySelector("#generateImage");
 const cancelButton = document.querySelector("#cancelGeneration");
@@ -1205,6 +1208,18 @@ async function ensureUnetSessions(manifest, personalAmi, conditioning, width, he
     );
     log("UNET_A/B/C ready · standard WebGPU dispatch with persistent GPU inputs and GPU-resident partition handoffs." +
       (batchSize === 1 ? " Single-branch CFG path · batch=1." : " Classifier-free guidance path · batch=2."));
+
+    // Run one ordinary dispatch while preparing the engine so ORT/WGSL kernels
+    // compile before the first requested image. No graph capture is enabled.
+    const warmupStarted = performance.now();
+    const warmupLatents = new Float32Array(4 * (height / 8) * (width / 8));
+    log("Compiling UNet GPU pipelines with one disposable zero-latent warm-up…");
+    const warmup = await runUnetStep(
+      sessions, conditioning, warmupLatents, 0, width, height, cfg, 0
+    );
+    log("UNet pipeline warm-up finished in " + ((performance.now() - warmupStarted) / 1000).toFixed(2) +
+      "s · A " + warmup.timings.a.toFixed(2) + "s · B " + warmup.timings.b.toFixed(2) +
+      "s · C " + warmup.timings.c.toFixed(2) + "s. Subsequent images reuse the compiled pipelines.");
 
     if (personalAmi) {
       releasePersonalAmiPayload(personalAmi.file);
