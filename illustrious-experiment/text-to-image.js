@@ -606,6 +606,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
 }
 
 async function releaseSessions(sessions) {
+  const failures = [];
   for (const key of ["c", "b", "a"]) {
     const session = sessions[key];
     if (!session) continue;
@@ -615,8 +616,13 @@ async function releaseSessions(sessions) {
       await yieldFrames();
       log("Released UNET_" + key.toUpperCase() + ".");
     } catch (error) {
-      log("Warning: failed to release UNET_" + key.toUpperCase() + ": " + (error?.message || error));
+      const message = "UNET_" + key.toUpperCase() + ": " + (error?.message || error);
+      failures.push(message);
+      log("ERROR releasing " + message);
     }
+  }
+  if (failures.length) {
+    throw new Error("One or more UNet sessions could not be released: " + failures.join("; "));
   }
 }
 
@@ -809,6 +815,7 @@ async function ensureVaeSession(manifest) {
 }
 
 async function releaseInferenceEngine() {
+  const failures = [];
   if (residentVaeSession) {
     try {
       await residentVaeSession.release();
@@ -816,18 +823,27 @@ async function releaseInferenceEngine() {
       await yieldFrames();
       log("Released resident VAE decoder.");
     } catch (error) {
-      log("Warning: failed to release VAE decoder: " + (error?.message || error));
+      failures.push("VAE decoder: " + (error?.message || error));
+      log("ERROR releasing VAE decoder: " + (error?.message || error));
     }
   }
   if (residentUnetSessions) {
-    await releaseSessions(residentUnetSessions);
-    residentUnetSessions = null;
-    residentUnetKey = null;
+    try {
+      await releaseSessions(residentUnetSessions);
+      residentUnetSessions = null;
+      residentUnetKey = null;
+    } catch (error) {
+      failures.push(error?.message || String(error));
+    }
+  }
+  if (failures.length) {
+    throw new Error("Engine release incomplete; GPU memory may still be occupied. " + failures.join(" · "));
   }
   if (residentEngineLock) {
     releaseHeavyModelTest("resident Illustrious inference engine");
     residentEngineLock = false;
   }
+  conditioningCache.clear();
   log("Inference engine released. GPU model sessions are no longer resident.");
 }
 
