@@ -29,19 +29,19 @@ The component counts divide evenly into 72 text_encoder pairs, 192 text_encoder_
 
 ## Inference performance path
 
-The generator now has a more aggressive WebGPU execution path:
+The generator's current WebGPU path prioritizes a repeatable inference loop over experimental graph replay:
 
-- Positive and negative CLIP prompts are concatenated into a batch of two and run in one inference call per encoder when the ONNX graph exposes a compatible batch dimension. A graph fixed at batch one automatically keeps the prior two-call path.
-- The three UNet sessions request graph capture for the selected resolution. The app creates reusable input tensors over the ONNX Runtime-owned WebGPU device, keeps prompt conditioning and time IDs in GPU buffers, and updates only the latent and timestep inputs per denoising step.
+- Positive and negative CLIP prompts are concatenated into a batch of two and run in one inference call per encoder when the ONNX graph exposes a compatible batch dimension. The current WAI CLIP graphs report a fixed batch of one, so they use two compatible calls each.
+- The three UNet sessions use `graphOptimizationLevel: "all"`. Reusable input tensors are created over the ONNX Runtime-owned WebGPU device; prompt conditioning and time IDs stay in GPU buffers, while only latent and timestep buffers are updated on each denoising step.
+- UNET_A, UNET_B, and UNET_C use GPU-resident outputs for partition handoffs. UNET_C's final prediction is read back because classifier-free guidance and the Euler ancestral scheduler still run on the CPU.
 - CFG exactly `1` uses only the conditional prediction, and CFG exactly `0` uses only the unconditional prediction. Both settings create a batch-one UNet engine instead of evaluating both branches; the engine is keyed by batch size and the selected conditioning branch is uploaded as the single input. Other CFG values retain the standard two-branch formula and batch size two. This optimization is algebraically exact at CFG 0/1, but image appearance naturally differs from guided CFG values.
-- UNET_A, UNET_B, and UNET_C request GPU-resident outputs. UNET_C's final prediction is read back because classifier-free guidance and the Euler ancestral scheduler still run on the CPU.
-- A zero-latent warm-up runs during engine preparation so graph capture happens before the first requested image. The resident UNet cache key includes resolution as well as adapter identity/strength; changing resolution rebuilds the graph-specific sessions.
-- If graph capture cannot be created or the warm-up fails for this model/device/shape, the app releases those sessions and rebuilds using ordinary WebGPU dispatch. It does not silently claim capture is active.
-- Session graph optimization is set to `all` rather than `basic`.
+- The resident UNet cache key includes resolution, adapter identity/strength, and effective batch size. Changing any of these rebuilds the graph-specific sessions.
+
+**Graph capture is currently disabled.** In the first attempt, all three captured sessions completed a zero-latent warm-up, but the next denoising call failed inside ONNX Runtime's WASM/WebGPU bridge with `TypeError: Required member is undefined`. The app disposed the first-run GPU output tensors after warm-up; graph replay depends on the captured buffers remaining valid. Because ORT's WebGPU documentation says output GPU tensors own their buffers and `dispose()` releases them, the old cleanup strategy was not safe to pair with captured replay. A separate ORT WebGPU issue also documents replay problems in a static-shape graph-capture path. To avoid repeating the broken run, engine preparation now creates the sessions without a dummy denoising pass and keeps ordinary WebGPU dispatch plus the reusable GPU inputs and partition handoffs. Revisit capture only with persistent output-buffer ownership and a browser test that exercises repeated replay.
 
 When Personal Ami is enabled, the browser reads its ~218 MiB Safetensors payload into one temporary ArrayBuffer and reuses views into that buffer for the per-layer BF16 factors. This replaces thousands of tiny File.slice/arrayBuffer reads across CLIP-L, CLIP-bigG, and the three UNet patches. The buffer is released from the adapter cache after the resident UNet weights have been prepared; this trades a temporary ~218 MiB RAM allocation for much less file-read overhead. If that allocation fails, the patcher logs the reason and returns to per-tensor reads.
 
-**Performance status:** these are implemented optimizations, not yet benchmarked on the target browser. Compare the same prompt, seed, resolution, adapter, and step count against the earlier baseline. Graph capture mainly reduces CPU-side command preparation; it does not make the underlying UNet math disappear, and GPU throughput remains the dominant floor.
+**Performance status:** the target-browser timings still need to be measured. The current fix removes the ~19-second sacrificial UNet warm-up and retains GPU input reuse and A→B→C GPU-resident handoffs.
 
 ## Resident inference engine and repeated generation
 
