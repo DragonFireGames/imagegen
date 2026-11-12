@@ -170,7 +170,7 @@ function applyLinearLora(down, up, input, rank, outputSize, scale) {
 button.addEventListener("click", async () => {
   const file = fileInput.files && fileInput.files[0];
   if (!file) {
-    setStatus("Choose the Personal Ami .safetensors file in the local inspector above first.", "error");
+    setStatus("Choose the LoRA .safetensors file in the local inspector above first.", "error");
     return;
   }
 
@@ -255,7 +255,7 @@ button.addEventListener("click", async () => {
       "This does not yet patch the ONNX external-data shard or validate model output equivalence."
     ].join("\n");
 
-    setStatus("One real local Personal Ami BF16 CLIP-L pair decoded and produced a finite, nonzero low-rank delta. No model weights or LoRA payload were uploaded.", "success");
+    setStatus("One real local LoRA BF16 CLIP-L pair decoded and produced a finite, nonzero low-rank delta. No model weights or LoRA payload were uploaded.", "success");
   } catch (error) {
     console.error("[Illustrious] LoRA payload smoke test failed:", error);
     setStatus("LoRA payload smoke test failed: " + (error?.message || String(error)), "error");
