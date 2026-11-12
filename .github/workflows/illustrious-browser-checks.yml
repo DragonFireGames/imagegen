@@ -35,3 +35,24 @@ jobs:
             echo "Checking $file"
             node --input-type=module --check < "$file"
           done < <(find illustrious-experiment -type f -name '*.js' -print0)
+
+      - name: Check persistent UNet output flag scope
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const source = readFileSync("illustrious-experiment/text-to-image.js", "utf8");
+          const start = source.indexOf("async function runUnetStep(");
+          const end = source.indexOf("\nasync function releaseSessions", start);
+          if (start < 0 || end < 0) throw new Error("Could not locate runUnetStep.");
+          const fn = source.slice(start, end);
+          const declaration = fn.indexOf("const usePersistentOutputs =");
+          const tryBlock = fn.indexOf("\n  try {");
+          const finallyBlock = fn.indexOf("\n  } finally {");
+          if (!(declaration >= 0 && declaration < tryBlock && finallyBlock > tryBlock)) {
+            throw new Error("usePersistentOutputs must be declared outside try so finally can access it.");
+          }
+          if (!fn.slice(finallyBlock).includes("if (!usePersistentOutputs)")) {
+            throw new Error("runUnetStep finally block must retain the persistent-output fallback cleanup.");
+          }
+          console.log("Persistent UNet output flag is in scope for try/finally.");
+          NODE
