@@ -43,13 +43,26 @@ const fields = {
 };
 
 const adapterFileLabel = document.querySelector("#fileName");
-fields.loraFile?.addEventListener("change", () => {
-  const file = fields.loraFile.files?.[0];
+let expectedAdapterFile = null;
+
+function adapterFileMatches(file, expected) {
+  return !expected || Boolean(file && file.name === expected.name && file.size === expected.sizeBytes);
+}
+
+function updateAdapterFileLabel() {
   if (!adapterFileLabel) return;
+  const file = fields.loraFile.files?.[0] || null;
+  if (expectedAdapterFile && !adapterFileMatches(file, expectedAdapterFile)) {
+    adapterFileLabel.textContent = "Select " + expectedAdapterFile.name + " · " +
+      formatBytes(expectedAdapterFile.sizeBytes) + " to match imported settings";
+    return;
+  }
   adapterFileLabel.textContent = file
-    ? file.name + " · " + (file.size / 1024 ** 2).toFixed(1) + " MiB"
+    ? file.name + " · " + formatBytes(file.size)
     : "No adapter selected";
-});
+}
+
+fields.loraFile?.addEventListener("change", updateAdapterFileLabel);
 
 let cancelRequested = false;
 let generationStarted = 0;
@@ -1058,6 +1071,151 @@ function renderImage(tensor, width, height) {
   return canvas;
 }
 
+const GENERATION_SETTINGS_FORMAT = "dragonfiregames.illustrious-generation-settings";
+const GENERATION_SETTINGS_VERSION = 1;
+const settingsExportButton = document.querySelector("#exportGenerationSettings");
+const settingsImportButton = document.querySelector("#importGenerationSettings");
+const settingsImportInput = document.querySelector("#importGenerationSettingsFile");
+const settingsStatus = document.querySelector("#generationSettingsStatus");
+
+function buildGenerationSettings() {
+  const adapterFile = fields.loraFile.files?.[0] || null;
+  return {
+    format: GENERATION_SETTINGS_FORMAT,
+    version: GENERATION_SETTINGS_VERSION,
+    exportedAt: new Date().toISOString(),
+    model: {
+      id: MODEL_ID,
+      sampler: "Euler a (Euler ancestral)",
+      schedulerConfigUrl: SCHEDULER_URL,
+      vaeScalingFactor: VAE_SCALING_FACTOR
+    },
+    generation: {
+      prompt: fields.prompt.value,
+      negativePrompt: fields.negative.value,
+      positiveSuffix: fields.suffix.value,
+      width: fields.width.value === "" ? null : Number(fields.width.value),
+      height: fields.height.value === "" ? null : Number(fields.height.value),
+      steps: fields.steps.value === "" ? null : Number(fields.steps.value),
+      cfgScale: fields.cfg.value === "" ? null : Number(fields.cfg.value),
+      seed: fields.seed.value === "" ? null : Number(fields.seed.value),
+      personalAmi: {
+        enabled: fields.personalAmi.checked,
+        strength: fields.loraStrength.value === "" ? null : Number(fields.loraStrength.value),
+        file: adapterFile ? {
+          name: adapterFile.name,
+          sizeBytes: adapterFile.size
+        } : null
+      }
+    }
+  };
+}
+
+function validateGenerationSettings(settings) {
+  if (!settings || typeof settings !== "object" ||
+      settings.format !== GENERATION_SETTINGS_FORMAT ||
+      settings.version !== GENERATION_SETTINGS_VERSION) {
+    throw new Error("Unsupported settings file. Expected " + GENERATION_SETTINGS_FORMAT +
+      " version " + GENERATION_SETTINGS_VERSION + ".");
+  }
+  if (!settings.model || typeof settings.model.id !== "string") {
+    throw new Error("Settings file is missing its model identifier.");
+  }
+  const generation = settings.generation;
+  if (!generation || typeof generation !== "object") {
+    throw new Error("Settings file is missing the generation section.");
+  }
+  for (const key of ["prompt", "negativePrompt", "positiveSuffix"]) {
+    if (typeof generation[key] !== "string") {
+      throw new Error("Settings field '" + key + "' must be text.");
+    }
+  }
+
+  const { width, height, steps, cfgScale, seed, personalAmi } = generation;
+  if (!Number.isInteger(width) || width < 512 || width > 1024 || width % 64 !== 0) {
+    throw new Error("Imported width must be 512–1024 and divisible by 64.");
+  }
+  if (!Number.isInteger(height) || height < 512 || height > 1024 || height % 64 !== 0) {
+    throw new Error("Imported height must be 512–1024 and divisible by 64.");
+  }
+  if (!Number.isInteger(steps) || steps < 1 || steps > 100) {
+    throw new Error("Imported steps must be an integer from 1 to 100.");
+  }
+  if (!Number.isFinite(cfgScale) || cfgScale < 0 || cfgScale > 20) {
+    throw new Error("Imported CFG scale must be between 0 and 20.");
+  }
+  if (!Number.isSafeInteger(seed) || seed < 0 || seed > 4294967295) {
+    throw new Error("Imported seed must be an integer from 0 to 4294967295.");
+  }
+  if (!personalAmi || typeof personalAmi.enabled !== "boolean" ||
+      !Number.isFinite(personalAmi.strength) || personalAmi.strength < 0 || personalAmi.strength > 2) {
+    throw new Error("Imported Personal Ami settings are invalid.");
+  }
+  if (personalAmi.file !== null && (
+      !personalAmi.file || typeof personalAmi.file !== "object" ||
+      typeof personalAmi.file.name !== "string" || !personalAmi.file.name ||
+      !Number.isSafeInteger(personalAmi.file.sizeBytes) || personalAmi.file.sizeBytes < 0)) {
+    throw new Error("Imported adapter file metadata is invalid.");
+  }
+  return generation;
+}
+
+function downloadGenerationSettings() {
+  const settings = buildGenerationSettings();
+  const blob = new Blob([JSON.stringify(settings, null, 2) + "\n"], {
+    type: "application/json"
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "illustrious-settings-" + settings.generation.width + "x" +
+    settings.generation.height + "-seed-" + settings.generation.seed + ".json";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  settingsStatus.textContent = "Exported generation settings JSON. The Personal Ami .safetensors file is referenced by name and size, not embedded.";
+}
+
+async function importGenerationSettings(file) {
+  const parsed = JSON.parse(await file.text());
+  const generation = validateGenerationSettings(parsed);
+  const adapterFile = generation.personalAmi.file;
+
+  fields.prompt.value = generation.prompt;
+  fields.negative.value = generation.negativePrompt;
+  fields.suffix.value = generation.positiveSuffix;
+  fields.width.value = String(generation.width);
+  fields.height.value = String(generation.height);
+  fields.steps.value = String(generation.steps);
+  fields.cfg.value = String(generation.cfgScale);
+  fields.seed.value = String(generation.seed);
+  fields.personalAmi.checked = generation.personalAmi.enabled;
+  fields.loraStrength.value = String(generation.personalAmi.strength);
+  fields.loraStrength.disabled = !generation.personalAmi.enabled;
+
+  expectedAdapterFile = adapterFile ? {
+    name: adapterFile.name,
+    sizeBytes: adapterFile.sizeBytes
+  } : null;
+  const currentAdapterFile = fields.loraFile.files?.[0] || null;
+  if (expectedAdapterFile && !adapterFileMatches(currentAdapterFile, expectedAdapterFile)) {
+    fields.loraFile.value = "";
+  }
+  updateAdapterFileLabel();
+
+  const notes = [];
+  if (parsed.model.id !== MODEL_ID) {
+    notes.push("Model mismatch: this file targets " + parsed.model.id + ", while this page uses " + MODEL_ID + ".");
+  }
+  if (expectedAdapterFile && !adapterFileMatches(fields.loraFile.files?.[0] || null, expectedAdapterFile)) {
+    notes.push("Re-select the Personal Ami file " + expectedAdapterFile.name + " (" +
+      formatBytes(expectedAdapterFile.sizeBytes) + "); local adapter files are not stored in JSON.");
+  } else if (generation.personalAmi.enabled && !expectedAdapterFile) {
+    notes.push("Personal Ami is enabled, but no adapter file was recorded; select the matching .safetensors file.");
+  }
+  settingsStatus.textContent = "Imported settings JSON. " +
+    (notes.length ? notes.join(" ") : "All generation fields were restored.");
+}
+
 function readOptions() {
   const prompt = fields.prompt.value.trim();
   const negative = fields.negative.value.trim();
@@ -1080,7 +1238,12 @@ function readOptions() {
     throw new Error("Seed must be an integer from 0 to 4294967295.");
   }
   if (fields.personalAmi.checked) {
-    if (!fields.loraFile.files?.[0]) throw new Error("Choose the Personal Ami .safetensors file in the adapter inspector above.");
+    const adapterFile = fields.loraFile.files?.[0] || null;
+    if (!adapterFile) throw new Error("Choose the Personal Ami .safetensors file in the adapter inspector above.");
+    if (expectedAdapterFile && !adapterFileMatches(adapterFile, expectedAdapterFile)) {
+      throw new Error("The selected Personal Ami file does not match the adapter recorded in the imported settings JSON. Select " +
+        expectedAdapterFile.name + " (" + formatBytes(expectedAdapterFile.sizeBytes) + ").");
+    }
     const strength = Number(fields.loraStrength.value);
     if (!Number.isFinite(strength) || strength < 0 || strength > 2) {
       throw new Error("Personal Ami strength must be between 0 and 2.");
@@ -1613,6 +1776,27 @@ button.addEventListener("click", async () => {
 
 fields.personalAmi.addEventListener("change", () => {
   fields.loraStrength.disabled = !fields.personalAmi.checked;
+});
+
+settingsExportButton?.addEventListener("click", () => {
+  try {
+    downloadGenerationSettings();
+  } catch (error) {
+    settingsStatus.textContent = "Settings export failed: " + (error?.message || String(error));
+  }
+});
+
+settingsImportButton?.addEventListener("click", () => settingsImportInput?.click());
+settingsImportInput?.addEventListener("change", async () => {
+  const file = settingsImportInput.files?.[0];
+  if (!file) return;
+  try {
+    await importGenerationSettings(file);
+  } catch (error) {
+    settingsStatus.textContent = "Settings import failed: " + (error?.message || String(error));
+  } finally {
+    settingsImportInput.value = "";
+  }
 });
 
 cancelButton.addEventListener("click", () => {
