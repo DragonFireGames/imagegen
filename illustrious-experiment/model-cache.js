@@ -28,7 +28,9 @@ export async function fetchModelResource(url, options = {}) {
 
 function generationPaths(manifest) {
   const paths = new Set(["manifest.json"]);
-  for (const name of ["text_encoder", "text_encoder_2", "unet_a", "unet_b", "unet_c", "vae_decoder"]) {
+  const componentNames = ["text_encoder", "text_encoder_2", "unet_a", "unet_b", "unet_c", "vae_decoder"];
+  if (manifest.components?.vae_encoder) componentNames.push("vae_encoder");
+  for (const name of componentNames) {
     const component = manifest.components?.[name];
     if (!component) throw new Error("Model manifest is missing " + name + ".");
     if (component.onnx) paths.add(component.onnx);
