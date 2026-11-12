@@ -2,6 +2,11 @@
 
 This experiment is intentionally isolated from the working FLUX.2 Klein generator.
 
+## Pages
+
+- `index.html` is the generation-first interface: model cache setup, local adapter selection, resident engine preparation/release, and image generation.
+- `diagnostics.html` contains the separate developer workbench: runtime probes, component/UNet smoke tests, scheduler checks, and LoRA inspection/patch validation. It is intentionally not loaded by the generator page.
+
 ## Target adapter
 
 [Personal Ami Style - Illustrious](https://civitai.com/models/1309467/personal-ami-style-illustrious) is listed as an Illustrious LoRA trained on Illustrious XL 0.1. Its mirrored listing gives the trigger personal ami and suggests a strength of 0.6–0.9. The mirror identifies its own copy as a reprint, so the original Civitai page remains the source of record.
