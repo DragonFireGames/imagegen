@@ -54,7 +54,7 @@
   <main>
     <p class="eyebrow">Browser-side image generation · WebGPU</p>
     <h1>Illustrious Image Generator</h1>
-    <p class="intro">WAI Illustrious v17 · SDXL ONNX · local Personal Ami LoRA support. Prepare the model once, keep the inference engine resident, and generate multiple images without rebuilding the model between runs.</p>
+    <p class="intro">WAI Illustrious v17 · SDXL ONNX · local SDXL LoRA support. Prepare the model once, keep the inference engine resident, and generate multiple images without rebuilding the model between runs.</p>
 
     <section class="panel" id="model-cache">
       <div class="panel-header">
@@ -82,7 +82,7 @@
         <button class="button secondary-button" id="importGenerationSettings" type="button">Import settings JSON</button>
         <input id="importGenerationSettingsFile" type="file" accept=".json,application/json" hidden>
       </div>
-      <p class="status" id="generationSettingsStatus" data-type="info" aria-live="polite">Settings JSON includes prompts, dimensions, sampler, seed, and adapter metadata. The local LoRA file itself is not embedded.</p>
+      <p class="status" id="generationSettingsStatus" data-type="info" aria-live="polite">Settings JSON includes prompts, dimensions, sampler, seed, and adapter metadata. The local .safetensors file itself is not embedded.</p>
       <label for="generationPrompt">Prompt</label>
       <textarea class="prompt-input" id="generationPrompt" rows="4">1girl, detailed anime illustration, expressive eyes, beautiful lighting, highly detailed background</textarea>
 
@@ -102,12 +102,12 @@
       <p class="notice">Fast defaults: 512×512 · 12 steps · CFG 1. CFG 1 uses only the positive UNet branch and skips negative-prompt encoding. This trades away negative-prompt control and some guided refinement for speed. For the original guided quality profile, use 28 steps and CFG 5. At the same settings, 1024×1024 requires roughly four times the UNet work of 512×512.</p>
 
       <div class="adapter-picker">
-        <label for="loraFile"><strong>Personal Ami LoRA</strong> <span>(optional · local file only)</span></label>
+        <label for="loraFile"><strong>LoRA adapter</strong> <span>(optional · local file only)</span></label>
         <input id="loraFile" type="file" accept=".safetensors">
         <div class="file-name" id="fileName">No adapter selected</div>
         <p class="status">The selected <code>.safetensors</code> file stays in this browser tab and is never uploaded. You can inspect or map it on the separate diagnostics page.</p>
         <div class="generator-controls">
-          <div><label><input id="generationPersonalAmi" type="checkbox"> Apply Personal Ami</label></div>
+          <div><label><input id="generationLoraEnabled" type="checkbox"> Apply LoRA</label></div>
           <div><label for="generationLoraStrength">LoRA strength</label><input class="number-input" id="generationLoraStrength" type="number" min="0" max="2" step="0.05" value="0.75" disabled></div>
         </div>
       </div>
