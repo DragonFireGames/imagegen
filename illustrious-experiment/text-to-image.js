@@ -1203,7 +1203,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
     log("Step denoiser timing · A " + timings.a.toFixed(2) + "s · B " +
       timings.b.toFixed(2) + "s · C " + timings.c.toFixed(2) +
       "s · CFG " + cfg + " · " + imageCount + " image(s) · model batch " + batch + " · A→B→C GPU-resident · reusable GPU inputs" +
-      (sessions.graphCaptureRequested ? " · graph capture enabled" : " · standard dispatch") +
+      (sessions.graphCaptureActive ? " · graph capture active" : " · standard dispatch") +
       (sessions.gpuScheduler ? " · GPU CFG/Euler" : " · CPU CFG/Euler"));
     return { guided, timings };
   } finally {
@@ -1582,7 +1582,8 @@ async function buildUnetSessions(
   const sessions = {
     a: null, b: null, c: null, gpuInputs: null, gpuOutputs: { a: null, b: null },
     batchSize, imageCount, branchCount,
-    graphCaptureRequested: enableGraphCapture
+    graphCaptureRequested: enableGraphCapture,
+    graphCaptureActive: false
   };
   const patchedComponent = async name => {
     if (!lora) return null;
@@ -1754,11 +1755,12 @@ async function ensureUnetSessions(
         patchCache, useGpuScheduler, graphCaptureEnabled, preferredUnetLayout,
         validationMode
       );
-      log("UNET_A/B/C ready · " + (graphCaptureEnabled ? "graph-captured" : "standard") +
+      log("UNET_A/B/C ready · " + (sessions.graphCaptureActive ? "graph capture active" : "standard") +
         " WebGPU dispatch with persistent GPU inputs and GPU-resident partition handoffs." +
         (branchCount === 1 ? " Single-branch CFG path." : " Classifier-free guidance path.") +
         " · " + imageCount + " image(s) · model batch=" + batchSize + ".");
       await runWarmup();
+      sessions.graphCaptureActive = graphCaptureEnabled;
     } catch (captureError) {
       if (!graphCaptureEnabled) throw captureError;
       if (sessions) {
@@ -1773,6 +1775,7 @@ async function ensureUnetSessions(
         validationMode
       );
       await runWarmup();
+      sessions.graphCaptureActive = false;
     }
 
     if (lora) {
@@ -1780,7 +1783,8 @@ async function ensureUnetSessions(
       log("Released the temporary in-memory LoRA factor copy after all five components were processed.");
     }
     residentUnetSessions = sessions;
-    residentUnetKey = key;
+    residentUnetKey = key.replace(graphCaptureEnabled ? "|graph-capture" : "|standard-dispatch",
+      sessions.graphCaptureActive ? "|graph-capture" : "|standard-dispatch");
     releaseEngineButton.disabled = false;
     log("UNet engine prepared · all three sessions remain resident; one zero-latent pipeline-compilation pass completed.");
 
