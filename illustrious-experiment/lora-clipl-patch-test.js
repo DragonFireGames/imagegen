@@ -43,7 +43,7 @@ function formatBytes(bytes) {
 }
 
 async function readSafetensorsHeader(file) {
-  if (!file || file.size < 8) throw new Error("Choose the Personal Ami .safetensors file first.");
+  if (!file || file.size < 8) throw new Error("Choose the LoRA .safetensors file first.");
   const prefix = await file.slice(0, 8).arrayBuffer();
   const headerLength = new DataView(prefix).getBigUint64(0, true);
   if (headerLength === 0n || headerLength > BigInt(HEADER_LIMIT)) {
@@ -310,7 +310,7 @@ button.addEventListener("click", async () => {
   const file = fileInput.files && fileInput.files[0];
   const strength = Number(strengthInput.value);
   if (!file) {
-    setStatus("Choose Personal Ami in the local .safetensors picker above first.", "error");
+    setStatus("Choose LoRA in the local .safetensors picker above first.", "error");
     return;
   }
   if (!Number.isFinite(strength) || strength < 0 || strength > 2) {
@@ -469,7 +469,7 @@ button.addEventListener("click", async () => {
     }
 
     output.textContent = [
-      "One real Personal Ami BF16 LoRA pair was fused into one CLIP-L FP16 ONNX initializer.",
+      "One real LoRA BF16 LoRA pair was fused into one CLIP-L FP16 ONNX initializer.",
       "The graph and its external-data shard were not modified on the server or in the repository.",
       "ONNX Runtime loaded the patched external-data Blob and completed inference.",
       "The same input IDs produced a measurable output change relative to the unmodified base.",
