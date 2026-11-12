@@ -1195,8 +1195,8 @@ function validateGenerationSettings(settings) {
   if (!Number.isFinite(cfgScale) || cfgScale < 0 || cfgScale > 20) {
     throw new Error("Imported CFG scale must be between 0 and 20.");
   }
-  if (!Number.isSafeInteger(seed) || seed < 0 || seed > 4294967295) {
-    throw new Error("Imported seed must be an integer from 0 to 4294967295.");
+  if (!Number.isSafeInteger(seed) || (seed !== -1 && (seed < 0 || seed > 4294967295))) {
+    throw new Error("Imported seed must be -1 (random) or an integer from 0 to 4294967295.");
   }
   if (!lora || typeof lora.enabled !== "boolean" ||
       !Number.isFinite(lora.strength) || lora.strength < 0 || lora.strength > 2) {
@@ -1220,7 +1220,8 @@ function downloadGenerationSettings() {
   const link = document.createElement("a");
   link.href = url;
   link.download = "illustrious-settings-" + settings.generation.width + "x" +
-    settings.generation.height + "-seed-" + settings.generation.seed + ".json";
+    settings.generation.height + "-seed-" +
+    (settings.generation.seed === -1 ? "random" : settings.generation.seed) + ".json";
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
   settingsStatus.textContent = "Exported generation settings JSON. The LoRA .safetensors file is referenced by name and size, not embedded.";
@@ -1267,6 +1268,16 @@ async function importGenerationSettings(file) {
     (notes.length ? notes.join(" ") : "All generation fields were restored.");
 }
 
+function resolveGenerationSeed(seed) {
+  if (seed !== -1) return seed;
+  if (!globalThis.crypto?.getRandomValues) {
+    throw new Error("Secure random seed generation is unavailable in this browser.");
+  }
+  const values = new Uint32Array(1);
+  globalThis.crypto.getRandomValues(values);
+  return values[0];
+}
+
 function readOptions() {
   const prompt = fields.prompt.value.trim();
   const negative = fields.negative.value.trim();
@@ -1285,8 +1296,8 @@ function readOptions() {
   }
   if (!Number.isInteger(steps) || steps < 1 || steps > 100) throw new Error("Steps must be between 1 and 100.");
   if (!Number.isFinite(cfg) || cfg < 0 || cfg > 20) throw new Error("CFG scale must be between 0 and 20.");
-  if (!Number.isSafeInteger(seed) || seed < 0 || seed > 4294967295) {
-    throw new Error("Seed must be an integer from 0 to 4294967295.");
+  if (!Number.isSafeInteger(seed) || (seed !== -1 && (seed < 0 || seed > 4294967295))) {
+    throw new Error("Seed must be -1 (random) or an integer from 0 to 4294967295.");
   }
   if (fields.lora.checked) {
     const adapterFile = fields.loraFile.files?.[0] || null;
@@ -2002,8 +2013,11 @@ releaseEngineButton.addEventListener("click", async () => {
 
 button.addEventListener("click", async () => {
   let options;
+  let randomSeed = false;
   try {
     options = readOptions();
+    randomSeed = options.seed === -1;
+    options = { ...options, seed: resolveGenerationSeed(options.seed) };
   } catch (error) {
     setStatus(error.message || String(error), "error");
     return;
@@ -2019,6 +2033,7 @@ button.addEventListener("click", async () => {
   setProgress(0, "Starting");
   generationStarted = performance.now();
   let lockAcquired = false;
+  if (randomSeed) log("Random seed selected · using seed " + options.seed + ".");
 
   try {
     if (!residentEngineLock) {
@@ -2047,10 +2062,12 @@ button.addEventListener("click", async () => {
     image.src = imageObjectUrl;
     image.hidden = false;
     downloadLink.href = imageObjectUrl;
-    downloadLink.download = "illustrious-" + options.seed + ".png";
+    downloadLink.download = "illustrious-seed-" + options.seed + ".png";
+    downloadLink.textContent = "Download PNG · seed " + options.seed;
     downloadLink.hidden = false;
     setStatus("Image generated · " + options.width + "×" + options.height +
-      " · seed " + options.seed + " · " + ((performance.now() - generationStarted) / 1000).toFixed(1) + "s.", "success");
+      " · seed " + options.seed + (randomSeed ? " (random)" : "") + " · " +
+      ((performance.now() - generationStarted) / 1000).toFixed(1) + "s.", "success");
     log("Generation finished successfully. PNG size " + formatBytes(blob.size) + ".");
   } catch (error) {
     console.error("[Illustrious] Full generation failed:", error);
