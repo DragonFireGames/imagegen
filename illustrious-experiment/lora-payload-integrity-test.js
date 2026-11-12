@@ -44,7 +44,7 @@ async function readLocalHeader(file) {
 button.addEventListener("click", async () => {
   const file = fileInput.files && fileInput.files[0];
   if (!file) {
-    setStatus("Choose the Personal Ami .safetensors file above first.", "error");
+    setStatus("Choose the LoRA .safetensors file above first.", "error");
     return;
   }
 
