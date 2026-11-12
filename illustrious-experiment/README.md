@@ -44,7 +44,11 @@ When Personal Ami is enabled, the browser reads its ~218 MiB Safetensors payload
 
 The GPU scheduler uses the ONNX Runtime WebGPU device and a user-owned output tensor. Its FP16 output is unpacked in WGSL, CFG is applied with the same formula as the CPU path, and Euler ancestral coefficients are computed from the same scheduler sigmas. Random noise is still generated on the CPU and uploaded once per step; latent tensors are not read back between steps. The final latent is copied to CPU once for VAE decoding. This path is newly implemented and requires an end-to-end browser test before its speedup or numerical equivalence can be claimed.
 
-**Performance status:** the target-browser timings still need to be measured. The current fix removes the ~19-second sacrificial UNet warm-up and retains GPU input reuse and A→B→C GPU-resident handoffs.
+**Performance status:** one user benchmark at 768×1024 and 30 steps measured 152.37 seconds summed across A/B/C inference calls, with typical per-step timings around A 3.1s, B 1.6s, and C 0.4s. VAE decode plus canvas conversion took 7.04s. These are device-specific timings, not a generalized performance claim. The dominant cost is UNet inference, not prompt parsing or the scheduler.
+
+For per-operator GPU timing, append `?gpuProfile=1` to the generator URL before the page loads. ONNX Runtime Web writes WebGPU profiling records to the browser console with the `[profiling]` prefix. Profiling adds overhead, so do not use that run as a final speed benchmark; use it to identify which kernels dominate, then benchmark again without the query parameter. See [ONNX Runtime Web performance diagnosis](https://onnxruntime.ai/docs/tutorials/web/performance-diagnosis.html#webgpu-profiling).
+
+The app also normalizes the Personal Ami trigger check so an existing `personal ami` tag is not appended a second time. VAE image conversion now reads the FP16 output directly instead of allocating and scanning a second full-size FP32 copy; decoded pixel values and rounding are unchanged.
 
 ## Resident inference engine and repeated generation
 
