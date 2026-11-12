@@ -76,18 +76,18 @@ function setBrushMode(mode) {
   paintOverlay.style.cursor = mode === "paint" ? "crosshair" : "cell";
 }
 
-function brushStamp(context, x, y) {
+function brushStamp(context, x, y, color) {
   const radius = Number(brushSize.value) / 2;
   const softness = Number(brushSoftness.value) / 100;
   context.save();
   context.globalCompositeOperation = brushMode === "erase" ? "destination-out" : "source-over";
   if (softness >= 0.999) {
-    context.fillStyle = "#fff";
+    context.fillStyle = color;
   } else {
     const inner = radius * (1 - softness);
     const gradient = context.createRadialGradient(x, y, inner, x, y, radius);
-    gradient.addColorStop(0, "rgba(255,255,255,1)");
-    if (inner > 0) gradient.addColorStop(0.999, "rgba(255,255,255,1)");
+    gradient.addColorStop(0, color);
+    if (inner > 0) gradient.addColorStop(0.999, color);
     gradient.addColorStop(1, "rgba(255,255,255,0)");
     context.fillStyle = gradient;
   }
@@ -98,15 +98,18 @@ function brushStamp(context, x, y) {
 }
 
 function paintSegment(from, to) {
-  const context = maskCanvas.getContext("2d");
   const distance = Math.hypot(to.x - from.x, to.y - from.y);
   const spacing = Math.max(1, Number(brushSize.value) * 0.18);
   const steps = Math.max(1, Math.ceil(distance / spacing));
+  const maskContext = maskCanvas.getContext("2d");
+  const overlayContext = paintOverlay.getContext("2d");
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
-    brushStamp(context, from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t);
+    const x = from.x + (to.x - from.x) * t;
+    const y = from.y + (to.y - from.y) * t;
+    brushStamp(maskContext, x, y, "#fff");
+    brushStamp(overlayContext, x, y, "rgba(248,67,132,0.48)");
   }
-  renderPreview();
 }
 
 function pointFromEvent(event) {
@@ -181,7 +184,7 @@ document.querySelector("#eraseTool").addEventListener("click", () => setBrushMod
 document.querySelector("#clearMask").addEventListener("click", () => {
   if (!sourceBitmap) return;
   maskCanvas.getContext("2d").clearRect(0, 0, imageWidth, imageHeight);
-  renderPreview();
+  paintOverlay.getContext("2d").clearRect(0, 0, imageWidth, imageHeight);
 });
 document.querySelector("#invertMask").addEventListener("click", () => {
   if (!sourceBitmap) return;
@@ -228,14 +231,23 @@ runButton.addEventListener("click", () => {
   }
 });
 
-document.querySelector("#generationStatus").addEventListener("DOMSubtreeModified", () => {
-  const output = document.querySelector("#generatedImage");
-  if (!output.hidden && output.src) {
-    document.querySelector("#resultImage").src = output.src;
+const generatedOutput = document.querySelector("#generatedImage");
+const resultObserver = new MutationObserver(() => {
+  if (!generatedOutput.hidden && generatedOutput.src) {
+    document.querySelector("#resultImage").src = generatedOutput.src;
     document.querySelector("#resultPanel").hidden = false;
-    document.querySelector("#resultDownload").href = output.src;
+    document.querySelector("#resultDownload").href = generatedOutput.src;
     document.querySelector("#resultDownload").download = "illustrious-infill.png";
     runButton.disabled = false;
+  }
+});
+resultObserver.observe(generatedOutput, { attributes: true, attributeFilter: ["src", "hidden"] });
+generatedOutput.addEventListener("load", () => {
+  if (!generatedOutput.hidden && generatedOutput.src) {
+    document.querySelector("#resultImage").src = generatedOutput.src;
+    document.querySelector("#resultPanel").hidden = false;
+    document.querySelector("#resultDownload").href = generatedOutput.src;
+    document.querySelector("#resultDownload").download = "illustrious-infill.png";
   }
 });
 document.querySelector("#downloadGeneratedImage").addEventListener("click", event => {
