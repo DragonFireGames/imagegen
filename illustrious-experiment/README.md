@@ -72,9 +72,12 @@ validation pass. This changes validation overhead only; it does not change the
 model graph, weights, tensor types, scheduler, or generated values. The default
 is unchanged (ONNX Runtime's `basic` mode). You can use `?validation=basic`
 to state that default explicitly, or `?validation=full` for extra debugging
-checks. This is an optional benchmark setting, not a guaranteed speedup; its
-benefit depends on how much CPU-side validation contributes on the target
-browser and GPU. Compare repeated warm runs with otherwise identical settings.
+checks. `?validation=disabled` disables WebGPU validation too; use it only as
+a controlled performance benchmark, since invalid GPU operations become harder
+to diagnose. None of these modes changes the intended model computation, but
+the default validation mode remains the safest choice for ordinary use. This
+is an optional benchmark setting, not a guaranteed speedup; compare repeated
+warm runs with otherwise identical settings.
 
 Use `?graphCapture=1` to try WebGPU graph capture for the three fixed-shape
 UNet sessions. The first disposable warm-up dispatch records the graphs. If
@@ -83,6 +86,16 @@ sessions and retries with ordinary WebGPU dispatch. Graph capture may reduce
 per-run CPU command-submission overhead; it does not reduce the UNet's GPU
 computation. It is opt-in because not every model/operator combination is
 capture-compatible.
+
+The A/B/C partition timings measure the duration of each ONNX
+`session.run()` call. With GPU-resident outputs, the native WebGPU provider
+can submit command buffers without waiting for the device queue to finish all
+the submitted work. The final GPU scheduler latent readback maps a CPU-readable
+buffer and therefore waits for the preceding queue work as well. The generator
+logs that final wait separately. For benchmark comparisons, consider both the
+sum of A/B/C timings and the denoising wall time through completion of the
+final readback; the early per-step timings alone can make queued GPU work look
+instantaneous.
 
 Use `?layout=NHWC` to request NHWC as the preferred layout for the three UNet
 sessions. The default remains NCHW. Layout preference can change which kernels
