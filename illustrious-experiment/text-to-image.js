@@ -1517,6 +1517,11 @@ async function prepareInferenceEngine() {
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser.");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) throw new Error("The browser did not return a WebGPU adapter.");
+    if (ort.env.webgpu && !ort.env.webgpu.device) ort.env.webgpu.adapter = adapter;
+    const adapterInfo = adapter.info || {};
+    const adapterLabel = [adapterInfo.vendor, adapterInfo.architecture, adapterInfo.device, adapterInfo.description]
+      .filter(Boolean).join(" · ");
+    if (adapterLabel) log("WebGPU adapter identity · " + adapterLabel);
     log("WebGPU adapter ready · maxBufferSize " + formatBytes(adapter.limits?.maxBufferSize || 0) +
       " · maxStorageBufferBindingSize " + formatBytes(adapter.limits?.maxStorageBufferBindingSize || 0));
 
@@ -1754,6 +1759,11 @@ button.addEventListener("click", async () => {
     if (!navigator.gpu) throw new Error("WebGPU is not available in this browser.");
     const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) throw new Error("The browser did not return a WebGPU adapter.");
+    if (ort.env.webgpu && !ort.env.webgpu.device) ort.env.webgpu.adapter = adapter;
+    const adapterInfo = adapter.info || {};
+    const adapterLabel = [adapterInfo.vendor, adapterInfo.architecture, adapterInfo.device, adapterInfo.description]
+      .filter(Boolean).join(" · ");
+    if (adapterLabel) log("WebGPU adapter identity · " + adapterLabel);
     log("WebGPU adapter ready · maxBufferSize " + formatBytes(adapter.limits?.maxBufferSize || 0) +
       " · maxStorageBufferBindingSize " + formatBytes(adapter.limits?.maxStorageBufferBindingSize || 0));
     setStatus("Starting browser-side inference…");
