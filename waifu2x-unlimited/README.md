@@ -26,11 +26,28 @@ For the older `swin_unet` and `cunet` model choices (including art-scan and phot
 
 The `models/README.md` file in this folder repeats these setup instructions. The archives are published under the upstream project's `0.0.0` GitHub Release.
 
+## External model hosting
+
+You can keep the ONNX files on a separate static host instead of putting them in this repository. In the **Model URL** field, enter the HTTPS URL of the directory containing the model folders, then click **Apply**. For example:
+
+```text
+https://raw.githubusercontent.com/USERNAME/MODELS-REPO/BRANCH/models/
+```
+
+That directory must contain paths such as:
+
+```text
+swin_unet_v3/art/noise0_scale2x.onnx
+utils/create_seam_blending_filter.onnx
+```
+
+The app appends the required model paths to the URL automatically. Use a host that serves the individual extracted ONNX files and sends permissive CORS headers. A GitHub release ZIP URL is not a model directory: extract the archive and host the resulting folder structure first. The URL setting is saved in this browser. Leave it as `models/` to use files hosted alongside the app.
+
 ## Runtime and privacy
 
 - **Auto** selects WebGPU when available and falls back to WebAssembly; the backend can also be selected manually.
 - Image processing runs in the browser. The input image is not uploaded to an inference server.
-- The upstream page pins ONNX Runtime Web to a development build served by jsDelivr. Model files are served from this app's own `models/` directory after you install them.
+- The upstream page pins ONNX Runtime Web to a development build served by jsDelivr. Model files can be served locally from this app's `models/` folder or from the external directory configured in **Model URL**.
 - Very large images can still exceed browser or GPU memory limits; tile size controls the amount processed at once.
 
 ## Upstream source

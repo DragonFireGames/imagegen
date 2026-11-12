@@ -21,8 +21,11 @@ export const onnxSession = {
                     }
                 );
             } catch (error) {
-                console.error(error);
-                return null;
+                delete this.sessions[onnx_path];
+                console.error("ONNX model load failed:", onnx_path, error);
+                throw new Error(
+                    `Could not load ONNX model: ${onnx_path}. Check that the file exists and that its host allows cross-origin requests (CORS). ${error.message || error}`
+                );
             }
         }
         return this.sessions[onnx_path];

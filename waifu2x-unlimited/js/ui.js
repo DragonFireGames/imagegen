@@ -18,6 +18,8 @@ export class AppUI {
         this.dom = {
             file: document.getElementById("file"),
             model: document.querySelector("select[name=model]"),
+            modelBaseUrl: document.getElementById("model-base-url"),
+            applyModelBaseUrl: document.getElementById("apply-model-base-url"),
             scale: document.querySelector("select[name=scale]"),
             noiseLevel: document.querySelector("select[name=noise_level]"),
             tileSize: document.querySelector("select[name=tile_size]"),
@@ -42,6 +44,7 @@ export class AppUI {
     init() {
         this.dom.start.addEventListener("click", () => this.handleStart());
         this.dom.stop.addEventListener("click", () => { onnxRunner.stop_flag = true; });
+        this.dom.applyModelBaseUrl.addEventListener("click", () => this.applyModelBaseUrl());
         this.dom.file.addEventListener("change", () => this.handleFileChange());
         
         this.dom.src.addEventListener("click", () => this.toggleSrcSize());
@@ -102,6 +105,17 @@ export class AppUI {
     }
 
     restoreSettings() {
+        const savedModelBaseUrl = Settings.get("model_base_url", "models/");
+        this.dom.modelBaseUrl.value = savedModelBaseUrl;
+        try {
+            CONFIG.set_model_base_url(savedModelBaseUrl);
+        } catch (error) {
+            this.dom.modelBaseUrl.value = "models/";
+            CONFIG.set_model_base_url("models/");
+            Settings.set("model_base_url", "models/");
+            console.error("Ignoring invalid saved model URL:", error);
+        }
+
         const savedModel = Settings.get("model");
         if (savedModel) {
             const oldValue = this.dom.model.value;
@@ -127,6 +141,23 @@ export class AppUI {
         this.updateTTAVisibility();
         if (Settings.get("tile_random") === "true") {
             this.dom.tileRandom.checked = true;
+        }
+    }
+
+    applyModelBaseUrl() {
+        if (onnxRunner.running) {
+            this.setMessage("Stop the current run before changing the model URL.", -1);
+            return;
+        }
+
+        try {
+            const baseUrl = CONFIG.set_model_base_url(this.dom.modelBaseUrl.value);
+            this.dom.modelBaseUrl.value = baseUrl;
+            Settings.set("model_base_url", baseUrl);
+            onnxSession.sessions = {};
+            this.setMessage(`Model files: ${baseUrl}`, -1);
+        } catch (error) {
+            this.setMessage(`Invalid model URL: ${error.message}`, -1);
         }
     }
 

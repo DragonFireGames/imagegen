@@ -29,3 +29,6 @@ input[type=file] { padding: 4px; width: 80%;}
 
 .back-link { margin: 0.5em 0; }
 .back-link a { color: #333; }
+
+#model-base-url { box-sizing: border-box; width: min(38em, 70%); }
+#apply-model-base-url { padding: 4px 8px; }
