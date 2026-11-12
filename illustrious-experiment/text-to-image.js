@@ -87,6 +87,7 @@ const fields = {
   cfg: document.querySelector("#generationCfg"),
   seed: document.querySelector("#generationSeed"),
   batch: document.querySelector("#generationBatch"),
+  parallel: document.querySelector("#generationParallel"),
   lora: document.querySelector("#generationLoraEnabled"),
   loraStrength: document.querySelector("#generationLoraStrength"),
   loraFile: document.querySelector("#loraFile")
@@ -126,14 +127,16 @@ const conditioningCache = new Map();
 
 function setStatus(message, type = "info") {
   status.textContent = activeBatch
-    ? "Image " + (activeBatch.index + 1) + "/" + activeBatch.count + " · " + message
+    ? (activeBatch.span > 1
+      ? "Images " + (activeBatch.index + 1) + "–" + (activeBatch.index + activeBatch.span) + "/" + activeBatch.count
+      : "Image " + (activeBatch.index + 1) + "/" + activeBatch.count) + " · " + message
     : message;
   status.dataset.type = type;
 }
 
 function setProgress(value, label) {
   progress.value = activeBatch
-    ? ((activeBatch.index + Math.max(0, Math.min(100, value)) / 100) / activeBatch.count) * 100
+    ? ((activeBatch.index + Math.max(0, Math.min(100, value)) / 100 * (activeBatch.span || 1)) / activeBatch.count) * 100
     : value;
   progressLabel.textContent = activeBatch
     ? "Batch " + (activeBatch.index + 1) + "/" + activeBatch.count + " · " + label
@@ -696,12 +699,38 @@ function createEulerAncestralScheduler(config, steps) {
   };
 }
 
-function makeBatchSample(scaled, latentHeight, latentWidth, batchSize = 2) {
-  const oneSize = 4 * latentHeight * latentWidth;
-  const batch = new Float16Array(oneSize * batchSize);
+function makeBatchSample(scaled, latentHeight, latentWidth, imageCount = 1, branchCount = 2) {
+  const oneImageSize = 4 * latentHeight * latentWidth;
+  const totalSize = oneImageSize * imageCount;
+  if (!scaled || scaled.length !== totalSize || (branchCount !== 1 && branchCount !== 2)) {
+    throw new Error("Latent batch dimensions do not match the UNet image/CFG batch.");
+  }
+  const batch = new Float16Array(totalSize * branchCount);
   batch.set(scaled, 0);
-  if (batchSize === 2) batch.set(scaled, oneSize);
+  if (branchCount === 2) batch.set(scaled, totalSize);
   return batch;
+}
+
+function makeConditioningBatch(conditioning, imageCount, branchCount, conditioningIndex) {
+  const hiddenLength = 77 * 2048;
+  const pooledLength = 1280;
+  const hidden = new Float16Array(hiddenLength * imageCount * branchCount);
+  const pooled = new Float16Array(pooledLength * imageCount * branchCount);
+  for (let branch = 0; branch < branchCount; branch++) {
+    const sourceBranch = branchCount === 1 ? conditioningIndex : branch;
+    const hiddenSource = conditioning.encoderHidden.subarray(
+      sourceBranch * hiddenLength, (sourceBranch + 1) * hiddenLength
+    );
+    const pooledSource = conditioning.textEmbeds.subarray(
+      sourceBranch * pooledLength, (sourceBranch + 1) * pooledLength
+    );
+    for (let image = 0; image < imageCount; image++) {
+      const targetIndex = branch * imageCount + image;
+      hidden.set(hiddenSource, targetIndex * hiddenLength);
+      pooled.set(pooledSource, targetIndex * pooledLength);
+    }
+  }
+  return { hidden, pooled };
 }
 
 function makeBatchTimeIds(height, width, batchSize = 2) {
@@ -793,7 +822,7 @@ function createGpuOutputSet(device, shapes, label) {
   };
 }
 
-function createGpuInputState(conditioning, width, height, batchSize, conditioningIndex) {
+function createGpuInputState(conditioning, width, height, batchSize, conditioningIndex, imageCount = 1, branchCount = 2) {
   const device = ort.env.webgpu?.device;
   if (!device || typeof ort.Tensor.fromGpuBuffer !== "function") {
     throw new Error("ONNX Runtime did not expose the GPUDevice/Tensor.fromGpuBuffer API required for reusable GPU inputs.");
@@ -801,23 +830,16 @@ function createGpuInputState(conditioning, width, height, batchSize, conditionin
   const latentWidth = width / 8;
   const latentHeight = height / 8;
   const latentLength = 4 * latentHeight * latentWidth;
-  const hiddenLength = 77 * 2048;
-  const pooledLength = 1280;
-  const hiddenInput = batchSize === 1
-    ? conditioning.encoderHidden.subarray(conditioningIndex * hiddenLength, (conditioningIndex + 1) * hiddenLength)
-    : conditioning.encoderHidden;
-  const pooledInput = batchSize === 1
-    ? conditioning.textEmbeds.subarray(conditioningIndex * pooledLength, (conditioningIndex + 1) * pooledLength)
-    : conditioning.textEmbeds;
+  const conditioningBatch = makeConditioningBatch(conditioning, imageCount, branchCount, conditioningIndex);
   const entries = {};
   try {
     entries.sample = createGpuInput(device, "float16", new Float16Array(latentLength * batchSize),
       [batchSize, 4, latentHeight, latentWidth], "UNET_A sample");
     entries.timestep = createGpuInput(device, "float32", new Float32Array(batchSize),
       [batchSize], "UNET_A timestep");
-    entries.encoderHidden = createGpuInput(device, "float16", hiddenInput,
+    entries.encoderHidden = createGpuInput(device, "float16", conditioningBatch.hidden,
       [batchSize, 77, 2048], "shared encoder_hidden_states");
-    entries.textEmbeds = createGpuInput(device, "float16", pooledInput,
+    entries.textEmbeds = createGpuInput(device, "float16", conditioningBatch.pooled,
       [batchSize, 1280], "UNET_A text_embeds");
     entries.timeIds = createGpuInput(device, "float32", makeBatchTimeIds(height, width, batchSize),
       [batchSize, 6], "UNET_A time_ids");
@@ -832,6 +854,8 @@ function createGpuInputState(conditioning, width, height, batchSize, conditionin
     device,
     entries,
     batchSize,
+    imageCount,
+    branchCount,
     writeStep(sample, timestep) {
       if (sample.byteLength !== entries.sample.buffer.size) {
         throw new Error("Latent input size changed while the UNet engine was resident.");
@@ -845,18 +869,13 @@ function createGpuInputState(conditioning, width, height, batchSize, conditionin
       device.queue.writeBuffer(entries.timestep.buffer, 0, entries.timestep.data);
     },
     updateConditioning(next, nextConditioningIndex = conditioningIndex) {
-      const hidden = batchSize === 1
-        ? next.encoderHidden.subarray(nextConditioningIndex * hiddenLength, (nextConditioningIndex + 1) * hiddenLength)
-        : next.encoderHidden;
-      const pooled = batchSize === 1
-        ? next.textEmbeds.subarray(nextConditioningIndex * pooledLength, (nextConditioningIndex + 1) * pooledLength)
-        : next.textEmbeds;
-      if (hidden.byteLength !== entries.encoderHidden.buffer.size ||
-          pooled.byteLength !== entries.textEmbeds.buffer.size) {
+      const nextBatch = makeConditioningBatch(next, imageCount, branchCount, nextConditioningIndex);
+      if (nextBatch.hidden.byteLength !== entries.encoderHidden.buffer.size ||
+          nextBatch.pooled.byteLength !== entries.textEmbeds.buffer.size) {
         throw new Error("Prompt conditioning dimensions changed while the UNet engine was resident.");
       }
-      device.queue.writeBuffer(entries.encoderHidden.buffer, 0, hidden);
-      device.queue.writeBuffer(entries.textEmbeds.buffer, 0, pooled);
+      device.queue.writeBuffer(entries.encoderHidden.buffer, 0, nextBatch.hidden);
+      device.queue.writeBuffer(entries.textEmbeds.buffer, 0, nextBatch.pooled);
     },
     destroy() {
       for (const entry of Object.values(entries)) {
@@ -867,18 +886,19 @@ function createGpuInputState(conditioning, width, height, batchSize, conditionin
 }
 
 
-async function createGpuScheduler(device, gpuInputs, width, height, batchSize) {
+async function createGpuScheduler(device, gpuInputs, width, height, batchSize, imageCount = 1, branchCount = 2) {
   const latentSize = 4 * (height / 8) * (width / 8);
+  const totalLatentSize = latentSize * imageCount;
   let latentBuffer = null;
   let noiseBuffer = null;
   let uniformBuffer = null;
   try {
     latentBuffer = device.createBuffer({
-      size: latentSize * 4,
+      size: totalLatentSize * 4,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
     });
     noiseBuffer = device.createBuffer({
-      size: latentSize * 4,
+      size: totalLatentSize * 4,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
     });
     uniformBuffer = device.createBuffer({
@@ -894,7 +914,7 @@ async function createGpuScheduler(device, gpuInputs, width, height, batchSize) {
   const shader = device.createShaderModule({ code: `
     struct Params {
       count: u32,
-      batch: u32,
+      branches: u32,
       cfg: f32,
       dt: f32,
       sigmaUp: f32,
@@ -922,9 +942,9 @@ async function createGpuScheduler(device, gpuInputs, width, height, batchSize) {
 
       var epsilon0 = halfAt(first);
       var epsilon1 = halfAt(second);
-      if (params.batch == 2u) {
-        let conditional0 = halfAt(params.latentSize + first);
-        let conditional1 = halfAt(params.latentSize + second);
+      if (params.branches == 2u) {
+        let conditional0 = halfAt(params.count + first);
+        let conditional1 = halfAt(params.count + second);
         epsilon0 = epsilon0 + params.cfg * (conditional0 - epsilon0);
         epsilon1 = epsilon1 + params.cfg * (conditional1 - epsilon1);
       }
@@ -936,7 +956,7 @@ async function createGpuScheduler(device, gpuInputs, width, height, batchSize) {
 
       let packed = pack2x16float(vec2<f32>(latent0 * params.nextScale, latent1 * params.nextScale));
       nextSample[pair] = packed;
-      if (params.batch == 2u) {
+      if (params.branches == 2u) {
         nextSample[params.count / 2u + pair] = packed;
       }
     }
@@ -959,44 +979,46 @@ async function createGpuScheduler(device, gpuInputs, width, height, batchSize) {
     const paramsData = new ArrayBuffer(32);
     const paramsView = new DataView(paramsData);
     return {
-      latentBuffer, noiseBuffer, uniformBuffer, pipeline, bindGroup, latentSize, batchSize,
+      latentBuffer, noiseBuffer, uniformBuffer, pipeline, bindGroup,
+      latentSize, totalLatentSize, batchSize, imageCount, branchCount,
       initialize(latents, scaledLatents) {
-        if (latents.length !== latentSize || scaledLatents.length !== latentSize) {
-          throw new Error("Initial GPU scheduler latent dimensions do not match the selected resolution.");
+        if (latents.length !== totalLatentSize || scaledLatents.length !== totalLatentSize) {
+          throw new Error("Initial GPU scheduler latent dimensions do not match the selected image batch.");
         }
         device.queue.writeBuffer(latentBuffer, 0, latents);
-        const batchSample = makeBatchSample(scaledLatents, height / 8, width / 8, batchSize);
+        const batchSample = makeBatchSample(
+          scaledLatents, height / 8, width / 8, imageCount, branchCount
+        );
         device.queue.writeBuffer(gpuInputs.entries.sample.buffer, 0, batchSample);
       },
       step(noise, stepParams) {
-        if (noise.length !== latentSize) throw new Error("GPU scheduler noise dimensions changed.");
+        if (noise.length !== totalLatentSize) throw new Error("GPU scheduler noise dimensions changed.");
         device.queue.writeBuffer(noiseBuffer, 0, noise);
-        const view = paramsView;
-        view.setUint32(0, latentSize, true);
-        view.setUint32(4, batchSize, true);
-        view.setFloat32(8, stepParams.cfg, true);
-        view.setFloat32(12, stepParams.dt, true);
-        view.setFloat32(16, stepParams.sigmaUp, true);
-        view.setFloat32(20, stepParams.nextScale, true);
-        view.setUint32(24, latentSize, true);
-        view.setUint32(28, 0, true);
+        paramsView.setUint32(0, totalLatentSize, true);
+        paramsView.setUint32(4, branchCount, true);
+        paramsView.setFloat32(8, stepParams.cfg, true);
+        paramsView.setFloat32(12, stepParams.dt, true);
+        paramsView.setFloat32(16, stepParams.sigmaUp, true);
+        paramsView.setFloat32(20, stepParams.nextScale, true);
+        paramsView.setUint32(24, totalLatentSize, true);
+        paramsView.setUint32(28, 0, true);
         device.queue.writeBuffer(uniformBuffer, 0, paramsData);
         const encoder = device.createCommandEncoder();
         const pass = encoder.beginComputePass();
         pass.setPipeline(pipeline);
         pass.setBindGroup(0, bindGroup);
-        pass.dispatchWorkgroups(Math.ceil(latentSize / 2 / 256));
+        pass.dispatchWorkgroups(Math.ceil(totalLatentSize / 2 / 256));
         pass.end();
         device.queue.submit([encoder.finish()]);
       },
       async readLatents() {
         const readback = device.createBuffer({
-          size: latentSize * 4,
+          size: totalLatentSize * 4,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
         });
         try {
           const encoder = device.createCommandEncoder();
-          encoder.copyBufferToBuffer(latentBuffer, 0, readback, 0, latentSize * 4);
+          encoder.copyBufferToBuffer(latentBuffer, 0, readback, 0, totalLatentSize * 4);
           device.queue.submit([encoder.finish()]);
           await readback.mapAsync(GPUMapMode.READ);
           const result = new Float32Array(readback.getMappedRange().slice(0));
@@ -1030,9 +1052,11 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
   const latentWidth = width / 8;
   const latentHeight = height / 8;
   const batch = sessions.batchSize || 2;
+  const imageCount = sessions.imageCount || 1;
+  const branchCount = sessions.branchCount || (batch > 1 ? 2 : 1);
   const batchSample = sessions.gpuScheduler
     ? null
-    : makeBatchSample(scaledLatents, latentHeight, latentWidth, batch);
+    : makeBatchSample(scaledLatents, latentHeight, latentWidth, imageCount, branchCount);
   const shape = (channels, h, w) => [batch, channels, h, w];
   const timings = {};
   const gpu = sessions.gpuInputs;
@@ -1119,13 +1143,14 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       const noisePrediction = fp16Values(outputsC.out_sample, "UNET_C out_sample",
         [batch, 4, latentHeight, latentWidth]);
       const latentSize = 4 * latentHeight * latentWidth;
-      guided = new Float32Array(latentSize);
-      if (batch === 1) {
-        for (let i = 0; i < latentSize; i++) guided[i] = noisePrediction[i];
+      const totalLatentSize = latentSize * imageCount;
+      guided = new Float32Array(totalLatentSize);
+      if (branchCount === 1) {
+        guided.set(noisePrediction.subarray(0, totalLatentSize));
       } else {
-        for (let i = 0; i < latentSize; i++) {
+        for (let i = 0; i < totalLatentSize; i++) {
           const unconditional = noisePrediction[i];
-          const conditional = noisePrediction[latentSize + i];
+          const conditional = noisePrediction[totalLatentSize + i];
           guided[i] = unconditional + cfg * (conditional - unconditional);
         }
       }
@@ -1133,7 +1158,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
 
     log("Step denoiser timing · A " + timings.a.toFixed(2) + "s · B " +
       timings.b.toFixed(2) + "s · C " + timings.c.toFixed(2) +
-      "s · CFG " + cfg + " · batch " + batch + " · A→B→C GPU-resident · reusable GPU inputs · standard dispatch" +
+      "s · CFG " + cfg + " · " + imageCount + " image(s) · model batch " + batch + " · A→B→C GPU-resident · reusable GPU inputs · standard dispatch" +
       (sessions.gpuScheduler ? " · GPU CFG/Euler" : " · CPU CFG/Euler"));
     return { guided, timings };
   } finally {
@@ -1217,7 +1242,7 @@ function renderImage(tensor, width, height) {
 }
 
 const GENERATION_SETTINGS_FORMAT = "dragonfiregames.illustrious-generation-settings";
-const GENERATION_SETTINGS_VERSION = 3;
+const GENERATION_SETTINGS_VERSION = 4;
 const settingsExportButton = document.querySelector("#exportGenerationSettings");
 const settingsImportButton = document.querySelector("#importGenerationSettings");
 const settingsImportInput = document.querySelector("#importGenerationSettingsFile");
@@ -1245,6 +1270,7 @@ function buildGenerationSettings() {
       cfgScale: fields.cfg.value === "" ? null : Number(fields.cfg.value),
       seed: fields.seed.value === "" ? null : Number(fields.seed.value),
       batchCount: fields.batch.value === "" ? null : Number(fields.batch.value),
+      parallelImages: Number(fields.parallel?.value || 1),
       lora: {
         enabled: fields.lora.checked,
         strength: fields.loraStrength.value === "" ? null : Number(fields.loraStrength.value),
@@ -1260,7 +1286,7 @@ function buildGenerationSettings() {
 function validateGenerationSettings(settings) {
   if (!settings || typeof settings !== "object" ||
       settings.format !== GENERATION_SETTINGS_FORMAT ||
-      (settings.version !== 2 && settings.version !== GENERATION_SETTINGS_VERSION)) {
+      (settings.version !== 2 && settings.version !== 3 && settings.version !== GENERATION_SETTINGS_VERSION)) {
     throw new Error("Unsupported settings file. Expected " + GENERATION_SETTINGS_FORMAT +
       " version 2 or " + GENERATION_SETTINGS_VERSION + ".");
   }
@@ -1279,6 +1305,7 @@ function validateGenerationSettings(settings) {
 
   const { width, height, steps, cfgScale, seed, lora } = generation;
   const batchCount = generation.batchCount ?? 1;
+  const parallelImages = generation.parallelImages ?? 1;
   if (!Number.isInteger(width) || width < 512 || width > 1024 || width % 64 !== 0) {
     throw new Error("Imported width must be 512–1024 and divisible by 64.");
   }
@@ -1296,6 +1323,9 @@ function validateGenerationSettings(settings) {
   }
   if (!Number.isInteger(batchCount) || batchCount < 1 || batchCount > 20) {
     throw new Error("Imported batch count must be an integer from 1 to 20.");
+  }
+  if (!Number.isInteger(parallelImages) || parallelImages < 1 || parallelImages > 4) {
+    throw new Error("Imported images per GPU batch must be an integer from 1 to 4.");
   }
   if (seed !== -1 && seed + batchCount - 1 > 4294967295) {
     throw new Error("Imported batch seed range exceeds the maximum 32-bit seed.");
@@ -1343,6 +1373,7 @@ async function importGenerationSettings(file) {
   fields.cfg.value = String(generation.cfgScale);
   fields.seed.value = String(generation.seed);
   fields.batch.value = String(generation.batchCount ?? 1);
+  if (fields.parallel) fields.parallel.value = String(generation.parallelImages ?? 1);
   fields.lora.checked = generation.lora.enabled;
   fields.loraStrength.value = String(generation.lora.strength);
   fields.loraStrength.disabled = !generation.lora.enabled;
@@ -1421,6 +1452,10 @@ function readOptions() {
       throw new Error("LoRA strength must be between 0 and 2.");
     }
   }
+  const parallelCount = Number(fields.parallel?.value || 1);
+  if (!Number.isInteger(parallelCount) || parallelCount < 1 || parallelCount > 4) {
+    throw new Error("Images per GPU batch must be an integer from 1 to 4.");
+  }
   return {
     prompt: prompt + (suffix ? ", " + suffix : ""),
     negative,
@@ -1430,6 +1465,7 @@ function readOptions() {
     cfg,
     seed,
     batchCount,
+    parallelCount,
     lora: fields.lora.checked ? {
       file: fields.loraFile.files?.[0] || null,
       strength: Number(fields.loraStrength.value)
@@ -1489,13 +1525,18 @@ async function buildUnetSessions(
   width,
   height,
   batchSize,
+  imageCount,
+  branchCount,
   conditioningIndex,
   patchCache,
   useGpuScheduler = true,
   enableGraphCapture = false,
   preferredLayout = null
 ) {
-  const sessions = { a: null, b: null, c: null, gpuInputs: null, gpuOutputs: { a: null, b: null }, batchSize };
+  const sessions = {
+    a: null, b: null, c: null, gpuInputs: null, gpuOutputs: { a: null, b: null },
+    batchSize, imageCount, branchCount
+  };
   const patchedComponent = async name => {
     if (!lora) return null;
     if (!patchCache.has(name)) {
@@ -1525,7 +1566,9 @@ async function buildUnetSessions(
       manifest, "unet_a", "UNET_A", patchedA?.externalData, outputsA,
       enableGraphCapture, preferredLayout
     );
-    sessions.gpuInputs = createGpuInputState(conditioning, width, height, batchSize, conditioningIndex);
+    sessions.gpuInputs = createGpuInputState(
+      conditioning, width, height, batchSize, conditioningIndex, imageCount, branchCount
+    );
     checkCancelled();
 
     const patchedB = await patchedComponent("unet_b");
@@ -1539,7 +1582,7 @@ async function buildUnetSessions(
     if (useGpuScheduler) {
       try {
         sessions.gpuScheduler = await createGpuScheduler(
-          ort.env.webgpu.device, sessions.gpuInputs, width, height, batchSize
+          ort.env.webgpu.device, sessions.gpuInputs, width, height, batchSize, imageCount, branchCount
         );
         log("GPU-resident Euler scheduler initialized · CFG and latent update stay on WebGPU.");
       } catch (error) {
@@ -1605,10 +1648,14 @@ async function buildUnetSessions(
   }
 }
 
-async function ensureUnetSessions(manifest, lora, conditioning, width, height, cfg, useGpuScheduler = true) {
-  const batchSize = cfg === 0 || cfg === 1 ? 1 : 2;
+async function ensureUnetSessions(
+  manifest, lora, conditioning, width, height, cfg, useGpuScheduler = true, imageCount = 1
+) {
+  const branchCount = cfg === 0 || cfg === 1 ? 1 : 2;
+  const batchSize = branchCount * imageCount;
   const conditioningIndex = cfg === 1 ? 1 : 0;
-  const key = adapterCacheKey(lora) + "|" + width + "x" + height + "|batch" + batchSize +
+  const key = adapterCacheKey(lora) + "|" + width + "x" + height + "|images" + imageCount +
+    "|branches" + branchCount + "|batch" + batchSize +
     (useGpuScheduler ? "|gpu-scheduler" : "|cpu-scheduler") +
     (graphCaptureEnabled ? "|graph-capture" : "|standard-dispatch") +
     "|" + (preferredUnetLayout || "default-layout");
@@ -1653,12 +1700,13 @@ async function ensureUnetSessions(manifest, lora, conditioning, width, height, c
 
     try {
       sessions = await buildUnetSessions(
-        manifest, lora, conditioning, width, height, batchSize, conditioningIndex,
+        manifest, lora, conditioning, width, height, batchSize, imageCount, branchCount, conditioningIndex,
         patchCache, useGpuScheduler, graphCaptureEnabled, preferredUnetLayout
       );
       log("UNET_A/B/C ready · " + (graphCaptureEnabled ? "graph-captured" : "standard") +
         " WebGPU dispatch with persistent GPU inputs and GPU-resident partition handoffs." +
-        (batchSize === 1 ? " Single-branch CFG path · batch=1." : " Classifier-free guidance path · batch=2."));
+        (branchCount === 1 ? " Single-branch CFG path." : " Classifier-free guidance path.") +
+        " · " + imageCount + " image(s) · model batch=" + batchSize + ".");
       await runWarmup();
     } catch (captureError) {
       if (!graphCaptureEnabled) throw captureError;
@@ -1669,7 +1717,7 @@ async function ensureUnetSessions(manifest, lora, conditioning, width, height, c
       log("Graph capture was unavailable for this UNet shape/operator combination; retrying with standard WebGPU dispatch. Reason: " +
         (captureError?.message || String(captureError)));
       sessions = await buildUnetSessions(
-        manifest, lora, conditioning, width, height, batchSize, conditioningIndex,
+        manifest, lora, conditioning, width, height, batchSize, imageCount, branchCount, conditioningIndex,
         patchCache, useGpuScheduler, false, preferredUnetLayout
       );
       await runWarmup();
@@ -1791,7 +1839,10 @@ async function prepareInferenceEngine() {
 
     const infillMode = Boolean(window.__illustriousInfill);
     setStatus("Preparing resident UNet sessions…");
-    await ensureUnetSessions(manifest, options.lora, conditioning, options.width, options.height, options.cfg, !infillMode);
+    await ensureUnetSessions(
+      manifest, options.lora, conditioning, options.width, options.height, options.cfg,
+      !infillMode, Math.min(options.parallelCount, options.batchCount)
+    );
     checkCancelled();
 
     // Keep the multi-part UNet resident, but do not pin the VAE beside its
@@ -2119,7 +2170,7 @@ async function generateMany(imageOptionsList, infillData = null, onImage = null)
       }
     }
     if (gpuScheduler) {
-      gpuScheduler.step(noiseForStep(stepNoise), scheduler.stepParameters(step, options.cfg, sessions.branchCount));
+      gpuScheduler.step(stepNoise, scheduler.stepParameters(step, options.cfg, sessions.branchCount));
     } else {
       latents = scheduler.step(denoiser.guided, step, latents, stepNoise);
       for (let i = 0; i < latents.length; i++) {
@@ -2210,10 +2261,6 @@ async function generateMany(imageOptionsList, infillData = null, onImage = null)
   }
 }
 
-function noiseForStep(noise) {
-  return noise;
-}
-
 async function generate(options, infillData = null) {
   const canvases = await generateMany([options], infillData);
   return canvases[0];
@@ -2284,28 +2331,45 @@ button.addEventListener("click", async () => {
     if (adapterLabel) log("WebGPU adapter identity · " + adapterLabel);
     log("WebGPU adapter ready · maxBufferSize " + formatBytes(adapter.limits?.maxBufferSize || 0) +
       " · maxStorageBufferBindingSize " + formatBytes(adapter.limits?.maxStorageBufferBindingSize || 0));
-    log("Starting sequential batch · " + batchCount + " image(s) · " +
-      (randomSeed ? "a new random seed per image." : "starting seed " + baseSeed + " · increment by one per image."));
     const infillData = window.__illustriousInfill?.getPayload?.() || null;
+    const parallelCount = infillData ? 1 : Math.min(options.parallelCount, batchCount);
+    log("Starting batch · " + batchCount + " output image(s) · " + parallelCount +
+      " image(s) per UNet pass · " +
+      (randomSeed ? "a new random seed per image." : "starting seed " + baseSeed + " · increment by one per image."));
 
-    for (let index = 0; index < batchCount; index++) {
+    for (let index = 0; index < batchCount; index += parallelCount) {
       checkCancelled();
-      const seed = randomSeed ? resolveGenerationSeed(-1) : baseSeed + index;
-      const imageOptions = { ...options, seed };
-      activeBatch = { index, count: batchCount };
-      log("Batch image " + (index + 1) + "/" + batchCount + " · seed " + seed + ".");
-      if (randomSeed) log("Random seed selected · using seed " + seed + ".");
-      setProgress(0, "Starting");
-      setStatus("Starting image " + (index + 1) + " of " + batchCount + "…");
+      const actualCount = Math.min(parallelCount, batchCount - index);
+      const imageOptions = [];
+      for (let offset = 0; offset < parallelCount; offset++) {
+        const seed = offset < actualCount
+          ? (randomSeed ? resolveGenerationSeed(-1) : baseSeed + index + offset)
+          : imageOptions[actualCount - 1].seed;
+        imageOptions.push({ ...options, seed });
+      }
+      activeBatch = { index, count: batchCount, span: actualCount };
+      for (let offset = 0; offset < actualCount; offset++) {
+        log("Batch image " + (index + offset + 1) + "/" + batchCount + " · seed " + imageOptions[offset].seed + ".");
+        if (randomSeed) log("Random seed selected · using seed " + imageOptions[offset].seed + ".");
+      }
+      if (actualCount < parallelCount) {
+        log("Final GPU batch padded with " + (parallelCount - actualCount) +
+          " duplicate latent(s) to keep the resident UNet shape; padded outputs are discarded.");
+      }
+      setProgress(0, "Starting " + actualCount + " image(s)");
+      setStatus("Starting " + actualCount + " image(s) in one UNet pass…");
 
-      const canvas = await generate(imageOptions, infillData);
-      checkCancelled();
-      const blob = await new Promise((resolve, reject) => canvas.toBlob(value =>
-        value ? resolve(value) : reject(new Error("Could not encode image " + (index + 1) + " as PNG.")), "image/png"));
-      appendGeneratedResult(blob, imageOptions, index, batchCount);
-      completedSeeds.push(seed);
-      completedCount++;
-      log("Batch image " + (index + 1) + "/" + batchCount + " saved · PNG " + formatBytes(blob.size) + ".");
+      await generateMany(imageOptions, infillData, async (canvas, localIndex) => {
+        if (localIndex >= actualCount) return;
+        const imageIndex = index + localIndex;
+        const itemOptions = imageOptions[localIndex];
+        const blob = await new Promise((resolve, reject) => canvas.toBlob(value =>
+          value ? resolve(value) : reject(new Error("Could not encode image " + (imageIndex + 1) + " as PNG.")), "image/png"));
+        appendGeneratedResult(blob, itemOptions, imageIndex, batchCount);
+        completedSeeds.push(itemOptions.seed);
+        completedCount++;
+        log("Batch image " + (imageIndex + 1) + "/" + batchCount + " saved · PNG " + formatBytes(blob.size) + ".");
+      });
       await yieldFrames();
     }
 
