@@ -92,10 +92,15 @@ function candidatesFor(group) {
   return [...new Set([converted && normalizedIndexName(converted), normalizedIndexName(group.module)].filter(Boolean))];
 }
 
-async function verifiedJson(path, fileMap) {
+async function verifiedJson(path, fileMap, log) {
   const record = fileMap.get(path);
   if (!record) throw new Error("Manifest is missing " + path + ".");
-  const response = await fetchModelResource(MODEL_BASE + path, { credentials: "omit", cache: "force-cache" });
+  const response = await fetchModelResource(MODEL_BASE + path, {
+    credentials: "omit",
+    cache: "force-cache",
+    expectedSize: record.size,
+    onCacheMiss: missing => log?.("MODEL CACHE MISS · " + missing + " · downloading a visible fallback copy.")
+  });
   if (!response.ok) throw new Error(path + " returned HTTP " + response.status + ".");
   const buffer = await response.arrayBuffer();
   if (record.size !== undefined && buffer.byteLength !== record.size) throw new Error(path + " size mismatch.");
@@ -461,7 +466,12 @@ function patchConv2d(buffer, down, up, shape, scale, label) {
 async function patchShard(file, dataStart, component, shard, targets, fileMap, strength, defaultAlpha, onProgress, checkCancelled, log) {
   const record = fileMap.get(shard);
   if (!record || !Number.isSafeInteger(record.size)) throw new Error("Manifest is missing shard size for " + shard + ".");
-  const response = await fetchModelResource(MODEL_BASE + shard, { credentials: "omit", cache: "force-cache" });
+  const response = await fetchModelResource(MODEL_BASE + shard, {
+    credentials: "omit",
+    cache: "force-cache",
+    expectedSize: record.size,
+    onCacheMiss: missing => log("MODEL CACHE MISS · " + missing + " · downloading a visible fallback copy.")
+  });
   if (!response.ok) throw new Error("Shard download failed: " + shard + " · HTTP " + response.status);
   const base = await response.blob();
   if (base.size !== record.size) throw new Error("Shard size mismatch for " + shard + ".");
@@ -527,14 +537,14 @@ export async function prepareLoraComponent(file, manifest, componentName, streng
       unsupportedAdapterTypes.slice(0, 5).join(", "));
   }
   const fileMap = new Map((manifest.files || []).map(item => [item.path, item]));
-  const index = await verifiedJson(component.weightsIndex, fileMap);
+  const index = await verifiedJson(component.weightsIndex, fileMap, log);
   const componentIndexes = new Map([[componentName, index]]);
   if (componentName.startsWith("unet_")) {
     for (const name of ["unet_a", "unet_b", "unet_c"]) {
       if (name === componentName) continue;
       const other = manifest.components?.[name];
       if (!other?.weightsIndex) throw new Error("Missing weight index for " + name + ".");
-      componentIndexes.set(name, await verifiedJson(other.weightsIndex, fileMap));
+      componentIndexes.set(name, await verifiedJson(other.weightsIndex, fileMap, log));
     }
   }
   const lookups = new Map();
@@ -633,10 +643,17 @@ export async function prepareLoraComponent(file, manifest, componentName, streng
     checkCancelled();
     const targets = targetsByShard.get(shard) || [];
     if (!targets.length) {
-      patched.push({ path: shard.split("/").pop(), data: MODEL_BASE + shard });
+      const response = await fetchModelResource(MODEL_BASE + shard, {
+        credentials: "omit",
+        cache: "force-cache",
+        expectedSize: record.size,
+        onCacheMiss: missing => log("MODEL CACHE MISS · " + missing + " · downloading a visible fallback copy.")
+      });
+      if (!response.ok) throw new Error("Base weight shard failed: " + shard + " · HTTP " + response.status);
+      patched.push({ path: shard.split("/").pop(), data: await response.blob() });
       continue;
     }
-    log(componentName + ": downloading/verifying " + shard + " and applying " + targets.length + " patches…");
+    log(componentName + ": loading cached base shard " + shard + " and applying " + targets.length + " patches…");
     const blob = await patchShard(file, dataStart, component, shard, targets, fileMap, strength, defaultAlpha,
       () => {}, checkCancelled, log);
     patched.push({ path: shard.split("/").pop(), data: blob });

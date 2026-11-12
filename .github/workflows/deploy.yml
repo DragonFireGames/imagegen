@@ -25,6 +25,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
+      - name: Stamp offline app-shell version
+        run: |
+          sed -i "s|^const APP_CACHE_NAME = .*;|const APP_CACHE_NAME = \"illustrious-app-shell-${GITHUB_SHA}\";|" illustrious-experiment/service-worker.js
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
 

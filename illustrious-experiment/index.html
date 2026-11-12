@@ -67,7 +67,7 @@
         </div>
         <a href="./infill.html">Brush infill experiment ↗</a> · <a href="./diagnostics.html">Diagnostics & adapter tools ↗</a>
       </div>
-      <p>Download and cache the complete model before generating, or import a portable <code>.wkimodel</code> bundle. Later sessions reuse the browser cache.</p>
+      <p>Download and cache the complete model before generating, or import a portable <code>.wkimodel</code> bundle. Generation reads ONNX graphs, external weights, tokenizers, and scheduler configuration from local storage. Missing entries are reported and downloaded only as a fallback.</p>
       <div class="generator-actions">
         <button class="button" id="prepareModelCache" type="button">Download & cache model</button>
         <button class="button secondary-button" id="exportModelBundle" type="button">Export model bundle</button>
@@ -145,6 +145,22 @@
       <a href="./diagnostics.html">Open diagnostics and adapter tools ↗</a>
     </div>
   </main>
-  <script type="module" src="./text-to-image.js"></script>
+  <script type="module">
+    if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
+      try {
+        await navigator.serviceWorker.register("./service-worker.js");
+        await navigator.serviceWorker.ready;
+        if (!navigator.serviceWorker.controller) {
+          await Promise.race([
+            new Promise(resolve => navigator.serviceWorker.addEventListener("controllerchange", resolve, { once: true })),
+            new Promise(resolve => setTimeout(resolve, 3000))
+          ]);
+        }
+      } catch (error) {
+        console.warn("[Illustrious] Offline app-shell cache is unavailable:", error);
+      }
+    }
+    await import("./text-to-image.js");
+  </script>
 </body>
 </html>

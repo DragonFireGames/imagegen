@@ -19,16 +19,36 @@ generator in the rest of this repository.
 
 The browser app runs WAI Illustrious v17 as a split SDXL ONNX graph using
 ONNX Runtime Web and WebGPU. It loads dual CLIP text encoders, three sequential
-UNet partitions (A, B, C), and the VAE decoder. Model files are cached locally
-in the browser; generation and adapter processing happen in the page.
+UNet partitions (A, B, C), and the VAE decoder. Model files are stored in Cache Storage; generation and adapter processing
+happen in the page. The explicit **Download & cache model** action downloads
+and verifies the complete model set, including both CLIP encoders, all three
+UNet partitions, the VAE encoder and decoder, tokenizer files, weight indexes,
+external-data shards, and the pinned scheduler configuration. New portable
+`.wkimodel` bundles include the scheduler and VAE encoder as well.
 
-The generator prefers ONNX Runtime Web 1.31.1's JSPI build of the native WebGPU
-execution provider when the browser exposes WebAssembly JSPI. The JSPI runtime
-is loaded from jsDelivr; the repository's locally bundled Asyncify WebGPU
-runtime remains the fallback when JSPI is unsupported or its module import
-fails. Add `?runtime=asyncify` to force the local runtime. A JSPI WASM asset
-failure after the module imports still appears as a runtime/session error; use
-the Asyncify override to diagnose that case.
+The generator prefers the locally vendored ONNX Runtime Web 1.31.1 JSPI build
+of the native WebGPU execution provider when the browser exposes WebAssembly
+JSPI. The repository's locally bundled Asyncify WebGPU runtime remains the
+fallback when JSPI is unsupported or its module import fails. Both runtime
+variants and their WASM assets are cached by the experiment's service worker;
+the generator does not import ONNX Runtime from a CDN. Add
+`?runtime=asyncify` to force the local Asyncify runtime.
+
+The model cache is separate from inference: generation reads ONNX graph bytes
+and external weight shards from Cache Storage and passes local buffers/Blob
+objects to ONNX Runtime rather than giving it Hugging Face URLs. Tokenizer
+resources and the scheduler are read through the same local-first cache
+helper. The generator no longer runs a full model-cache verification/download
+pass for every image. If a resource is missing or fails its cached-size check,
+the missing path is logged and a fallback download is made once and cached;
+after a successful **Download & cache model** setup, ordinary generation
+should not need model-host HTTP requests.
+
+The experiment also registers a service worker that precaches the page modules,
+Transformers tokenizer runtime, ONNX Runtime modules, and corresponding WASM
+assets. This keeps the app shell and inference runtime available offline after
+the initial app-shell setup. Model data itself remains in the separate model
+Cache Storage cache.
 
 The three UNet partitions pass intermediate tensors through GPU-resident
 outputs where supported by the current runtime. The Euler ancestral scheduler

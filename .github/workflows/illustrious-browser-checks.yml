@@ -83,3 +83,38 @@ jobs:
           if (failed.length) throw new Error("GPU batch regression checks failed: " + failed.join(", "));
           console.log("Multi-image GPU batch wiring passed: " + required.map(([name]) => name).join(", "));
           NODE
+
+
+      - name: Check local model loading and offline cache contract
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const source = readFileSync("illustrious-experiment/text-to-image.js", "utf8");
+          const cache = readFileSync("illustrious-experiment/model-cache.js", "utf8");
+          const lora = readFileSync("illustrious-experiment/lora-patcher.js", "utf8");
+          const html = readFileSync("illustrious-experiment/index.html", "utf8");
+          const sw = readFileSync("illustrious-experiment/service-worker.js", "utf8");
+          const generateStart = source.indexOf("async function generateMany(");
+          const prepareStart = source.indexOf("async function prepareInferenceEngine(");
+          const externalStart = source.indexOf("async function externalData(");
+          const generateBody = source.slice(generateStart, source.indexOf("\nasync function generate(", generateStart));
+          const prepareBody = source.slice(prepareStart, source.indexOf("\nfunction buildInfillLatentMask", prepareStart));
+          const externalBody = source.slice(externalStart, source.indexOf("\nasync function loadSession", externalStart));
+          const checks = [
+            ["ONNX graphs loaded from cached bytes", source.includes("fetchModelResource(MODEL_BASE + component.onnx") && source.includes("InferenceSession.create(graphData, sessionOptions)")],
+            ["external weights passed as local Blobs", externalBody.includes("fetchModelResource(MODEL_BASE + path") && externalBody.includes("data: await response.blob()")],
+            ["tokenizer resources use model cache", source.includes("const response = await fetchModelResource(url")],
+            ["scheduler included in cache preparation", cache.includes("SCHEDULER_CACHE_PATH") && cache.includes("await cache.put(schedulerKey, response.clone())")],
+            ["scheduler and VAE encoder included in bundles", cache.includes("generationPaths(manifest, true), SCHEDULER_CACHE_PATH")],
+            ["generation avoids repeated full cache verification", !generateBody.includes("prepareModelCache(")],
+            ["engine preparation avoids repeated full cache verification", !prepareBody.includes("prepareModelCache(")],
+            ["fallback downloads are reported", cache.includes("reportCacheMiss") && source.includes("MODEL CACHE MISS")],
+            ["LoRA unpatched shards use cached Blob data", lora.includes("data: await response.blob()") && !lora.includes("data: MODEL_BASE + shard")],
+            ["JSPI runtime is locally imported", source.includes('import("../vendor/onnxruntime-web/ort.jspi.bundle.min.mjs")') && !source.includes("cdn.jsdelivr.net/npm/onnxruntime-web")],
+            ["service worker controls generator bootstrap", html.includes('navigator.serviceWorker.register("./service-worker.js")') && html.includes('await import("./text-to-image.js")')],
+            ["service worker precaches ONNX WASM", sw.includes("ort-wasm-simd-threaded.jspi.wasm") && sw.includes("ort-wasm-simd-threaded.asyncify.wasm")]
+          ];
+          const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);
+          if (failed.length) throw new Error("Offline cache checks failed: " + failed.join(", "));
+          console.log("Offline model cache contract passed: " + checks.map(([name]) => name).join("; "));
+          NODE

@@ -1,28 +1,86 @@
 const MODEL_BASE = "https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17/resolve/main/";
 const SCHEDULER_URL = "https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0/resolve/b41f1c324e32e03f9e104bd9ace0992e4e135597/scheduler/scheduler_config.json";
+const SCHEDULER_CACHE_PATH = "@scheduler/scheduler_config.json";
 const CACHE_NAME = "illustrious-wai-v17-model-v1";
 const BUNDLE_MAGIC = "WKIMDL01";
 const CACHE_PREFIX = "/__illustrious_model_cache__/";
+
+function resourcePath(url) {
+  if (typeof url !== "string") return null;
+  if (url === SCHEDULER_URL) return SCHEDULER_CACHE_PATH;
+  if (!url.startsWith(MODEL_BASE)) return null;
+  return decodeURIComponent(url.slice(MODEL_BASE.length).split("?")[0]);
+}
 
 function cacheKey(path) {
   return new Request(new URL(CACHE_PREFIX + encodeURIComponent(path), location.origin).href);
 }
 
 export function isModelUrl(url) {
-  return typeof url === "string" && url.startsWith(MODEL_BASE);
+  return resourcePath(url) !== null;
+}
+
+function reportCacheMiss(path, callback, reason = "not cached") {
+  const message = "MODEL CACHE MISS · " + path + " · " + reason + "; downloading a fallback copy.";
+  if (typeof callback === "function") callback(path, reason);
+  else console.warn("[Illustrious model cache] " + message);
 }
 
 export async function fetchModelResource(url, options = {}) {
-  if (!isModelUrl(url) || !("caches" in globalThis)) return fetch(url, options);
-  const path = decodeURIComponent(url.slice(MODEL_BASE.length).split("?")[0]);
-  const cache = await caches.open(CACHE_NAME);
+  const { onCacheMiss, expectedSize, forceRefresh, ...requestOptions } = options;
+  const path = resourcePath(url);
+  if (!path) return fetch(url, requestOptions);
+
+  let cache = null;
+  let cacheFailure = "persistent cache entry is missing";
   const key = cacheKey(path);
-  const saved = await cache.match(key);
-  if (saved) return saved;
-  const response = await fetch(url, { ...options, credentials: "omit" });
+  if ("caches" in globalThis) {
+    try {
+      cache = await caches.open(CACHE_NAME);
+      if (!forceRefresh) {
+        const saved = await cache.match(key);
+        if (saved) {
+          if (Number.isSafeInteger(expectedSize)) {
+            const actualSize = (await saved.clone().blob()).size;
+            if (actualSize === expectedSize) return saved;
+            await cache.delete(key);
+            cacheFailure = "cached size mismatch (" + actualSize + " vs " + expectedSize + ")";
+          } else {
+            return saved;
+          }
+        }
+      } else {
+        cacheFailure = "explicit refresh requested";
+      }
+    } catch (error) {
+      cacheFailure = "Cache Storage read failed: " + (error?.message || error);
+      cache = null;
+    }
+  } else {
+    cacheFailure = "Cache Storage is unavailable";
+  }
+
+  reportCacheMiss(path, onCacheMiss, cacheFailure);
+  const fetchOptions = { ...requestOptions, credentials: "omit" };
+  if (forceRefresh) fetchOptions.cache = "no-cache";
+  const response = await fetch(url, fetchOptions);
   if (!response.ok) return response;
-  try { await cache.put(key, response.clone()); }
-  catch (error) { console.warn("Model cache write failed for " + path, error); }
+
+  if (Number.isSafeInteger(expectedSize)) {
+    const actualSize = (await response.clone().blob()).size;
+    if (actualSize !== expectedSize) {
+      throw new Error(path + " size mismatch during fallback download: expected " +
+        expectedSize + ", got " + actualSize + ".");
+    }
+  }
+
+  if (cache) {
+    try {
+      await cache.put(key, response.clone());
+    } catch (error) {
+      console.warn("[Illustrious model cache] Could not cache fallback " + path + ": " + (error?.message || error));
+    }
+  }
   return response;
 }
 
@@ -55,6 +113,23 @@ async function verifyBlob(blob, record, path) {
     const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
     const actual = Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("");
     if (actual !== record.sha256) throw new Error(path + " SHA-256 mismatch.");
+  }
+}
+
+async function sha256Blob(blob) {
+  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  return Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function validSchedulerResponse(response) {
+  try {
+    const config = await response.clone().json();
+    return Number.isInteger(config.num_train_timesteps) &&
+      config.beta_schedule === "scaled_linear" &&
+      config.prediction_type === "epsilon" &&
+      config.timestep_spacing === "leading";
+  } catch {
+    return false;
   }
 }
 
@@ -98,23 +173,38 @@ export async function prepareModelCache(manifest, log, progress, checkCancelled,
       completed++;
       progress?.(completed / total * 100, path);
       if (completed === 1 || completed === total || completed % 5 === 0) {
-        log("Model cache " + completed + "/" + total + " · " + (downloaded ? downloaded + " downloaded" : "checking") +
+        log("Model cache " + completed + "/" + total + " · " +
+          (downloaded ? downloaded + " downloaded" : "checking") +
           " · " + reused + " reused · " + path);
       }
     }
   });
   await Promise.all(workers);
-  const schedulerResponse = await fetch(SCHEDULER_URL, { credentials: "omit", cache: "force-cache" });
-  if (!schedulerResponse.ok) throw new Error("Scheduler config download failed · HTTP " + schedulerResponse.status);
-  const schedulerCache = await caches.open(CACHE_NAME);
-  await schedulerCache.put(cacheKey("@scheduler/scheduler_config.json"), schedulerResponse.clone());
-  log("Model cache ready · " + paths.length + " files · " + downloaded + " downloaded · " + reused + " reused · " +
-    (requiredBytes / 1024 ** 3).toFixed(2) + " GiB verified.");
-  return { paths, bytes: requiredBytes, downloaded, reused };
+
+  const schedulerKey = cacheKey(SCHEDULER_CACHE_PATH);
+  let schedulerResponse = await cache.match(schedulerKey);
+  if (schedulerResponse && !(await validSchedulerResponse(schedulerResponse))) {
+    await cache.delete(schedulerKey);
+    schedulerResponse = null;
+  }
+  if (schedulerResponse) {
+    reused++;
+  } else {
+    const response = await fetch(SCHEDULER_URL, { credentials: "omit", cache: "force-cache" });
+    if (!response.ok) throw new Error("Scheduler config download failed · HTTP " + response.status);
+    if (!(await validSchedulerResponse(response))) throw new Error("Scheduler config download was invalid or incompatible.");
+    await cache.put(schedulerKey, response.clone());
+    downloaded++;
+  }
+
+  const totalFiles = paths.length + 1;
+  log("Model cache ready · " + totalFiles + " files including scheduler · " + downloaded +
+    " downloaded · " + reused + " reused · " + (requiredBytes / 1024 ** 3).toFixed(2) + " GiB verified.");
+  return { paths, bytes: requiredBytes, downloaded, reused, totalFiles };
 }
 
 export async function exportModelBundle(manifest, log) {
-  const paths = generationPaths(manifest);
+  const paths = [...generationPaths(manifest, true), SCHEDULER_CACHE_PATH];
   const cache = await caches.open(CACHE_NAME);
   const entries = [];
   const blobs = [];
@@ -123,9 +213,14 @@ export async function exportModelBundle(manifest, log) {
     const response = await cache.match(cacheKey(path));
     if (!response) throw new Error("Model cache is incomplete; missing " + path + ". Prepare the cache first.");
     const blob = await response.blob();
-    const record = fileRecord(manifest, path);
+    const record = path === SCHEDULER_CACHE_PATH ? null : fileRecord(manifest, path);
     await verifyBlob(blob, record, path);
-    entries.push({ path, offset, size: blob.size, sha256: record?.sha256 || null });
+    entries.push({
+      path,
+      offset,
+      size: blob.size,
+      sha256: record?.sha256 || (path === SCHEDULER_CACHE_PATH ? await sha256Blob(blob) : null)
+    });
     blobs.push(blob);
     offset += blob.size;
   }
@@ -134,7 +229,8 @@ export async function exportModelBundle(manifest, log) {
   new Uint8Array(prefix).set(new TextEncoder().encode(BUNDLE_MAGIC));
   new DataView(prefix).setUint32(8, header.length, true);
   const bundle = new Blob([prefix, header, ...blobs], { type: "application/octet-stream" });
-  log("Created model bundle · " + entries.length + " files · " + (bundle.size / 1024 ** 3).toFixed(2) + " GiB.");
+  log("Created model bundle · " + entries.length + " files including VAE encoder and scheduler · " +
+    (bundle.size / 1024 ** 3).toFixed(2) + " GiB.");
   return bundle;
 }
 
@@ -148,23 +244,44 @@ export async function importModelBundle(file, manifest, log, progress) {
     throw new Error("Unsupported model bundle version or model identifier.");
   }
   const required = new Set(generationPaths(manifest));
+  const allKnown = new Set(generationPaths(manifest, true));
   const supplied = new Set(header.entries.map(entry => entry.path));
   for (const path of required) if (!supplied.has(path)) throw new Error("Model bundle is incomplete; missing " + path + ".");
   const cache = await caches.open(CACHE_NAME);
   const records = new Map((manifest.files || []).map(item => [item.path, item]));
   let done = 0;
   for (const entry of header.entries) {
-    const record = records.get(entry.path);
-    if (!record || entry.size !== record.size || (record.sha256 && entry.sha256 !== record.sha256)) {
+    const isScheduler = entry.path === SCHEDULER_CACHE_PATH;
+    const record = isScheduler ? null : records.get(entry.path);
+    if (!allKnown.has(entry.path) && !isScheduler) throw new Error("Model bundle contains an unexpected file " + entry.path + ".");
+    if (!isScheduler && (!record || entry.size !== record.size ||
+        (record.sha256 && entry.sha256 !== record.sha256))) {
       throw new Error("Bundle manifest does not match current model file " + entry.path + ".");
     }
     const start = 12 + headerLength + entry.offset;
     const blob = file.slice(start, start + entry.size);
-    await verifyBlob(blob, record, entry.path);
+    if (isScheduler) {
+      if (!entry.sha256 || await sha256Blob(blob) !== entry.sha256 ||
+          !(await validSchedulerResponse(new Response(blob)))) {
+        throw new Error("Bundle scheduler config failed integrity or compatibility checks.");
+      }
+    } else {
+      await verifyBlob(blob, record, entry.path);
+    }
     await cache.put(cacheKey(entry.path), new Response(blob, { headers: { "Content-Type": "application/octet-stream" } }));
     done++;
     progress?.(done / header.entries.length * 100, entry.path);
     if (done === 1 || done === header.entries.length || done % 5 === 0) log("Imported " + done + "/" + header.entries.length + " model files · " + entry.path);
+  }
+  if (!supplied.has(SCHEDULER_CACHE_PATH)) {
+    log("Legacy bundle has no scheduler config · downloading the pinned scheduler during this explicit import.");
+    const response = await fetchModelResource(SCHEDULER_URL, {
+      onCacheMiss: path => log("MODEL CACHE MISS · " + path + " · completing legacy bundle import.")
+    });
+    if (!response.ok || !(await validSchedulerResponse(response))) {
+      throw new Error("Could not complete the imported bundle's scheduler config.");
+    }
+    done++;
   }
   log("Model bundle import complete · " + done + " verified files.");
   return done;

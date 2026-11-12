@@ -13,15 +13,15 @@ const runtimePreference = new URLSearchParams(window.location.search).get("runti
 const graphCaptureEnabled = new URLSearchParams(window.location.search).get("graphCapture") === "1";
 const keepVaeResident = new URLSearchParams(window.location.search).get("keepVae") === "1";
 const preferredUnetLayout = new URLSearchParams(window.location.search).get("layout") === "NHWC" ? "NHWC" : null;
-const JSPI_RUNTIME_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/";
+const LOCAL_ORT_BASE = new URL("../vendor/onnxruntime-web/", import.meta.url).href;
 
 async function loadOrtRuntime() {
   const jspiSupported = typeof WebAssembly.Suspending === "function" &&
     typeof WebAssembly.promising === "function";
   if (runtimePreference !== "asyncify" && jspiSupported) {
     try {
-      const runtime = await import(JSPI_RUNTIME_BASE + "ort.jspi.min.mjs");
-      runtime.env.wasm.wasmPaths = JSPI_RUNTIME_BASE;
+      const runtime = await import("../vendor/onnxruntime-web/ort.jspi.bundle.min.mjs");
+      runtime.env.wasm.wasmPaths = LOCAL_ORT_BASE;
       runtime.env.wasm.numThreads = 0;
       runtime.env.logLevel = "warning";
       return {
@@ -198,8 +198,12 @@ function formatBytes(bytes) {
   return (bytes / 1024 ** 2).toFixed(1) + " MiB";
 }
 
-async function fetchJSON(url, label) {
-  const response = await fetchModelResource(url, { credentials: "omit" });
+async function fetchJSON(url, label, forceRefresh = false) {
+  const response = await fetchModelResource(url, {
+    credentials: "omit",
+    forceRefresh,
+    onCacheMiss: path => log("MODEL CACHE MISS · " + path + " · using a visible fallback download.")
+  });
   if (!response.ok) throw new Error(label + " request failed: HTTP " + response.status);
   return response.json();
 }
@@ -212,14 +216,20 @@ async function loadTokenizer(subfolder) {
 
   async function readJSON(filename) {
     const url = folderURL + filename;
-    const response = await fetchModelResource(url, { credentials: "omit" });
+    const response = await fetchModelResource(url, {
+      credentials: "omit",
+      onCacheMiss: path => log("MODEL CACHE MISS · " + path + " · using a visible fallback download.")
+    });
     if (!response.ok) throw new Error("Tokenizer request failed: " + filename + " · HTTP " + response.status);
     return response.json();
   }
 
   async function readText(filename) {
     const url = folderURL + filename;
-    const response = await fetch(url, { credentials: "omit" });
+    const response = await fetchModelResource(url, {
+      credentials: "omit",
+      onCacheMiss: path => log("MODEL CACHE MISS · " + path + " · using a visible fallback download.")
+    });
     if (!response.ok) throw new Error("Tokenizer request failed: " + filename + " · HTTP " + response.status);
     return response.text();
   }
@@ -409,13 +419,23 @@ function imageTensorValues(tensor, label) {
     " for dtype " + tensor.type + ".");
 }
 
-function externalData(component) {
+async function externalData(component, manifest) {
   if (!component?.onnx || !Array.isArray(component.shards) || !component.shards.length) {
     throw new Error("Model manifest component is missing its ONNX graph or external-data shards.");
   }
-  return component.shards.map(path => ({
-    path: path.slice(path.lastIndexOf("/") + 1),
-    data: MODEL_BASE + path
+  const records = new Map((manifest?.files || []).map(item => [item.path, item]));
+  return Promise.all(component.shards.map(async path => {
+    const record = records.get(path);
+    const response = await fetchModelResource(MODEL_BASE + path, {
+      credentials: "omit",
+      expectedSize: record?.size,
+      onCacheMiss: missing => log("MODEL CACHE MISS · " + missing + " · downloading a visible fallback copy.")
+    });
+    if (!response.ok) throw new Error("External weight shard request failed: " + path + " · HTTP " + response.status);
+    return {
+      path: path.slice(path.lastIndexOf("/") + 1),
+      data: await response.blob()
+    };
   }));
 }
 
@@ -431,16 +451,25 @@ async function loadSession(
   const component = manifest?.components?.[key];
   const started = performance.now();
   log("Loading " + label + " (" + formatBytes(component?.bytes) + ")…");
+  const graphRecord = (manifest.files || []).find(item => item.path === component.onnx);
+  const graphResponse = await fetchModelResource(MODEL_BASE + component.onnx, {
+    credentials: "omit",
+    expectedSize: graphRecord?.size,
+    onCacheMiss: path => log("MODEL CACHE MISS · " + path + " · downloading a visible fallback copy.")
+  });
+  if (!graphResponse.ok) throw new Error(label + " ONNX graph request failed · HTTP " + graphResponse.status);
+  const graphData = await graphResponse.arrayBuffer();
+  const weightData = patchedExternalData || await externalData(component, manifest);
   const sessionOptions = {
     executionProviders: preferredLayout
       ? [{ name: "webgpu", preferredLayout }]
       : ["webgpu"],
     graphOptimizationLevel: "all",
-    externalData: patchedExternalData || externalData(component)
+    externalData: weightData
   };
   if (preferredOutputLocation) sessionOptions.preferredOutputLocation = preferredOutputLocation;
   if (enableGraphCapture) sessionOptions.enableGraphCapture = true;
-  const session = await ort.InferenceSession.create(MODEL_BASE + component.onnx, sessionOptions);
+  const session = await ort.InferenceSession.create(graphData, sessionOptions);
   log(label + " session created in " + ((performance.now() - started) / 1000).toFixed(2) +
     "s · inputs: " + session.inputNames.join(", ") +
     (preferredOutputLocation ? " · GPU-resident outputs enabled" : "") +
@@ -1824,14 +1853,7 @@ async function prepareInferenceEngine() {
       " · maxStorageBufferBindingSize " + formatBytes(adapter.limits?.maxStorageBufferBindingSize || 0));
 
     const manifest = await fetchJSON(MANIFEST_URL, "Model manifest");
-    setProgress(1, "Preparing model downloads");
-    setStatus("Downloading and verifying model files into persistent browser cache…");
-    const cacheResult = await prepareModelCache(manifest, log,
-      (value, path) => setProgress(1 + value * 5, "Caching model files · " + path),
-      checkCancelled);
-    log("Preload complete · " + cacheResult.downloaded + " new downloads, " +
-      cacheResult.reused + " cached files.");
-
+    log("Using the local model cache for CLIP and UNet resources. Missing files will be reported before any fallback download.");
     setStatus("Precomputing prompt conditioning…");
     setProgress(7, "Precomputing prompt conditioning");
     const conditioning = await getConditioning(manifest, options);
@@ -2030,16 +2052,7 @@ async function generateMany(imageOptionsList, infillData = null, onImage = null)
   }
 
   const manifest = await fetchJSON(MANIFEST_URL, "Model manifest");
-  setProgress(1, "Preparing model downloads");
-  setStatus("Downloading and verifying model files into persistent browser cache…");
-  const cacheResult = await prepareModelCache(
-    manifest,
-    log,
-    (value, path) => setProgress(1 + value * 5, "Caching model files · " + path),
-    checkCancelled,
-    Boolean(infillData)
-  );
-  log("Preload complete · " + cacheResult.downloaded + " new downloads, " + cacheResult.reused + " cached files.");
+  setProgress(1, "Reading cached model metadata");
   const schedulerConfig = await fetchJSON(SCHEDULER_URL, "Scheduler config");
   const latentWidth = options.width / 8;
   const latentHeight = options.height / 8;
@@ -2437,14 +2450,14 @@ const cacheStatus = document.querySelector("#modelCacheStatus");
 const importBundleInput = document.querySelector("#importModelBundleFile");
 document.querySelector("#prepareModelCache")?.addEventListener("click", async () => {
   try {
-    const manifest = await fetchJSON(MANIFEST_URL, "Model manifest");
+    const manifest = await fetchJSON(MANIFEST_URL, "Model manifest", true);
     const result = await prepareModelCache(manifest, message => {
       cacheStatus.textContent = message;
       console.log("[Model cache] " + message);
     }, (value, path) => {
       cacheStatus.textContent = "Caching " + Math.round(value) + "% · " + path;
-    }, () => {});
-    cacheStatus.textContent = "Ready · " + result.paths.length + " files · " +
+    }, () => {}, true);
+    cacheStatus.textContent = "Ready · " + result.totalFiles + " files including VAE encoder and scheduler · " +
       (result.bytes / 1024 ** 3).toFixed(2) + " GiB · " + result.reused + " reused.";
   } catch (error) {
     cacheStatus.textContent = "Cache preparation failed: " + error.message;
@@ -2471,7 +2484,7 @@ importBundleInput?.addEventListener("change", async () => {
   const file = importBundleInput.files?.[0];
   if (!file) return;
   try {
-    const manifest = await fetchJSON(MANIFEST_URL, "Model manifest");
+    const manifest = await fetchJSON(MANIFEST_URL, "Model manifest", true);
     cacheStatus.textContent = "Importing and verifying model bundle…";
     const count = await importModelBundle(file, manifest, message => cacheStatus.textContent = message,
       value => cacheStatus.textContent = "Importing " + Math.round(value) + "%…");

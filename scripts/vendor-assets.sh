@@ -21,6 +21,17 @@ for extension in mjs wasm; do
   fi
   cp "$TMP/ort/package/dist/$file" vendor/onnxruntime-web/
 done
+# The Illustrious generator uses the local JSPI build for Blob-backed
+# external weight shards, avoiding CDN imports during inference.
+cp "$TMP/ort/package/dist/ort.jspi.bundle.min.mjs" vendor/onnxruntime-web/
+for extension in mjs wasm; do
+  file="ort-wasm-simd-threaded.jspi.$extension"
+  if [ ! -f "$TMP/ort/package/dist/$file" ]; then
+    echo "Missing required ONNX Runtime JSPI asset: $file" >&2
+    exit 1
+  fi
+  cp "$TMP/ort/package/dist/$file" vendor/onnxruntime-web/
+done
 
 # The NoobAI SDXL experiment uses the official JSPI build. It accepts Blob
 # external-data files so OPFS-backed weights do not need one giant JS buffer.
