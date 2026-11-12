@@ -26,10 +26,9 @@ The generator prefers ONNX Runtime Web 1.31.1's JSPI build of the native WebGPU
 execution provider when the browser exposes WebAssembly JSPI. The JSPI runtime
 is loaded from jsDelivr; the repository's locally bundled Asyncify WebGPU
 runtime remains the fallback when JSPI is unsupported or its module import
-fails. Add `?runtime=asyncify` to force the local runtime, or
-`?runtime=jspi` to require JSPI and surface module-load errors. A JSPI WASM
-asset failure after the module imports still appears as a runtime/session error;
-use the Asyncify override to diagnose that case.
+fails. Add `?runtime=asyncify` to force the local runtime. A JSPI WASM asset
+failure after the module imports still appears as a runtime/session error; use
+the Asyncify override to diagnose that case.
 
 The three UNet partitions pass intermediate tensors through GPU-resident
 outputs where supported by the current runtime. The Euler ancestral scheduler
