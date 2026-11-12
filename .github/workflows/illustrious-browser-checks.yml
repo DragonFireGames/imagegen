@@ -56,3 +56,24 @@ jobs:
           }
           console.log("Persistent UNet output flag is in scope for try/finally.");
           NODE
+
+      - name: Check sequential batch generation wiring
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const source = readFileSync("illustrious-experiment/text-to-image.js", "utf8");
+          const html = readFileSync("illustrious-experiment/index.html", "utf8");
+          const required = [
+            ["batch control", html.includes('id="generationBatch"') && html.includes('max="20"')],
+            ["sequential loop", source.includes("for (let index = 0; index < batchCount; index++)")],
+            ["await each image", source.includes("await generate(imageOptions, infillData)")],
+            ["fixed seeds increment", source.includes("baseSeed + index")],
+            ["random seed per image", source.includes("randomSeed ? resolveGenerationSeed(-1) : baseSeed + index")],
+            ["keep previous results", source.includes("appendGeneratedResult(blob, imageOptions, index, batchCount)")],
+            ["batch settings export", source.includes("batchCount: fields.batch.value === \"\" ? null : Number(fields.batch.value)")],
+            ["settings v2 compatibility", source.includes("settings.version !== 2 && settings.version !== GENERATION_SETTINGS_VERSION")]
+          ];
+          const failed = required.filter(([, passed]) => !passed).map(([name]) => name);
+          if (failed.length) throw new Error("Batch regression checks failed: " + failed.join(", "));
+          console.log("Sequential batch wiring passed: " + required.map(([name]) => name).join(", "));
+          NODE
