@@ -311,9 +311,21 @@ Both routes target browser-native inference: model computation occurs inside the
 
 ## Browser text-to-image pipeline
 
-The generator keeps the two CLIP encoders sequential to limit peak memory, then creates a two-item CFG batch (negative first, positive second). At every scheduler step, the same scaled latent is duplicated into batch 2; UNET_A produces the shared embedding and skip tensors, UNET_B consumes its A intermediates, and UNET_C consumes B's hidden output plus A's remaining skips. The guided epsilon prediction is combined on the CPU and passed to the Euler ancestral update. After the last step, all three UNet sessions are released before the VAE decoder loads.
+The generator keeps the two CLIP encoders sequential to limit peak memory, then creates a two-item CFG batch (negative first, positive second). At every scheduler step, the same scaled latent is duplicated into batch 2. UNET_A is configured with `preferredOutputLocation: 'gpu-buffer'` for its hidden, embedding, and skip outputs; UNET_B receives the A output Tensor objects directly and keeps `hidden_out` GPU-resident; UNET_C receives B's hidden output plus A's remaining skips directly. The A→B→C intermediate handoffs therefore avoid explicit JS typed-array materialization and re-upload. UNET_C's final `out_sample` remains a CPU output for classifier-free guidance and the Euler ancestral update, so this is a GPU-resident inter-partition handoff, not a fully GPU-resident denoising loop. ORT-owned GPU output tensors are explicitly disposed after their final consumer. GPU tensor location and shapes are checked at runtime; unsupported cross-session binding fails visibly rather than silently falling back. After preparation, all three UNet sessions remain resident between images.
 
 The initial latent and per-step ancestral noise use a deterministic seeded PRNG. The default 1024×1024 / 28-step / CFG 5 settings match the candidate pack's published defaults. The first end-to-end browser run succeeded on the WAI v17 base weights without Personal Ami: 1024×1024, 28 Euler ancestral steps, CFG 5, seed 1337, and a 1.8 MiB PNG. All three UNet sessions were created simultaneously (4.79 GiB manifest payload), remained resident for the denoising loop, and were released before the VAE decoder loaded. CLIP conditioning completed, all 28 steps produced finite latents, and VAE decoding/canvas conversion succeeded. The supplied log reports 9,156.16 seconds total elapsed, while the 28 per-step scheduler intervals sum to about 574.27 seconds; the large gaps between some steps appear to be idle/suspension time rather than model execution. The optional Personal Ami toggle now routes the local adapter through the five-component patcher; integrated browser execution remains unverified.
+
+
+## Experimental GPU-resident UNet handoffs
+
+The split denoiser now requests selected UNET_A and UNET_B outputs in ONNX Runtime Web's `gpu-buffer` location. The returned ORT Tensor objects are passed directly as inputs to the next partition:
+
+- UNET_A → UNET_B: `hidden`, `emb`, `skip_6`, `skip_7`, `skip_8`
+- UNET_A + UNET_B → UNET_C: `emb`, `skip_0`…`skip_5`, `hidden_out`
+
+The app validates each intermediate's FP16 dtype, exact dimensions, GPU location, and exposed `GPUBuffer`. ORT-owned output tensors are disposed after their final downstream use. UNET_C's `out_sample` remains CPU-resident for the current CPU classifier-free guidance and scheduler math.
+
+This relies on ONNX Runtime Web's documented WebGPU I/O binding (`preferredOutputLocation: 'gpu-buffer'` and GPU-backed Tensor inputs). It has passed static syntax and wiring checks, but **still requires browser validation with the actual 1.31.1 bundle and all three large sessions**. If the runtime rejects cross-session GPU tensors, the error is deliberately surfaced; no silent CPU fallback is claimed. The expected benefit is eliminating JS-visible intermediate downloads and re-uploads, but the speedup is not yet measured.
 
 ## Offline LoRA fusion and ONNX reference export
 
