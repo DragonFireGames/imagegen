@@ -756,7 +756,9 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
     let outputTensor = outputsC.out_sample;
     if (sessions.graphCapture) {
       validateGpuTensor(outputTensor, "UNET_C out_sample", shape(4, latentHeight, latentWidth));
+      const readbackStarted = performance.now();
       outputTensor = { type: outputTensor.type, dims: outputTensor.dims, data: await outputTensor.getData() };
+      timings.readback = (performance.now() - readbackStarted) / 1000;
     }
     const noisePrediction = fp16Values(outputTensor, "UNET_C out_sample",
       [batch, 4, latentHeight, latentWidth]);
@@ -774,8 +776,8 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
 
     log("Step denoiser timing · A " + timings.a.toFixed(2) + "s · B " +
       timings.b.toFixed(2) + "s · C " + timings.c.toFixed(2) +
-      "s · CFG " + cfg + " · A→B→C GPU-resident" +
-      (sessions.graphCapture ? " · graph capture replay" : " · standard dispatch"));
+      "s · CFG " + cfg + " · batch " + batch + " · A→B→C GPU-resident" +
+      (sessions.graphCapture ? " · graph capture replay · C readback " + timings.readback.toFixed(3) + "s" : " · standard dispatch"));
     return { guided, timings };
   } finally {
     disposeRemaining(outputsC);
