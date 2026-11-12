@@ -122,3 +122,31 @@ jobs:
           if (failed.length) throw new Error("Offline cache checks failed: " + failed.join(", "));
           console.log("Offline model cache contract passed: " + checks.map(([name]) => name).join("; "));
           NODE
+
+      - name: Check opt-in WebGPU validation mode and profiling diagnostics
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const source = readFileSync("illustrious-experiment/text-to-image.js", "utf8");
+          const readme = readFileSync("illustrious-experiment/README.md", "utf8");
+          const loadStart = source.indexOf("async function loadSession(");
+          const loadEnd = source.indexOf("\nfunction canBatchEncoder", loadStart);
+          const buildStart = source.indexOf("async function buildUnetSessions(");
+          const buildEnd = source.indexOf("\nasync function ensureUnetSessions", buildStart);
+          const load = source.slice(loadStart, loadEnd);
+          const build = source.slice(buildStart, buildEnd);
+          const checks = [
+            ["WebGPU-only validation is passed through to ORT", load.includes("if (validationMode) webgpuProvider.validationMode = validationMode;")],
+            ["default provider options remain unchanged when no override is selected", load.includes('executionProviders: preferredLayout || validationMode') && load.includes(': ["webgpu"]')],
+            ["validation override is limited to UNet A/B/C session construction", (build.match(/preferredLayout, validationMode/g) || []).length === 3],
+            ["mode is restricted to documented values", source.includes('["basic", "wgpuOnly", "full"].includes(requestedUnetValidationMode)')],
+            ["validation mode participates in resident-session cache identity", source.includes('"|validation:" + (preferredUnetValidationMode || "ort-default")')],
+            ["default validation remains ORT basic", source.includes('preferredUnetValidationMode || "ORT default (basic)"')],
+            ["legacy GPU profiling switch no longer enables unsupported profiling API", !source.includes("ort.env.webgpu.profiling =") && source.includes("gpuProfilingRequested")],
+            ["README describes profiling limitation", readme.includes("does not currently expose per-operator GPU profile traces to JavaScript")],
+            ["README documents validation mode and unchanged default", readme.includes("`?validation=wgpuOnly`") && readme.includes("default is unchanged")]
+          ];
+          const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);
+          if (failed.length) throw new Error("Optimization-setting checks failed: " + failed.join(", "));
+          console.log("Optimization-setting checks passed: " + checks.map(([name]) => name).join("; "));
+          NODE
