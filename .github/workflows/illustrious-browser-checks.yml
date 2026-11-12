@@ -129,7 +129,7 @@ jobs:
           import { readFileSync } from "node:fs";
           const source = readFileSync("illustrious-experiment/text-to-image.js", "utf8");
           const readme = readFileSync("illustrious-experiment/README.md", "utf8");
-          const normalizedReadme = readme.replace(/\\s+/g, " ");
+          const normalizedReadme = readme.replace(/\s+/g, " ");
           const loadStart = source.indexOf("async function loadSession(");
           const loadEnd = source.indexOf("\nfunction canBatchEncoder", loadStart);
           const buildStart = source.indexOf("async function buildUnetSessions(");
@@ -139,7 +139,7 @@ jobs:
           const checks = [
             ["WebGPU-only validation is passed through to ORT", load.includes("if (validationMode) webgpuProvider.validationMode = validationMode;")],
             ["default provider options remain unchanged when no override is selected", load.includes('executionProviders: preferredLayout || validationMode') && load.includes(': ["webgpu"]')],
-            ["validation override is limited to UNet A/B/C session construction", (build.match(/preferredLayout,\\s*validationMode/g) || []).length === 3],
+            ["validation override is limited to UNet A/B/C session construction", (build.match(/preferredLayout,\s*validationMode/g) || []).length === 3],
             ["mode is restricted to documented values", source.includes('["basic", "wgpuOnly", "full"].includes(requestedUnetValidationMode)')],
             ["validation mode participates in resident-session cache identity", source.includes('"|validation:" + (validationMode || "ort-default")')],
             ["default validation remains ORT basic", source.includes('preferredUnetValidationMode || "ORT default (basic)"')],
