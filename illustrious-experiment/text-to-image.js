@@ -120,7 +120,10 @@ async function fetchJSON(url, label) {
   return response.json();
 }
 
+const tokenizerCache = new Map();
+
 async function loadTokenizer(subfolder) {
+  if (tokenizerCache.has(subfolder)) return tokenizerCache.get(subfolder);
   const folderURL = MODEL_BASE + subfolder + "/";
 
   async function readJSON(filename) {
@@ -250,6 +253,7 @@ async function loadTokenizer(subfolder) {
   if (tokenizer.bos_token_id !== bosId || tokenizer.eos_token_id !== eosId) {
     throw new Error(subfolder + " CLIP tokenizer special-token IDs did not initialize correctly.");
   }
+  tokenizerCache.set(subfolder, tokenizer);
   return tokenizer;
 }
 
@@ -506,9 +510,11 @@ function createRng(seed) {
   };
 }
 
-function createNormalNoise(length, seed) {
+function createNormalNoise(length, seed, output = new Float32Array(length)) {
+  if (!(output instanceof Float32Array) || output.length !== length) {
+    throw new Error("Reusable Gaussian-noise buffer has an unexpected size or type.");
+  }
   const random = createRng(seed);
-  const output = new Float32Array(length);
   for (let i = 0; i < length; i += 2) {
     const u1 = Math.max(random(), 1e-9);
     const u2 = random();
@@ -1854,6 +1860,7 @@ async function generate(options, infillData = null) {
     gpuScheduler.initialize(latents, new Float16Array(initialScaled));
   }
   let totalUnetExecutionSeconds = 0;
+  const stepNoise = new Float32Array(latentSize);
   log("All three UNet sessions are resident. Beginning " + options.steps + " denoising steps." +
     (gpuScheduler ? " GPU scheduler avoids per-step latent readback." : ""));
   await yieldFrames();
@@ -1876,7 +1883,7 @@ async function generate(options, infillData = null) {
       step
     );
     totalUnetExecutionSeconds += denoiser.timings.a + denoiser.timings.b + denoiser.timings.c;
-    const noise = createNormalNoise(latentSize, options.seed + step + 1);
+    const noise = createNormalNoise(latentSize, options.seed + step + 1, stepNoise);
     if (gpuScheduler) {
       gpuScheduler.step(noise, scheduler.stepParameters(step, options.cfg, sessions.batchSize));
     } else {
