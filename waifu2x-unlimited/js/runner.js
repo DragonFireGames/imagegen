@@ -1,6 +1,6 @@
-import { CONFIG } from "./models.js";
-import { onnxSession } from "./utils.js";
-import { SeamBlending } from "./seam_blending.js";
+import { CONFIG } from "./models.js?v=20261112-fix2";
+import { onnxSession } from "./utils.js?v=20261112-fix2";
+import { SeamBlending } from "./seam_blending.js?v=20261112-fix2";
 
 export const onnxRunner = {
     stop_flag: false,

@@ -1,5 +1,5 @@
-import { CONFIG } from "./models.js";
-import { onnxSession } from "./utils.js";
+import { CONFIG } from "./models.js?v=20261112-fix2";
+import { onnxSession } from "./utils.js?v=20261112-fix2";
 
 const BLEND_SIZE = 16;
 

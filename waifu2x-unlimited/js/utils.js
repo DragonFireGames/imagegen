@@ -33,26 +33,23 @@ export const onnxSession = {
 };
 
 export function decodeImage(image) {
-    const [width, height] = [image.naturalWidth, image.naturalHeight];
-    const canvas = new OffscreenCanvas(width, height);
-    const gl = canvas.getContext("webgl");
-    gl.activeTexture(gl.TEXTURE0);
-    const texture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    if (!image || !image.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+        throw new Error("The selected image is not fully loaded or has invalid dimensions.");
+    }
 
-    const image_data = new ImageData(width, height);
-    const framebuffer = gl.createFramebuffer();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
-    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, image_data.data);
-    gl.deleteTexture(texture);
-    gl.deleteFramebuffer(framebuffer);
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    const canvas = typeof OffscreenCanvas !== "undefined"
+        ? new OffscreenCanvas(width, height)
+        : Object.assign(document.createElement("canvas"), { width, height });
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
-    return image_data;
+    if (!ctx) {
+        throw new Error("Could not create a 2D canvas context to decode the selected image.");
+    }
+
+    ctx.drawImage(image, 0, 0, width, height);
+    return ctx.getImageData(0, 0, width, height);
 }
 
 export function checkClipboard() {
