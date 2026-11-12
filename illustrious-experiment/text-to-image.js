@@ -16,7 +16,7 @@ const preferredUnetLayout = new URLSearchParams(window.location.search).get("lay
 const requestedUnetValidationMode = new URLSearchParams(window.location.search).get("validation");
 const preferredUnetValidationMode = ["disabled", "wgpuOnly", "basic", "full"].includes(requestedUnetValidationMode)
   ? requestedUnetValidationMode
-  : null;
+  : "wgpuOnly";
 const LOCAL_ORT_BASE = new URL("../vendor/onnxruntime-web/", import.meta.url).href;
 
 async function loadOrtRuntime() {
@@ -1708,7 +1708,7 @@ async function ensureUnetSessions(
     (useGpuScheduler ? "|gpu-scheduler" : "|cpu-scheduler") +
     (graphCaptureEnabled ? "|graph-capture" : "|standard-dispatch") +
     "|" + (preferredUnetLayout || "default-layout") +
-    "|validation:" + (validationMode || "ort-default");
+    "|validation:" + (validationMode || "wgpuOnly");
   if (residentUnetSessions && residentUnetKey === key) {
     log("Reusing resident UNET_A, UNET_B, and UNET_C sessions.");
     residentUnetSessions.gpuInputs.updateConditioning(conditioning, conditioningIndex);
@@ -2107,7 +2107,7 @@ async function generateMany(imageOptionsList, infillData = null, onImage = null)
   log(runtimeLabel + ".");
   if (runtimeNote) log(runtimeNote);
   log("UNet preferred layout · " + (preferredUnetLayout || "NCHW (default)") + ".");
-  log("UNet validation mode · " + (preferredUnetValidationMode || "ORT default (basic)") +
+  log("UNet validation mode · " + (preferredUnetValidationMode || "wgpuOnly") +
     (preferredUnetValidationMode === "wgpuOnly"
       ? " · retains WebGPU/Dawn validation; skips additional ONNX basic validation."
       : preferredUnetValidationMode === "disabled"
