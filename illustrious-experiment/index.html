@@ -148,14 +148,36 @@
   <script type="module">
     if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
       try {
-        await navigator.serviceWorker.register("./service-worker.js");
-        await navigator.serviceWorker.ready;
-        if (!navigator.serviceWorker.controller) {
-          await Promise.race([
-            new Promise(resolve => navigator.serviceWorker.addEventListener("controllerchange", resolve, { once: true })),
-            new Promise(resolve => setTimeout(resolve, 3000))
-          ]);
+        const appScope = new URL("./", location.href).href;
+        const rootWorkerUrl = new URL("../service-worker.js", location.href).href;
+        const controllerChanged = navigator.serviceWorker.controller?.scriptURL === rootWorkerUrl
+          ? Promise.resolve()
+          : new Promise(resolve => {
+            const listener = () => {
+              if (navigator.serviceWorker.controller?.scriptURL === rootWorkerUrl) {
+                navigator.serviceWorker.removeEventListener("controllerchange", listener);
+                resolve();
+              }
+            };
+            navigator.serviceWorker.addEventListener("controllerchange", listener);
+            setTimeout(() => {
+              navigator.serviceWorker.removeEventListener("controllerchange", listener);
+              resolve();
+            }, 5000);
+          });
+
+        // Retire the previous narrow-scope worker, which could not intercept
+        // requests to shared runtime assets outside this experiment folder.
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        for (const registration of registrations) {
+          if (registration.scope === appScope && registration.active?.scriptURL !== rootWorkerUrl) {
+            await registration.unregister();
+          }
         }
+
+        await navigator.serviceWorker.register(rootWorkerUrl, { scope: "../" });
+        await navigator.serviceWorker.ready;
+        await controllerChanged;
       } catch (error) {
         console.warn("[Illustrious] Offline app-shell cache is unavailable:", error);
       }

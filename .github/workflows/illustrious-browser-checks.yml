@@ -35,6 +35,7 @@ jobs:
             echo "Checking $file"
             node --input-type=module --check < "$file"
           done < <(find illustrious-experiment -type f -name '*.js' -print0)
+          node --input-type=module --check < service-worker.js
 
       - name: Check persistent UNet output flag scope
         run: |
@@ -93,7 +94,7 @@ jobs:
           const cache = readFileSync("illustrious-experiment/model-cache.js", "utf8");
           const lora = readFileSync("illustrious-experiment/lora-patcher.js", "utf8");
           const html = readFileSync("illustrious-experiment/index.html", "utf8");
-          const sw = readFileSync("illustrious-experiment/service-worker.js", "utf8");
+          const sw = readFileSync("service-worker.js", "utf8");
           const generateStart = source.indexOf("async function generateMany(");
           const prepareStart = source.indexOf("async function prepareInferenceEngine(");
           const externalStart = source.indexOf("async function externalData(");
@@ -111,7 +112,10 @@ jobs:
             ["fallback downloads are reported", cache.includes("reportCacheMiss") && source.includes("MODEL CACHE MISS")],
             ["LoRA unpatched shards use cached Blob data", lora.includes("data: await response.blob()") && !lora.includes("data: MODEL_BASE + shard")],
             ["JSPI runtime is locally imported", source.includes('import("../vendor/onnxruntime-web/ort.jspi.bundle.min.mjs")') && !source.includes("cdn.jsdelivr.net/npm/onnxruntime-web")],
-            ["service worker controls generator bootstrap", html.includes('navigator.serviceWorker.register("./service-worker.js")') && html.includes('await import("./text-to-image.js")')],
+            ["service worker has project-root scope for vendor interception", html.includes('new URL("../service-worker.js", location.href)') && html.includes('navigator.serviceWorker.register(rootWorkerUrl, { scope: "../" })')],
+            ["old narrow-scope worker is explicitly retired", html.includes('registration.scope === appScope') && html.includes("await registration.unregister()")],
+            ["service worker resolves experiment and vendor assets under their actual folders", sw.includes('new URL("./illustrious-experiment/", self.registration.scope)') && sw.includes('new URL("../vendor/", APP_SCOPE)')],
+            ["service worker limits request interception", sw.includes("if (!inExperiment && !inVendor) return;")],
             ["service worker precaches ONNX WASM", sw.includes("ort-wasm-simd-threaded.jspi.wasm") && sw.includes("ort-wasm-simd-threaded.asyncify.wasm")]
           ];
           const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);
