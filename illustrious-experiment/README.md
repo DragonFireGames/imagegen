@@ -57,9 +57,24 @@ is available. A resident inference engine can be prepared once and reused for
 multiple generations. The VAE decoder is loaded for image decoding and released
 afterward to reduce competition with the resident UNet sessions.
 
-Use `?gpuProfile=1` to enable ONNX Runtime WebGPU operator profiling. Profiling
-adds overhead, so use it to identify expensive operators, not to record final
-generation benchmarks.
+The bundled ONNX Runtime Web 1.31.1 native WebGPU execution provider does
+not currently expose per-operator GPU profile traces to JavaScript. The legacy
+`?gpuProfile=1` switch is retained as a diagnostic request, but it only logs
+that limitation; it does not enable profiling or produce `[profiling]` entries.
+Use the generator's A/B/C wall-clock timings to compare partition-level runs.
+Those timings include the provider's dispatch and synchronization costs, not
+just the GPU kernels.
+
+Use `?validation=wgpuOnly` to opt the three repeated UNet sessions into
+ONNX Runtime's WebGPU-only validation mode. In the bundled 1.31.1 API, this
+retains WebGPU/Dawn validation while skipping the additional basic ONNX
+validation pass. This changes validation overhead only; it does not change the
+model graph, weights, tensor types, scheduler, or generated values. The default
+is unchanged (ONNX Runtime's `basic` mode). You can use `?validation=basic`
+to state that default explicitly, or `?validation=full` for extra debugging
+checks. This is an optional benchmark setting, not a guaranteed speedup; its
+benefit depends on how much CPU-side validation contributes on the target
+browser and GPU. Compare repeated warm runs with otherwise identical settings.
 
 Use `?graphCapture=1` to try WebGPU graph capture for the three fixed-shape
 UNet sessions. The first disposable warm-up dispatch records the graphs. If
