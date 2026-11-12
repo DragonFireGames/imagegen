@@ -101,9 +101,10 @@
         <div><label for="generationSteps">Steps</label><input class="number-input" id="generationSteps" type="number" min="1" max="100" value="12"></div>
         <div><label for="generationCfg">CFG scale</label><input class="number-input" id="generationCfg" type="number" min="0" max="20" step="0.5" value="1"></div>
         <div><label for="generationSeed">Seed</label><input class="number-input" id="generationSeed" type="number" min="-1" max="4294967295" step="1" value="1337"><small>Enter -1 for a random seed; each image gets its own seed.</small></div>
-        <div><label for="generationBatch">Batch</label><input class="number-input" id="generationBatch" type="number" min="1" max="20" step="1" value="1"><small>Generate 1–20 images sequentially.</small></div>
+        <div><label for="generationBatch">Batch</label><input class="number-input" id="generationBatch" type="number" min="1" max="20" step="1" value="1"><small>Total images to generate.</small></div>
+        <div><label for="generationParallel">Images per GPU pass</label><input class="number-input" id="generationParallel" type="number" min="1" max="4" step="1" value="1"><small>Run 1–4 independent images together; higher values use more GPU memory.</small></div>
       </div>
-      <p class="notice">Fast defaults: 512×512 · 12 steps · CFG 1. CFG 1 uses only the positive UNet branch and skips negative-prompt encoding. This trades away negative-prompt control and some guided refinement for speed. For the original guided quality profile, use 28 steps and CFG 5. At the same settings, 1024×1024 requires roughly four times the UNet work of 512×512.</p>
+      <p class="notice">Fast defaults: 512×512 · 12 steps · CFG 1. CFG 1 uses only the positive UNet branch and skips negative-prompt encoding. This trades away negative-prompt control and some guided refinement for speed. For the original guided quality profile, use 28 steps and CFG 5. At the same settings, 1024×1024 requires roughly four times the UNet work of 512×512. Parallel images share prompt conditioning and run through the UNet together; increase Images per GPU pass gradually because GPU memory use grows with the batch.</p>
 
       <div class="adapter-picker">
         <label for="loraFile"><strong>LoRA adapter</strong> <span>(optional · local file only)</span></label>
