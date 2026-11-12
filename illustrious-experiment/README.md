@@ -21,6 +21,24 @@ The component counts divide evenly into 72 text_encoder pairs, 192 text_encoder_
 
 **Compatibility assessment:** the real file has the expected SDXL architecture and all three adapter groups, in the Kohya layout Diffusers knows how to convert. This is strong evidence that it is loadable as an SDXL LoRA. The remaining test is an actual Diffusers load/fuse against the official Illustrious v0.1 pipeline, followed by output comparison. The user has not uploaded the raw model file into this repository or chat runtime; the report above is the user's browser-side scan.
 
+
+## Resident inference engine and repeated generation
+
+The generator now supports an explicit **Prepare inference engine** phase:
+
+- It verifies/downloads the full model cache before inference.
+- It precomputes the currently selected positive/negative prompt conditioning.
+- It creates the three Personal Ami-patched (or unmodified base) UNet WebGPU sessions and keeps them resident in page memory.
+- It also creates and retains the VAE decoder session.
+- It caches up to eight exact prompt-conditioning combinations, keyed by positive prompt, negative prompt, and adapter file identity/strength.
+- Repeated generations with the same adapter reuse the resident UNet and VAE sessions. Repeated prompts also skip both CLIP encoders.
+- Changing the adapter file or strength causes the UNet sessions to be released and rebuilt with the new fused weights.
+- **Release engine** disposes the resident sessions and unlocks the memory-heavy test harness. The downloaded model files remain in Cache Storage.
+
+This is an in-memory browser-tab cache, not a persistent GPU cache: a page reload or browser restart requires the WebGPU sessions to be created again. The model downloads themselves remain in Cache Storage. Keeping the UNet resident reserves several GiB of GPU memory, so release the engine before running the standalone memory-heavy diagnostic tests or using other GPU-intensive applications.
+
+The first browser run after this change still needs to validate session retention, adapter switching, explicit release, and repeat-generation timings. No claim is made yet that this lifecycle has been browser-tested.
+
 ## Browser-native runtime candidates
 
 ### Option A: pre-exported ONNX + ONNX Runtime WebGPU
