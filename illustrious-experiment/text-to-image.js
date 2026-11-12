@@ -1314,7 +1314,7 @@ async function getConditioning(manifest, options) {
   return conditioning;
 }
 
-async function buildUnetSessions(manifest, lora, conditioning, width, height, batchSize, conditioningIndex, patchCache) {
+async function buildUnetSessions(manifest, lora, conditioning, width, height, batchSize, conditioningIndex, patchCache, useGpuScheduler = true) {
   const sessions = { a: null, b: null, c: null, gpuInputs: null, batchSize };
   const patchedComponent = async name => {
     if (!lora) return null;
@@ -1350,17 +1350,21 @@ async function buildUnetSessions(manifest, lora, conditioning, width, height, ba
     checkCancelled();
 
     const patchedC = await patchedComponent("unet_c");
-    try {
-      sessions.gpuScheduler = await createGpuScheduler(
-        ort.env.webgpu.device, sessions.gpuInputs, width, height, batchSize
-      );
-      log("GPU-resident Euler scheduler initialized · CFG and latent update stay on WebGPU.");
-    } catch (error) {
-      sessions.gpuScheduler = null;
-      sessions.gpuInputs.entries.cOutput.buffer.destroy();
-      sessions.gpuInputs.entries.cOutput = null;
-      log("GPU scheduler unavailable; retaining the CPU scheduler. Reason: " +
-        (error?.message || String(error)));
+    if (useGpuScheduler) {
+      try {
+        sessions.gpuScheduler = await createGpuScheduler(
+          ort.env.webgpu.device, sessions.gpuInputs, width, height, batchSize
+        );
+        log("GPU-resident Euler scheduler initialized · CFG and latent update stay on WebGPU.");
+      } catch (error) {
+        sessions.gpuScheduler = null;
+        sessions.gpuInputs.entries.cOutput.buffer.destroy();
+        sessions.gpuInputs.entries.cOutput = null;
+        log("GPU scheduler unavailable; retaining the CPU scheduler. Reason: " +
+          (error?.message || String(error)));
+      }
+    } else {
+      log("Masked infill selected · CPU latent scheduler enabled for per-step source blending.");
     }
     sessions.c = await loadSession(
       manifest, "unet_c", "UNET_C", patchedC?.externalData,
@@ -1377,10 +1381,11 @@ async function buildUnetSessions(manifest, lora, conditioning, width, height, ba
   }
 }
 
-async function ensureUnetSessions(manifest, lora, conditioning, width, height, cfg) {
+async function ensureUnetSessions(manifest, lora, conditioning, width, height, cfg, useGpuScheduler = true) {
   const batchSize = cfg === 0 || cfg === 1 ? 1 : 2;
   const conditioningIndex = cfg === 1 ? 1 : 0;
-  const key = adapterCacheKey(lora) + "|" + width + "x" + height + "|batch" + batchSize;
+  const key = adapterCacheKey(lora) + "|" + width + "x" + height + "|batch" + batchSize +
+    (useGpuScheduler ? "|gpu-scheduler" : "|cpu-scheduler");
   if (residentUnetSessions && residentUnetKey === key) {
     log("Reusing resident UNET_A, UNET_B, and UNET_C sessions.");
     residentUnetSessions.gpuInputs.updateConditioning(conditioning, conditioningIndex);
@@ -1405,7 +1410,7 @@ async function ensureUnetSessions(manifest, lora, conditioning, width, height, c
   let sessions;
   try {
     sessions = await buildUnetSessions(
-      manifest, lora, conditioning, width, height, batchSize, conditioningIndex, patchCache
+      manifest, lora, conditioning, width, height, batchSize, conditioningIndex, patchCache, useGpuScheduler
     );
     log("UNET_A/B/C ready · standard WebGPU dispatch with persistent GPU inputs and GPU-resident partition handoffs." +
       (batchSize === 1 ? " Single-branch CFG path · batch=1." : " Classifier-free guidance path · batch=2."));
@@ -1562,7 +1567,147 @@ async function prepareInferenceEngine() {
   }
 }
 
-async function generate(options) {
+
+function buildInfillLatentMask(maskCanvas, latentWidth, latentHeight) {
+  if (!maskCanvas || maskCanvas.width < 1 || maskCanvas.height < 1) {
+    throw new Error("The brush mask is missing.");
+  }
+  const small = document.createElement("canvas");
+  small.width = latentWidth;
+  small.height = latentHeight;
+  const context = small.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("Could not create a latent mask canvas.");
+  context.drawImage(maskCanvas, 0, 0, latentWidth, latentHeight);
+  const pixels = context.getImageData(0, 0, latentWidth, latentHeight).data;
+  const mask = new Float32Array(latentWidth * latentHeight);
+  let painted = 0;
+  for (let i = 0; i < mask.length; i++) {
+    mask[i] = pixels[i * 4 + 3] / 255;
+    if (mask[i] > 0.01) painted++;
+  }
+  if (!painted) throw new Error("Paint the area to replace before starting infill.");
+  return mask;
+}
+
+async function encodeInfillSource(manifest, sourceCanvas, width, height) {
+  const component = manifest?.components?.vae_encoder;
+  if (!component?.onnx || !Array.isArray(component.shards) || !component.shards.length) {
+    throw new Error("The Illustrious model manifest does not provide a VAE encoder.");
+  }
+  if (sourceCanvas.width !== width || sourceCanvas.height !== height) {
+    throw new Error("The source image canvas does not match the selected generation resolution.");
+  }
+
+  const started = performance.now();
+  const session = await loadSession(manifest, "vae_encoder", "VAE encoder");
+  let outputs = null;
+  try {
+    if (session.inputNames.length !== 1) {
+      throw new Error("Expected one VAE encoder input, found: " + session.inputNames.join(", ") + ".");
+    }
+    const inputName = session.inputNames[0];
+    const inputIndex = session.inputNames.indexOf(inputName);
+    validateStaticShape(session.inputMetadata?.[inputIndex], [1, 3, height, width], "VAE encoder input");
+    const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
+    const pixels = sourceContext.getImageData(0, 0, width, height).data;
+    const planeSize = width * height;
+    const input = new Float16Array(3 * planeSize);
+    for (let i = 0; i < planeSize; i++) {
+      input[i] = pixels[i * 4] / 127.5 - 1;
+      input[planeSize + i] = pixels[i * 4 + 1] / 127.5 - 1;
+      input[planeSize * 2 + i] = pixels[i * 4 + 2] / 127.5 - 1;
+    }
+
+    log("Encoding source image " + width + "×" + height + " into SDXL latents…");
+    outputs = await session.run({
+      [inputName]: new ort.Tensor("float16", input, [1, 3, height, width])
+    });
+    const expectedWidth = width / 8;
+    const expectedHeight = height / 8;
+    const outputName = session.outputNames.find(name => {
+      const dims = outputs[name]?.dims;
+      return Array.isArray(dims) && dims.length === 4 &&
+        dims[0] === 1 && (dims[1] === 4 || dims[1] === 8) &&
+        dims[2] === expectedHeight && dims[3] === expectedWidth;
+    });
+    if (!outputName) {
+      const shapes = session.outputNames.map(name => name + " [" +
+        (outputs[name]?.dims || []).join(", ") + "]").join("; ");
+      throw new Error("VAE encoder did not return a [1,4|8," + expectedHeight + "," +
+        expectedWidth + "] latent tensor. Outputs: " + shapes);
+    }
+    const tensor = outputs[outputName];
+    const values = imageTensorValues(tensor, "VAE encoder output " + outputName);
+    const channels = tensor.dims[1];
+    const latentSize = 4 * expectedHeight * expectedWidth;
+    const latents = new Float32Array(latentSize);
+    // Eight-channel encoder outputs contain mean/log-variance moments. Use the
+    // deterministic mean half; four-channel outputs are already latent samples.
+    for (let i = 0; i < latentSize; i++) {
+      latents[i] = Number(values[i]) * VAE_SCALING_FACTOR;
+      if (!Number.isFinite(latents[i])) throw new Error("VAE encoder returned a non-finite latent at " + i + ".");
+    }
+    log("Source image encoded · " + channels + " output channels · " +
+      ((performance.now() - started) / 1000).toFixed(2) + "s · latent scaling " + VAE_SCALING_FACTOR + ".");
+    return latents;
+  } finally {
+    if (outputs) {
+      for (const tensor of Object.values(outputs)) {
+        if (tensor && typeof tensor.dispose === "function") tensor.dispose();
+      }
+    }
+    await session.release();
+    await yieldFrames();
+    log("Released VAE encoder to free GPU memory before UNet inference.");
+  }
+}
+
+function blendUnmaskedLatents(latents, sourceLatents, sourceNoise, mask, sigma) {
+  const planeSize = mask.length;
+  for (let channel = 0; channel < 4; channel++) {
+    const offset = channel * planeSize;
+    for (let pixel = 0; pixel < planeSize; pixel++) {
+      const keep = 1 - mask[pixel];
+      if (keep <= 0) continue;
+      const index = offset + pixel;
+      const preserved = sourceLatents[index] + sourceNoise[index] * sigma;
+      latents[index] = latents[index] * mask[pixel] + preserved * keep;
+    }
+  }
+}
+
+function compositeInfillPixels(generatedCanvas, sourceCanvas, maskCanvas) {
+  const width = generatedCanvas.width;
+  const height = generatedCanvas.height;
+  if (sourceCanvas.width !== width || sourceCanvas.height !== height ||
+      maskCanvas.width !== width || maskCanvas.height !== height) {
+    throw new Error("Infill source, mask, and generated image dimensions do not match.");
+  }
+  const generatedContext = generatedCanvas.getContext("2d", { willReadFrequently: true });
+  const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
+  const maskContext = maskCanvas.getContext("2d", { willReadFrequently: true });
+  const generated = generatedContext.getImageData(0, 0, width, height);
+  const source = sourceContext.getImageData(0, 0, width, height);
+  const mask = maskContext.getImageData(0, 0, width, height);
+  for (let i = 0; i < generated.data.length; i += 4) {
+    const alpha = mask.data[i + 3] / 255;
+    if (alpha <= 0) {
+      generated.data[i] = source.data[i];
+      generated.data[i + 1] = source.data[i + 1];
+      generated.data[i + 2] = source.data[i + 2];
+    } else if (alpha < 1) {
+      const keep = 1 - alpha;
+      generated.data[i] = Math.round(generated.data[i] * alpha + source.data[i] * keep);
+      generated.data[i + 1] = Math.round(generated.data[i + 1] * alpha + source.data[i + 1] * keep);
+      generated.data[i + 2] = Math.round(generated.data[i + 2] * alpha + source.data[i + 2] * keep);
+    }
+    generated.data[i + 3] = 255;
+  }
+  generatedContext.putImageData(generated, 0, 0);
+  return generatedCanvas;
+}
+
+async function generate(options, infillData = null) {
   const manifest = await fetchJSON(MANIFEST_URL, "Model manifest");
   setProgress(1, "Preparing model downloads");
   setStatus("Downloading and verifying model files into persistent browser cache…");
@@ -1573,6 +1718,27 @@ async function generate(options) {
   const latentHeight = options.height / 8;
   const latentSize = 4 * latentWidth * latentHeight;
   const rngNoiseSeeds = options.seed;
+  let sourceLatents = null;
+  let latentMask = null;
+  let sourceNoise = null;
+  let startStep = 0;
+  if (infillData) {
+    if (!infillData.sourceCanvas || !infillData.maskCanvas) {
+      throw new Error("Brush infill requires both a source image and a mask canvas.");
+    }
+    const strength = Number(infillData.strength);
+    if (!Number.isFinite(strength) || strength < 0.1 || strength > 1) {
+      throw new Error("Infill strength must be between 0.1 and 1.");
+    }
+    latentMask = buildInfillLatentMask(infillData.maskCanvas, latentWidth, latentHeight);
+    startStep = Math.max(0, Math.min(options.steps - 1, Math.floor((1 - strength) * options.steps)));
+    log("Brush infill · strength " + strength.toFixed(2) + " · starting at denoising step " +
+      (startStep + 1) + "/" + options.steps + " · masked latent blending (not a dedicated inpainting UNet).");
+    setProgress(6, "Encoding source image");
+    setStatus("Encoding the uploaded image with the SDXL VAE encoder…");
+    sourceLatents = await encodeInfillSource(manifest, infillData.sourceCanvas, options.width, options.height);
+    sourceNoise = createNormalNoise(latentSize, options.seed ^ 0x5f3759df);
+  }
 
   if (gpuProfilingEnabled) {
     log("WebGPU kernel profiling enabled · inspect [profiling] entries in the browser console; timings include profiling overhead.");
@@ -1600,8 +1766,15 @@ async function generate(options) {
     " train steps · timestep " + scheduler.timesteps[0] + " → " +
     scheduler.timesteps[scheduler.timesteps.length - 1] +
     " · initial sigma " + scheduler.initNoiseSigma.toFixed(5) + ".");
-  let latents = createNormalNoise(latentSize, rngNoiseSeeds);
-  for (let i = 0; i < latents.length; i++) latents[i] *= scheduler.initNoiseSigma;
+  let latents;
+  if (infillData) {
+    latents = new Float32Array(latentSize);
+    const sigma = scheduler.sigmas[startStep];
+    for (let i = 0; i < latentSize; i++) latents[i] = sourceLatents[i] + sourceNoise[i] * sigma;
+  } else {
+    latents = createNormalNoise(latentSize, rngNoiseSeeds);
+    for (let i = 0; i < latents.length; i++) latents[i] *= scheduler.initNoiseSigma;
+  }
 
   const parts = ["unet_a", "unet_b", "unet_c"];
   const unetBytes = parts.reduce((sum, key) => sum + Number(manifest.components?.[key]?.bytes || 0), 0);
@@ -1610,7 +1783,7 @@ async function generate(options) {
   // A resident VAE competes with the three large UNet partitions for GPU
   // resources. Keep the UNet resident and make VAE a decode-only session.
   await releaseVaeSession("starting UNet denoising");
-  const sessions = await ensureUnetSessions(manifest, options.lora, conditioning, options.width, options.height, options.cfg);
+  const sessions = await ensureUnetSessions(manifest, options.lora, conditioning, options.width, options.height, options.cfg, !infillData);
   const gpuScheduler = sessions.gpuScheduler;
   if (gpuScheduler) {
     const initialScaled = scheduler.scaleModelInput(latents, 0);
@@ -1621,8 +1794,11 @@ async function generate(options) {
     (gpuScheduler ? " GPU scheduler avoids per-step latent readback." : ""));
   await yieldFrames();
 
-  for (let step = 0; step < options.steps; step++) {
+  for (let step = startStep; step < options.steps; step++) {
     checkCancelled();
+    if (infillData) {
+      blendUnmaskedLatents(latents, sourceLatents, sourceNoise, latentMask, scheduler.sigmas[step]);
+    }
     const stepStarted = performance.now();
     const scaled = gpuScheduler ? null : scheduler.scaleModelInput(latents, step);
     const denoiser = await runUnetStep(
@@ -1644,6 +1820,9 @@ async function generate(options) {
       for (let i = 0; i < latents.length; i++) {
         if (!Number.isFinite(latents[i])) throw new Error("Denoising produced a non-finite latent at " + i + ".");
       }
+    }
+    if (infillData) {
+      blendUnmaskedLatents(latents, sourceLatents, sourceNoise, latentMask, scheduler.sigmas[step + 1]);
     }
     const percent = 8 + ((step + 1) / options.steps) * 82;
     setProgress(percent, "Denoising " + (step + 1) + " / " + options.steps);
@@ -1690,7 +1869,11 @@ async function generate(options) {
     const outputName = vaeSession.outputNames[0];
     if (!outputName || !outputs[outputName]) throw new Error("VAE decoder returned no image tensor.");
     const renderStarted = performance.now();
-    const canvas = renderImage(outputs[outputName], options.width, options.height);
+    let canvas = renderImage(outputs[outputName], options.width, options.height);
+    if (infillData) {
+      canvas = compositeInfillPixels(canvas, infillData.sourceCanvas, infillData.maskCanvas);
+      log("Final pixel composite complete · unpainted source pixels restored exactly.");
+    }
     const renderSeconds = (performance.now() - renderStarted) / 1000;
     log("VAE inference " + decodeSeconds.toFixed(2) + "s · pixel conversion " +
       renderSeconds.toFixed(2) + "s · combined " + (decodeSeconds + renderSeconds).toFixed(2) + "s.");
@@ -1764,7 +1947,8 @@ button.addEventListener("click", async () => {
     log("WebGPU adapter ready · maxBufferSize " + formatBytes(adapter.limits?.maxBufferSize || 0) +
       " · maxStorageBufferBindingSize " + formatBytes(adapter.limits?.maxStorageBufferBindingSize || 0));
     setStatus("Starting browser-side inference…");
-    const canvas = await generate(options);
+    const infillData = window.__illustriousInfill?.getPayload?.() || null;
+    const canvas = await generate(options, infillData);
     if (cancelRequested) throw new Error("Generation cancelled by user.");
     const blob = await new Promise((resolve, reject) => canvas.toBlob(value =>
       value ? resolve(value) : reject(new Error("Could not encode the generated canvas as PNG.")), "image/png"));
