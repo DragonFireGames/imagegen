@@ -46,7 +46,8 @@
     .canvas-wrap { display: grid; justify-items: center; gap: 12px; min-height: 240px; padding: 14px; border: 1px solid #353944; border-radius: 10px; background: #101114; }
     .canvas-stack { position: relative; width: min(100%, 900px); line-height: 0; overflow: hidden; border-radius: 6px; background: #0b0c0f; }
     .canvas-stack canvas { display: block; width: 100%; height: auto; }
-    #paintOverlay { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+    #paintOverlay { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; cursor: crosshair; pointer-events: none; }
+    #sourcePreview { pointer-events: none; }
     .empty { display: grid; place-items: center; min-height: 240px; color: #9296a3; text-align: center; }
     .empty strong { display: block; color: #e5e6eb; font-size: 17px; }
     .result { margin-top: 18px; padding-top: 16px; border-top: 1px solid #343740; }
