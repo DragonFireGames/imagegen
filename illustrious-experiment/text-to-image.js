@@ -1575,7 +1575,7 @@ async function generate(options) {
   if (gpuProfilingEnabled) {
     log("WebGPU kernel profiling enabled · inspect [profiling] entries in the browser console; timings include profiling overhead.");
   }
-  log("Model " + (manifest.packageId || MODEL_ID) + " · WebGPU · "
+  log("Model " + (manifest.packageId || MODEL_ID) + " · WebGPU · " +
     options.width + "×" + options.height + " · " + options.steps + " steps.");
   log("Prompt: " + options.prompt);
   log("Negative: " + (options.negative || "(empty)"));
