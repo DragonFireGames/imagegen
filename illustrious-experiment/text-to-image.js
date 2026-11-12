@@ -1960,7 +1960,24 @@ function compositeInfillPixels(generatedCanvas, sourceCanvas, maskCanvas) {
   return generatedCanvas;
 }
 
-async function generate(options, infillData = null) {
+async function generateMany(imageOptionsList, infillData = null, onImage = null) {
+  if (!Array.isArray(imageOptionsList) || !imageOptionsList.length) {
+    throw new Error("At least one image configuration is required.");
+  }
+  const options = imageOptionsList[0];
+  const imageCount = imageOptionsList.length;
+  if (imageCount > 1 && infillData) {
+    throw new Error("Parallel generation is not enabled for brush infill.");
+  }
+  for (const imageOptions of imageOptionsList) {
+    if (imageOptions.width !== options.width || imageOptions.height !== options.height ||
+        imageOptions.steps !== options.steps || imageOptions.cfg !== options.cfg ||
+        imageOptions.prompt !== options.prompt || imageOptions.negative !== options.negative ||
+        adapterCacheKey(imageOptions.lora) !== adapterCacheKey(options.lora)) {
+      throw new Error("Images in one GPU batch must share prompt, dimensions, steps, CFG, and adapter settings.");
+    }
+  }
+
   const manifest = await fetchJSON(MANIFEST_URL, "Model manifest");
   setProgress(1, "Preparing model downloads");
   setStatus("Downloading and verifying model files into persistent browser cache…");
@@ -1976,7 +1993,7 @@ async function generate(options, infillData = null) {
   const latentWidth = options.width / 8;
   const latentHeight = options.height / 8;
   const latentSize = 4 * latentWidth * latentHeight;
-  const rngNoiseSeeds = options.seed;
+  const totalLatentSize = latentSize * imageCount;
   let sourceLatents = null;
   let latentMask = null;
   let sourceNoise = null;
@@ -2010,8 +2027,9 @@ async function generate(options, infillData = null) {
     options.width + "×" + options.height + " · " + options.steps + " steps.");
   log("Prompt: " + options.prompt);
   log("Negative: " + (options.negative || "(empty)"));
-  log("Seed " + options.seed + " · CFG " + options.cfg);
-  log("CLIP positive/negative prompts are batched when supported. CFG 0 or 1 uses one UNet branch (batch 1); other CFG values use both branches (batch 2). Reusable GPU inputs and A→B→C GPU-resident handoffs are enabled.");
+  log("Image seeds · " + imageOptionsList.map(item => item.seed).join(", ") + " · CFG " + options.cfg);
+  log("Shared prompt conditioning, resident UNet sessions, and reusable GPU buffers are used across " +
+    imageCount + " image(s) in one model batch.");
   if (options.lora) {
     log("LoRA enabled · " + options.lora.file.name + " · strength " + options.lora.strength.toFixed(3) + " · compatible mapped weights will be patched.");
   } else {
@@ -2035,29 +2053,38 @@ async function generate(options, infillData = null) {
     const sigma = scheduler.sigmas[startStep];
     for (let i = 0; i < latentSize; i++) latents[i] = sourceLatents[i] + sourceNoise[i] * sigma;
   } else {
-    latents = createNormalNoise(latentSize, rngNoiseSeeds);
-    for (let i = 0; i < latents.length; i++) latents[i] *= scheduler.initNoiseSigma;
+    latents = new Float32Array(totalLatentSize);
+    for (let image = 0; image < imageCount; image++) {
+      const imageNoise = createNormalNoise(latentSize, imageOptionsList[image].seed);
+      const offset = image * latentSize;
+      for (let i = 0; i < latentSize; i++) {
+        latents[offset + i] = imageNoise[i] * scheduler.initNoiseSigma;
+      }
+    }
   }
 
   const parts = ["unet_a", "unet_b", "unet_c"];
   const unetBytes = parts.reduce((sum, key) => sum + Number(manifest.components?.[key]?.bytes || 0), 0);
   log("UNet manifest payload total " + formatBytes(unetBytes) +
     " (not a direct VRAM measurement). Loading all partitions together…");
-  // A resident VAE competes with the three large UNet partitions for GPU
-  // resources. Keep the UNet resident and make VAE a decode-only session.
   if (keepVaeResident) {
     if (residentVaeSession) log("Reusing retained VAE decoder alongside the resident UNet.");
   } else {
     await releaseVaeSession("starting UNet denoising");
   }
-  const sessions = await ensureUnetSessions(manifest, options.lora, conditioning, options.width, options.height, options.cfg, !infillData);
+  const sessions = await ensureUnetSessions(
+    manifest, options.lora, conditioning, options.width, options.height, options.cfg,
+    !infillData, imageCount
+  );
   const gpuScheduler = sessions.gpuScheduler;
   if (gpuScheduler) {
-    const initialScaled = scheduler.scaleModelInput(latents, 0);
+    const initialScaled = scheduler.scaleModelInput(latents, startStep);
     gpuScheduler.initialize(latents, new Float16Array(initialScaled));
+  } else if (imageCount > 1) {
+    throw new Error("Parallel image batches require the GPU-resident Euler scheduler; reduce Images per GPU batch to 1.");
   }
   let totalUnetExecutionSeconds = 0;
-  const stepNoise = new Float32Array(latentSize);
+  const stepNoise = new Float32Array(latents.length);
   log("All three UNet sessions are resident. Beginning " + options.steps + " denoising steps." +
     (gpuScheduler ? " GPU scheduler avoids per-step latent readback." : ""));
   await yieldFrames();
@@ -2080,11 +2107,21 @@ async function generate(options, infillData = null) {
       step
     );
     totalUnetExecutionSeconds += denoiser.timings.a + denoiser.timings.b + denoiser.timings.c;
-    const noise = createNormalNoise(latentSize, options.seed + step + 1, stepNoise);
-    if (gpuScheduler) {
-      gpuScheduler.step(noise, scheduler.stepParameters(step, options.cfg, sessions.batchSize));
+    if (infillData) {
+      createNormalNoise(latentSize, options.seed + step + 1, stepNoise);
     } else {
-      latents = scheduler.step(denoiser.guided, step, latents, noise);
+      for (let image = 0; image < imageCount; image++) {
+        createNormalNoise(
+          latentSize,
+          imageOptionsList[image].seed + step + 1,
+          stepNoise.subarray(image * latentSize, (image + 1) * latentSize)
+        );
+      }
+    }
+    if (gpuScheduler) {
+      gpuScheduler.step(noiseForStep(stepNoise), scheduler.stepParameters(step, options.cfg, sessions.branchCount));
+    } else {
+      latents = scheduler.step(denoiser.guided, step, latents, stepNoise);
       for (let i = 0; i < latents.length; i++) {
         if (!Number.isFinite(latents[i])) throw new Error("Denoising produced a non-finite latent at " + i + ".");
       }
@@ -2101,7 +2138,7 @@ async function generate(options, infillData = null) {
     if ((step + 1) % 2 === 0 || step === options.steps - 1) await yieldFrames();
   }
   log("Accumulated UNet execution time " + totalUnetExecutionSeconds.toFixed(2) +
-    "s across " + options.steps + " steps (sum of A + B + C inference calls).");
+    "s across " + options.steps + " steps · " + imageCount + " image(s).");
   if (gpuScheduler) {
     latents = await gpuScheduler.readLatents();
     for (let i = 0; i < latents.length; i++) {
@@ -2115,50 +2152,71 @@ async function generate(options, infillData = null) {
   setProgress(92, "Loading VAE decoder");
   setStatus("Loading VAE decoder…");
   const vaeSession = await ensureVaeSession(manifest);
-  checkCancelled();
-  const scaledLatents = new Float16Array(latents.length);
-  for (let i = 0; i < latents.length; i++) {
-    scaledLatents[i] = latents[i] / VAE_SCALING_FACTOR;
-  }
-  const inputName = vaeSession.inputNames[0];
-  if (!inputName) throw new Error("VAE decoder graph has no input.");
-  const inputIndex = vaeSession.inputNames.indexOf(inputName);
-  validateStaticShape(vaeSession.inputMetadata?.[inputIndex],
-    [1, 4, latentHeight, latentWidth], "VAE decoder input");
-  log("Decoding latent [1,4," + latentHeight + "," + latentWidth +
-    "] · VAE scaling factor " + VAE_SCALING_FACTOR + ".");
-  let outputs = null;
+  const canvases = [];
   try {
-    const decodeStarted = performance.now();
-    outputs = await vaeSession.run({
-      [inputName]: new ort.Tensor("float16", scaledLatents, [1, 4, latentHeight, latentWidth])
-    });
-    const decodeSeconds = (performance.now() - decodeStarted) / 1000;
-    const outputName = vaeSession.outputNames[0];
-    if (!outputName || !outputs[outputName]) throw new Error("VAE decoder returned no image tensor.");
-    const renderStarted = performance.now();
-    let canvas = renderImage(outputs[outputName], options.width, options.height);
-    if (infillData) {
-      canvas = compositeInfillPixels(canvas, infillData.sourceCanvas, infillData.maskCanvas);
-      log("Final pixel composite complete · unpainted source pixels restored exactly.");
-    }
-    const renderSeconds = (performance.now() - renderStarted) / 1000;
-    log("VAE inference " + decodeSeconds.toFixed(2) + "s · pixel conversion " +
-      renderSeconds.toFixed(2) + "s · combined " + (decodeSeconds + renderSeconds).toFixed(2) + "s.");
-    setProgress(100, "Complete");
-    return canvas;
-  } finally {
-    if (outputs) {
-      for (const tensor of Object.values(outputs)) {
-        if (tensor && typeof tensor.dispose === "function") tensor.dispose();
+    for (let image = 0; image < imageCount; image++) {
+      checkCancelled();
+      const imageLatents = latents.subarray(image * latentSize, (image + 1) * latentSize);
+      const scaledLatents = new Float16Array(latentSize);
+      for (let i = 0; i < latentSize; i++) {
+        scaledLatents[i] = imageLatents[i] / VAE_SCALING_FACTOR;
       }
+      const inputName = vaeSession.inputNames[0];
+      if (!inputName) throw new Error("VAE decoder graph has no input.");
+      const inputIndex = vaeSession.inputNames.indexOf(inputName);
+      validateStaticShape(vaeSession.inputMetadata?.[inputIndex],
+        [1, 4, latentHeight, latentWidth], "VAE decoder input");
+      log("Decoding image " + (image + 1) + "/" + imageCount + " · latent [1,4," +
+        latentHeight + "," + latentWidth + "] · VAE scaling factor " + VAE_SCALING_FACTOR + ".");
+      let outputs = null;
+      try {
+        const decodeStarted = performance.now();
+        outputs = await vaeSession.run({
+          [inputName]: new ort.Tensor("float16", scaledLatents, [1, 4, latentHeight, latentWidth])
+        });
+        const decodeSeconds = (performance.now() - decodeStarted) / 1000;
+        const outputName = vaeSession.outputNames[0];
+        if (!outputName || !outputs[outputName]) throw new Error("VAE decoder returned no image tensor.");
+        const renderStarted = performance.now();
+        let canvas = renderImage(outputs[outputName], options.width, options.height);
+        if (infillData) {
+          canvas = compositeInfillPixels(canvas, infillData.sourceCanvas, infillData.maskCanvas);
+          log("Final pixel composite complete · unpainted source pixels restored exactly.");
+        }
+        const renderSeconds = (performance.now() - renderStarted) / 1000;
+        log("Image " + (image + 1) + "/" + imageCount + " · VAE inference " +
+          decodeSeconds.toFixed(2) + "s · pixel conversion " + renderSeconds.toFixed(2) +
+          "s · combined " + (decodeSeconds + renderSeconds).toFixed(2) + "s.");
+        canvases.push(canvas);
+        if (onImage) await onImage(canvas, image);
+      } finally {
+        if (outputs) {
+          for (const tensor of Object.values(outputs)) {
+            if (tensor && typeof tensor.dispose === "function") tensor.dispose();
+          }
+        }
+      }
+      setProgress(92 + ((image + 1) / imageCount) * 8, "Decoded " + (image + 1) + " / " + imageCount);
+      await yieldFrames();
     }
+    setProgress(100, "Complete");
+    return canvases;
+  } finally {
     if (keepVaeResident) {
-      log("VAE decoder retained in memory for the next image.");
+      log("VAE decoder retained in memory for the next image batch.");
     } else {
-      await releaseVaeSession("decode complete; retain UNet for the next image");
+      await releaseVaeSession("decode batch complete; retain UNet for the next batch");
     }
   }
+}
+
+function noiseForStep(noise) {
+  return noise;
+}
+
+async function generate(options, infillData = null) {
+  const canvases = await generateMany([options], infillData);
+  return canvases[0];
 }
 
 prepareEngineButton.addEventListener("click", prepareInferenceEngine);
