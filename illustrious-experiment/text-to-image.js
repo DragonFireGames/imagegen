@@ -11,6 +11,7 @@ const VAE_SCALING_FACTOR = 0.18215; // The WAI pack's Kohaku XL beta5 base VAE c
 
 const runtimePreference = new URLSearchParams(window.location.search).get("runtime") || "auto";
 const graphCaptureEnabled = new URLSearchParams(window.location.search).get("graphCapture") === "1";
+const keepVaeResident = new URLSearchParams(window.location.search).get("keepVae") === "1";
 const preferredUnetLayout = new URLSearchParams(window.location.search).get("layout") === "NHWC" ? "NHWC" : null;
 const JSPI_RUNTIME_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/";
 
@@ -1573,6 +1574,9 @@ async function ensureUnetSessions(manifest, lora, conditioning, width, height, c
     residentUnetSessions = null;
     residentUnetKey = null;
   }
+  if (residentVaeSession) {
+    await releaseVaeSession("UNet sessions are being rebuilt");
+  }
 
   setProgress(8, "Preparing UNet partitions");
   setStatus("Preparing UNET_A, UNET_B, and UNET_C. This requires several GiB of memory…");
@@ -1737,7 +1741,11 @@ async function prepareInferenceEngine() {
 
     // Keep the multi-part UNet resident, but do not pin the VAE beside its
     // 4.79 GiB of external weights. Load VAE only for decode, then release it.
-    await releaseVaeSession("UNet engine takes priority");
+    if (keepVaeResident) {
+      log("VAE retention enabled · the decoder will remain resident after its first use.");
+    } else {
+      await releaseVaeSession("UNet engine takes priority");
+    }
     setProgress(100, "Engine ready");
     setStatus("Inference engine prepared · UNet sessions are resident; prompt conditioning is cached.", "success");
     log("Ready for repeated generation. The VAE decoder will be loaded only after denoising to reduce GPU memory contention.");
@@ -1982,7 +1990,11 @@ async function generate(options, infillData = null) {
     " (not a direct VRAM measurement). Loading all partitions together…");
   // A resident VAE competes with the three large UNet partitions for GPU
   // resources. Keep the UNet resident and make VAE a decode-only session.
-  await releaseVaeSession("starting UNet denoising");
+  if (keepVaeResident) {
+    if (residentVaeSession) log("Reusing retained VAE decoder alongside the resident UNet.");
+  } else {
+    await releaseVaeSession("starting UNet denoising");
+  }
   const sessions = await ensureUnetSessions(manifest, options.lora, conditioning, options.width, options.height, options.cfg, !infillData);
   const gpuScheduler = sessions.gpuScheduler;
   if (gpuScheduler) {
@@ -2086,7 +2098,11 @@ async function generate(options, infillData = null) {
         if (tensor && typeof tensor.dispose === "function") tensor.dispose();
       }
     }
-    await releaseVaeSession("decode complete; retain UNet for the next image");
+    if (keepVaeResident) {
+      log("VAE decoder retained in memory for the next image.");
+    } else {
+      await releaseVaeSession("decode complete; retain UNet for the next image");
+    }
   }
 }
 
