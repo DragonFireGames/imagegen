@@ -64,17 +64,7 @@
     <p class="eyebrow">Developer workbench</p>
     <h1>Diagnostics & adapter tools</h1>
     <p class="notice">The image generator lives on the <a href="./">main page</a>. This page contains standalone validation tools, model probes, and local adapter inspection. These tests can allocate substantial memory; close or release the generator engine before running them.</p>
-    <section class="panel">
-      <p class="eyebrow">Target adapter</p>
-      <h2><a href="https://civitai.com/models/1309467/personal-ami-style-illustrious" target="_blank" rel="noreferrer">Personal Ami Style – Illustrious</a></h2>
-      <div class="model-facts">
-        <div class="fact"><span>Training base</span><strong>Illustrious XL v0.1</strong></div>
-        <div class="fact"><span>Trigger</span><strong><code>personal ami</code></strong></div>
-        <div class="fact"><span>Suggested LoRA strength</span><strong>0.6–0.9</strong></div>
-      </div>
-      <button class="button" id="copyTrigger" type="button">Copy trigger phrase</button>
-      <p>Trigger and suggested strength are sourced from a <a href="https://tensorhub.art/models/909887413176810771" target="_blank" rel="noreferrer">TensorHub mirror</a>; the original Civitai page is linked above. The mirror is not the rights holder. Exact tensor compatibility still needs inspection.</p>
-    </section>
+    
 
     <section class="panel">
       <p class="eyebrow">Candidate browser model pack</p>
@@ -95,33 +85,15 @@
       <p class="eyebrow">Existing implementation reference</p>
       <h2><a href="https://github.com/d0grr/generate-ai-images" target="_blank" rel="noreferrer">Browser SDXL · ONNX WebGPU</a></h2>
       <p>A separate project already runs SDXL in Chrome with a JavaScript pipeline, OPFS caching, FP16 and INT4 UNet variants. Its inpainting example fuses a specific LoRA before export; it does not demonstrate arbitrary live LoRA swapping.</p>
-      <p>We can adapt its SDXL pipeline architecture, then validate the Personal Ami LoRA against Illustrious. This is a reference implementation, not a dependency.</p>
+      <p>We can adapt its SDXL pipeline architecture, then validate compatible SDXL LoRAs against Illustrious. This is a reference implementation, not a dependency.</p>
     </section>
 
-    <section class="panel">
-      <p class="eyebrow">Actual Personal Ami header scan</p>
-      <h2>Adapter structure confirmed</h2>
-      <p>The browser inspector has now been run against <code>personal_ami_style_illustrious-000006.safetensors</code>. These are the reported header statistics; the multi-gigabyte base model and LoRA tensor payloads have not been uploaded to this repository.</p>
-      <div class="model-facts">
-        <div class="fact"><span>Adapter file</span><strong>217.9 MB</strong></div>
-        <div class="fact"><span>Tensors / parameters</span><strong>2,958 / 114.0M</strong></div>
-        <div class="fact"><span>Complete LoRA pairs</span><strong>986</strong></div>
-        <div class="fact"><span>Rank / alpha / alpha-rank ratio</span><strong>32 / 16 / 0.5</strong></div>
-      </div>
-      <div class="data-list">
-        <div class="data-row"><span class="data-label">CLIP-L (text encoder 1)</span><span class="data-value">216 tensors · 72 pairs</span></div>
-        <div class="data-row"><span class="data-label">CLIP-bigG (text encoder 2)</span><span class="data-value">576 tensors · 192 pairs</span></div>
-        <div class="data-row"><span class="data-label">SDXL UNet</span><span class="data-value">2,166 tensors · 722 pairs</span></div>
-        <div class="data-row"><span class="data-label">Header validation</span><span class="data-value">0 incomplete pairs · 0 rank mismatches</span></div>
-        <div class="data-row"><span class="data-label">Tensor dtype</span><span class="data-value">BF16</span></div>
-      </div>
-      <p class="notice">All three SDXL components are present. The embedded <code>ss_base_model_version=sdxl_base_v1-0</code> tag is generic SDXL metadata; the author’s model listing says the LoRA was trained on Illustrious 0.1. The exporter now loads the local Safetensors state dict and explicitly checks all three components before fusion.</p>
-    </section>
+    
 
     <section class="panel">
       <p class="eyebrow">Local-only utility</p>
       <h2>Inspect a LoRA file</h2>
-      <p>Choose the Personal Ami .safetensors file. This reads only the file header; tensor payloads are not uploaded, downloaded, or loaded into memory.</p>
+      <p>Choose the LoRA .safetensors file. This reads only the file header; tensor payloads are not uploaded, downloaded, or loaded into memory.</p>
       <div class="drop-zone" id="dropZone">
         <strong>Drop a .safetensors file here</strong>
         <input id="loraFile" type="file" accept=".safetensors">
@@ -141,8 +113,8 @@
 
     <section class="panel">
       <p class="eyebrow">Local adapter compatibility inspection</p>
-      <h2>Personal Ami → ONNX weight-index mapping</h2>
-      <p>Select the Personal Ami file in the local inspector above, then compare its LoRA pair names and matrix shapes against the candidate pack's CLIP-L, CLIP-bigG, and three UNet weight indexes. This reads only the safetensors header and downloads only the small index JSON files.</p>
+      <h2>LoRA → ONNX weight-index mapping</h2>
+      <p>Select the LoRA file in the local inspector above, then compare its LoRA pair names and matrix shapes against the candidate pack's CLIP-L, CLIP-bigG, and three UNet weight indexes. This reads only the safetensors header and downloads only the small index JSON files.</p>
       <p class="notice">No LoRA tensor payloads, ONNX graph files, or multi-gigabyte weight shards are read. The report identifies target names, shape compatibility, and ONNX transpose requirements. It separately flags six CLIP-L layer-11 pairs absent from this graph index, consistent with the graph exposing a penultimate hidden state. It cannot calculate A×B deltas or prove numerical equivalence.</p>
       <button class="button" id="mapLoraWeights" type="button">Map local LoRA to ONNX weights</button>
       <p class="status" id="loraMapStatus" data-type="info" aria-live="polite">Choose the local .safetensors file above first.</p>
@@ -152,56 +124,56 @@
 
     <section class="panel">
       <p class="eyebrow">Local adapter tensor-value test</p>
-      <h2>Decode one Personal Ami BF16 LoRA pair</h2>
+      <h2>Decode one BF16 LoRA pair</h2>
       <p>Read one representative shape-compatible CLIP-L down/up pair plus its scalar alpha directly from the selected local file. Decode BF16 payloads, apply the pair to a deterministic FP32 test vector, and verify the resulting low-rank delta is finite and nonzero.</p>
       <p class="notice">This reads only a small pair's byte ranges from the local .safetensors file (typically well under 1 MB). No adapter payload is uploaded. It does not patch ONNX weights or claim model-output equivalence.</p>
       <button class="button" id="testLoraPayload" type="button">Test one local BF16 LoRA pair</button>
-      <p class="status" id="loraPayloadStatus" data-type="info" aria-live="polite">Choose the Personal Ami .safetensors file above first.</p>
+      <p class="status" id="loraPayloadStatus" data-type="info" aria-live="polite">Choose the LoRA .safetensors file above first.</p>
       <div class="data-list" id="loraPayloadSummary" hidden></div>
       <pre class="inspect-output" id="loraPayloadOutput" hidden></pre>
     </section>
 
     <section class="panel">
       <p class="eyebrow">First ONNX LoRA patch</p>
-      <h2>Patch one real Personal Ami pair into CLIP-L</h2>
+      <h2>Patch one LoRA pair into CLIP-L</h2>
       <p>Read one shape-compatible BF16 down/up pair and its alpha from the selected local adapter, apply its low-rank delta to the indexed FP16 CLIP-L initializer, and give ONNX Runtime a patched external-data Blob. The test runs the same token IDs through the original and patched CLIP-L sessions and compares their outputs.</p>
       <p class="notice">This downloads the 232 MB CLIP-L external-data shard and temporarily composes a patched Blob. Only one representative matrix is changed; the full adapter is not applied. The local .safetensors bytes remain in this browser and are never uploaded.</p>
       <label for="loraPatchStrength">Test LoRA strength</label>
       <input class="number-input" id="loraPatchStrength" type="number" min="0" max="2" step="0.05" value="0.75">
       <button class="button" id="testSingleLoraPatch" type="button">Test one patched CLIP-L weight</button>
-      <p class="status" id="loraPatchStatus" data-type="info" aria-live="polite">Choose Personal Ami in the local .safetensors picker above first.</p>
+      <p class="status" id="loraPatchStatus" data-type="info" aria-live="polite">Choose LoRA in the local .safetensors picker above first.</p>
       <div class="data-list" id="loraPatchSummary" hidden></div>
       <pre class="inspect-output" id="loraPatchOutput" hidden></pre>
     </section>
 
     <section class="panel">
       <p class="eyebrow">Full CLIP-L adapter patch</p>
-      <h2>Apply all mapped Personal Ami CLIP-L weights</h2>
+      <h2>Apply all mapped CLIP-L LoRA weights</h2>
       <p>This applies all 66 shape-compatible CLIP-L LoRA pairs to the matching FP16 ONNX initializers. The six layer-11 pairs remain excluded because the graph exposes the penultimate hidden state and does not index that final block. It then loads both the original and patched CLIP-L sessions and compares their outputs.</p>
       <p class="notice">This is the next validation stage, not full image generation. It downloads the CLIP-L external-data shard and reads the selected local adapter's CLIP-L factor tensors. The .safetensors file is not uploaded. CLIP-bigG and the three UNet partitions are not patched by this test.</p>
       <label for="fullClipLStrength">Full CLIP-L LoRA strength</label>
       <input class="number-input" id="fullClipLStrength" type="number" min="0" max="2" step="0.05" value="0.75">
       <button class="button" id="testFullClipL" type="button">Test all 66 CLIP-L LoRA pairs</button>
-      <p class="status" id="fullClipLStatus" data-type="info" aria-live="polite">Select Personal Ami in the shared .safetensors picker above first.</p>
+      <p class="status" id="fullClipLStatus" data-type="info" aria-live="polite">Select LoRA in the shared .safetensors picker above first.</p>
       <div class="data-list" id="fullClipLSummary" hidden></div>
       <pre class="inspect-output" id="fullClipLOutput" hidden></pre>
     </section>
 
     <section class="panel">
       <p class="eyebrow">Full local adapter integrity check</p>
-      <h2>Verify all Personal Ami BF16 payload values</h2>
+      <h2>Verify local BF16 adapter payload values</h2>
       <p>Stream the entire selected .safetensors data block in 4 MiB chunks, validate every tensor's shape and byte range, and scan all BF16 values for NaN/Infinity. This checks the actual 218 MB adapter payload rather than just its JSON header.</p>
       <p class="notice">All reads come directly from the local file selected above. The script does not upload the LoRA, does not fetch model weights, and does not allocate WebGPU. It scans in small chunks instead of loading the complete tensor payload into memory.</p>
       <button class="button" id="verifyAllLoraPayloads" type="button">Verify all local BF16 payloads (about 218 MB)</button>
-      <p class="status" id="loraIntegrityStatus" data-type="info" aria-live="polite">Choose the Personal Ami .safetensors file above first.</p>
+      <p class="status" id="loraIntegrityStatus" data-type="info" aria-live="polite">Choose the LoRA .safetensors file above first.</p>
       <div class="data-list" id="loraIntegritySummary" hidden></div>
     </section>
 
     <section class="panel">
       <p class="eyebrow">Browser-side LoRA format reference</p>
       <h2><a href="https://huggingface.co/aaaaaeeeee/blip-lora-sdxl-lightning8" target="_blank" rel="noreferrer">SDXL LoRA browser package</a></h2>
-      <p>The same publisher repacks a standard Kohya .safetensors LoRA into <code>lora.json</code> plus <code>lora.bin</code> for its browser runtime (FP16 factors; its example has 788 UNet layers). This is a custom format, not built-in ONNX Runtime support, and its layer map cannot be reused for Personal Ami.</p>
-      <p>We'll need to map the actual Personal Ami tensors onto the Illustrious ONNX graph, then validate the converted adapter against a Diffusers reference.</p>
+      <p>The same publisher repacks a standard Kohya .safetensors LoRA into <code>lora.json</code> plus <code>lora.bin</code> for its browser runtime (FP16 factors; its example has 788 UNet layers). This is a custom format, not built-in ONNX Runtime support, and its layer map cannot be reused for LoRA.</p>
+      <p>We'll need to map the actual LoRA tensors onto the Illustrious ONNX graph, then validate the converted adapter against a Diffusers reference.</p>
     </section>
 
     <section class="panel">
@@ -211,7 +183,7 @@
       <button class="button" id="testClipEncoder" type="button">Test CLIP-L (about 232 MB)</button>
       <p class="status" id="clipSmokeStatus" data-type="info" aria-live="polite">Not tested yet.</p>
       <div class="data-list" id="clipSmokeSummary" hidden></div>
-      <p class="notice">A successful result will verify that this browser can load one real SDXL ONNX graph with external data and execute it on WebGPU. It will not yet prove UNet operator coverage, full-model memory use, or Personal Ami LoRA compatibility.</p>
+      <p class="notice">A successful result will verify that this browser can load one real SDXL ONNX graph with external data and execute it on WebGPU. It will not yet prove UNet operator coverage, full-model memory use, or LoRA LoRA compatibility.</p>
     </section>
 
     <section class="panel">
@@ -221,7 +193,7 @@
       <button class="button" id="testClipBigG" type="button">Test CLIP-bigG (about 1.39 GB)</button>
       <p class="status" id="clipBigGStatus" data-type="info" aria-live="polite">Not tested yet.</p>
       <div class="data-list" id="clipBigGSummary" hidden></div>
-      <p class="notice">The test checks every graph output for finite values. It does not validate the UNet, full-model memory use, or Personal Ami LoRA compatibility.</p>
+      <p class="notice">The test checks every graph output for finite values. It does not validate the UNet, full-model memory use, or LoRA LoRA compatibility.</p>
     </section>
 
     <section class="panel">
@@ -302,7 +274,7 @@
       <h2>Dual tokenizer + CLIP WebGPU conditioning test</h2>
       <p>Tokenize a positive and negative prompt with both tokenizer folders, then run CLIP-L and CLIP-bigG sequentially on both token-ID sequences. The test assembles both SDXL conditioning pairs expected by classifier-free guidance: encoder_hidden_states [1, 77, 2048] and pooled text_embeds [1, 1280].</p>
       <label for="conditioningPrompt">Positive prompt</label>
-      <textarea class="prompt-input" id="conditioningPrompt" rows="3">personal ami, 1girl, portrait, masterpiece, best quality</textarea>
+      <textarea class="prompt-input" id="conditioningPrompt" rows="3">1girl, 1girl, portrait, masterpiece, best quality</textarea>
       <label for="conditioningNegativePrompt">Negative prompt</label>
       <textarea class="prompt-input" id="conditioningNegativePrompt" rows="2">worst quality, low quality, bad anatomy, extra limbs, extra fingers, blurry, watermark</textarea>
       <button class="button" id="testPromptConditioning" type="button">Test positive + negative conditioning</button>
@@ -337,7 +309,7 @@
     <section class="panel">
       <p class="eyebrow">Runtime status</p>
       <h2>Full image-generation interface is wired up</h2>
-      <p>The first complete browser-side image generation succeeded with the WAI Illustrious v17 base model. The full 66-pair CLIP-L Personal Ami patch and complete local BF16 integrity scan have also passed in-browser. The generator now has an optional Personal Ami toggle and strength control wired to a patcher for all 980 indexed CLIP-L, CLIP-bigG, and split-UNet targets; the integrated full-adapter generation still needs a browser run. The adapter stays local and is never uploaded. Python is export-only; no Python inference server is intended. The FLUX.2 application remains untouched.</p>
+      <p>The first complete browser-side image generation succeeded with the WAI Illustrious v17 base model. The full 66-pair CLIP-L LoRA patch and complete local BF16 integrity scan have also passed in-browser. The generator now has an optional LoRA toggle and strength control wired to a patcher for all 980 indexed CLIP-L, CLIP-bigG, and split-UNet targets; the integrated full-adapter generation still needs a browser run. The adapter stays local and is never uploaded. Python is export-only; no Python inference server is intended. The FLUX.2 application remains untouched.</p>
       <p><a href="./README.md">Technical plan and validation checklist</a> · <a href="./tools/README.md">Offline LoRA fusion / ONNX export instructions</a></p>
     </section>
   
