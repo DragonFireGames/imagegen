@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#171923">
+<title>Pixel Art Studio</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="../"><span class="brand-mark">▦</span><span>PIXEL<span class="brand-light">FORGE</span><small>LOCAL ART STUDIO</small></span></a>
+  <div class="doc-title"><span class="status-dot"></span><input id="projectName" value="Untitled sprite" aria-label="Project name"></div>
+  <div class="top-actions">
+    <button id="newProject" class="quiet">New</button><button id="importButton" class="quiet">Import</button><button id="exportButton" class="primary">Export PNG ↗</button>
+    <input id="fileInput" type="file" accept="image/png,image/webp,image/jpeg,image/gif" hidden>
+  </div>
+</header>
+<main class="studio">
+  <aside class="left-panel">
+    <div class="panel-heading">TOOLS <span>⌘</span></div>
+    <div class="tool-grid" id="toolGrid">
+      <button class="tool active" data-tool="pencil" title="Pencil (B)">✎<small>Pencil</small></button>
+      <button class="tool" data-tool="eraser" title="Eraser (E)">▱<small>Eraser</small></button>
+      <button class="tool" data-tool="fill" title="Bucket (G)">▨<small>Bucket</small></button>
+      <button class="tool" data-tool="picker" title="Picker (I)">⌖<small>Picker</small></button>
+      <button class="tool" data-tool="line" title="Line (L)">／<small>Line</small></button>
+      <button class="tool" data-tool="rect" title="Rectangle (U)">□<small>Rect</small></button>
+      <button class="tool" data-tool="ellipse" title="Ellipse (O)">◯<small>Ellipse</small></button>
+    </div>
+    <div class="panel-heading separated">BRUSH</div>
+    <label class="field-label" for="brushSize">Size <output id="brushValue">1 px</output></label>
+    <input id="brushSize" type="range" min="1" max="8" value="1">
+    <div class="panel-heading separated">COLOR</div>
+    <div class="color-current"><input id="colorPicker" type="color" value="#25334a"><div><b id="colorHex">#25334A</b><small>Foreground</small></div></div>
+    <div class="palette" id="palette"></div>
+    <div class="palette-actions"><button id="addColor">＋ Add color</button><button id="removeColor">−</button></div>
+    <div class="panel-heading separated">HISTORY</div>
+    <div class="history-actions"><button id="undoButton">↶ Undo</button><button id="redoButton">↷ Redo</button></div>
+    <div class="history-count" id="historyCount">Ready to draw</div>
+  </aside>
+  <section class="workspace">
+    <div class="workspace-toolbar">
+      <div class="size-controls"><label>Canvas</label><input id="canvasWidth" type="number" min="1" max="256" value="32"><span>×</span><input id="canvasHeight" type="number" min="1" max="256" value="32"><button id="resizeButton">Resize</button></div>
+      <div class="view-controls"><button id="zoomOut">−</button><span id="zoomLabel">800%</span><button id="zoomIn">＋</button><button id="gridToggle" class="active">▦ Grid</button><button id="centerCanvas">Center</button></div>
+    </div>
+    <div class="canvas-stage" id="canvasStage">
+      <div class="canvas-wrap" id="canvasWrap"><canvas id="pixelCanvas" width="32" height="32"></canvas><canvas id="overlayCanvas" width="32" height="32"></canvas></div>
+    </div>
+    <div class="bottom-bar"><span id="cursorPosition">X: — Y: —</span><span id="canvasInfo">32 × 32 px</span><span>Pixel-perfect mode</span></div>
+    <div class="timeline">
+      <div class="timeline-head"><b>FRAMES</b><span>Animation timeline · coming next</span><button id="duplicateFrame" title="Duplicate current frame">＋ Duplicate</button></div>
+      <div class="frame-strip"><div class="frame-card selected"><div class="frame-thumb" id="frameThumb"></div><span>1</span></div><button class="add-frame" disabled>＋</button></div>
+    </div>
+  </section>
+  <aside class="right-panel">
+    <div class="tabs"><button class="tab active" data-tab="ai">✦ AI Studio</button><button class="tab" data-tab="layers">Layers</button></div>
+    <section class="tab-content" id="tab-ai">
+      <div class="ai-intro"><div class="sparkle">✦</div><div><b>Local AI workshop</b><p>Generate with your local model, then refine every pixel here.</p></div></div>
+      <label class="field-label" for="aiPrompt">Describe your sprite</label>
+      <textarea id="aiPrompt" rows="4" placeholder="A tiny forest spirit with a glowing mushroom hat..."></textarea>
+      <div class="field-row"><label>Output size</label><select id="aiSize"><option>32 × 32</option><option>16 × 16</option><option selected>64 × 64</option><option>96 × 96</option><option>128 × 128</option></select></div>
+      <div class="ai-actions"><button id="generateAI" class="primary wide">✦ Open local AI generator</button><button id="editAI" class="secondary wide">Edit existing sprite with AI</button></div>
+      <p class="hint">Uses your existing browser-based Illustrious model. No hosted inference or API key. Generate there, download the result, then import it here.</p>
+      <div class="panel-heading separated">PIXEL PROCESSORS <span class="local-tag">LOCAL</span></div>
+      <p class="subtle">Turn imported images into crisp pixel art. These operations run on your device and do not use AI.</p>
+      <label class="field-label" for="pixelScale">Pixel size <output id="pixelScaleValue">4</output></label>
+      <input id="pixelScale" type="range" min="1" max="16" value="4">
+      <label class="field-label" for="colorCount">Palette colors <output id="colorCountValue">16</output></label>
+      <input id="colorCount" type="range" min="2" max="32" value="16">
+      <label class="check-row"><input id="ditherToggle" type="checkbox"> Floyd–Steinberg dithering</label>
+      <div class="processor-actions"><button id="pixelizeButton" class="secondary wide">Pixelate + quantize</button><button id="paletteButton" class="secondary wide">Reduce to palette</button><button id="outlineButton" class="secondary wide">Add 1px outline</button></div>
+      <div class="panel-heading separated">STYLE PRESETS</div>
+      <div class="style-presets"><button data-preset="gameboy">Game Boy</button><button data-preset="nes">NES</button><button data-preset="pico">PICO-8</button><button data-preset="mono">1-bit</button></div>
+      <p class="hint" id="processorStatus">Non-destructive undo is available for every operation.</p>
+    </section>
+    <section class="tab-content" id="tab-layers" hidden>
+      <div class="panel-heading">DOCUMENT</div><div class="layer-row"><span>▧</span><b>Background</b><small>Base canvas</small></div>
+      <p class="hint">Layer compositing and animation frames are planned for the next pass. The current canvas is a single editable pixel layer.</p>
+    </section>
+  </aside>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

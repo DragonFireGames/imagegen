@@ -94,6 +94,16 @@ const fields = {
   loraFile: document.querySelector("#loraFile")
 };
 
+const pixelArtParams = new URLSearchParams(window.location.search);
+if (pixelArtParams.has("pixelArtPrompt") && fields.prompt) {
+  fields.prompt.value = pixelArtParams.get("pixelArtPrompt") || "";
+}
+if (pixelArtParams.has("pixelArtSize")) {
+  // SDXL generates at 512px; Pixel Art Studio downsamples to the requested sprite size after import.
+  if (fields.width) fields.width.value = "512";
+  if (fields.height) fields.height.value = "512";
+}
+
 const adapterFileLabel = document.querySelector("#fileName");
 let expectedAdapterFile = null;
 
