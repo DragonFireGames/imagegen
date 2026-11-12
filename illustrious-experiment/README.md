@@ -72,9 +72,9 @@ validation pass. This changes validation overhead only; it does not change the
 model graph, weights, tensor types, scheduler, or generated values. The default
 is unchanged (ONNX Runtime's `basic` mode). You can use `?validation=basic`
 to state that default explicitly, or `?validation=full` for extra debugging
-checks. `?validation=disabled` disables WebGPU validation too; use it only as
-a controlled performance benchmark, since invalid GPU operations become harder
-to diagnose. None of these modes changes the intended model computation, but
+checks. `?validation=disabled` skips ONNX-side validation as well; use it only as
+a controlled performance benchmark, since fewer runtime checks make invalid
+GPU operations harder to diagnose. None of these modes changes the intended model computation, but
 the default validation mode remains the safest choice for ordinary use. This
 is an optional benchmark setting, not a guaranteed speedup; compare repeated
 warm runs with otherwise identical settings.
