@@ -661,6 +661,10 @@ function createGpuInputState(conditioning, width, height, batchSize, conditionin
       device.queue.writeBuffer(entries.sample.buffer, 0, sample);
       device.queue.writeBuffer(entries.timestep.buffer, 0, entries.timestep.data);
     },
+    writeTimestep(timestep) {
+      entries.timestep.data.fill(timestep);
+      device.queue.writeBuffer(entries.timestep.buffer, 0, entries.timestep.data);
+    },
     updateConditioning(next, nextConditioningIndex = conditioningIndex) {
       const hidden = batchSize === 1
         ? next.encoderHidden.subarray(nextConditioningIndex * hiddenLength, (nextConditioningIndex + 1) * hiddenLength)
@@ -851,7 +855,8 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
   };
 
   try {
-    if (!sessions.gpuScheduler) gpu.writeStep(batchSample, timestep);
+    if (sessions.gpuScheduler) gpu.writeTimestep(timestep);
+    else gpu.writeStep(batchSample, timestep);
     const startedA = performance.now();
     outputsA = await sessions.a.run({
       sample: gpu.entries.sample.tensor,
