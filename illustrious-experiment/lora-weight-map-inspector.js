@@ -107,7 +107,7 @@ function normalizedIndexName(name) {
 function kohyaUnetToDiffusersName(module) {
   let key = module.replaceAll("_", ".");
 
-  // The Personal Ami UNet uses Kohya/SGM block indices. Convert those indices
+  // A Kohya/SGM SDXL UNet uses Kohya/SGM block indices. Convert those indices
   // to the actual SDXL Diffusers module paths used by weights-index.json.
   let match = key.match(/^input\.blocks\.(\d+)\.(\d+)(?:\.(.*))?$/);
   if (match) {
@@ -246,7 +246,7 @@ async function fetchVerifiedIndex(path, fileMap) {
 button.addEventListener("click", async () => {
   const file = fileInput.files && fileInput.files[0];
   if (!file) {
-    setStatus("Choose the Personal Ami .safetensors file in the inspector above first.", "error");
+    setStatus("Choose the LoRA .safetensors file in the inspector above first.", "error");
     return;
   }
 
