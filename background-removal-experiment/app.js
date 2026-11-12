@@ -1,6 +1,9 @@
-import { pipeline, RawImage, env } from "../vendor/transformers/transformers.js";
+import * as ort from "../../vendor/onnxruntime-web/ort.webgpu.min.mjs";
 
-const MODEL_ID = "briaai/RMBG-1.4";
+const MODEL_BASE = "https://huggingface.co/baby2008/RMBG-2.0-ONNX/resolve/78c06dfe901fc676de75ab1135ab34934dfb6666/onnx/";
+const MODEL_FILES = { webgpu: "model_fp16.onnx", wasm: "model_int8.onnx" };
+const MODEL_CACHE = "imagegen-rmbg-2-models-v1";
+const MODEL_INPUT_SIZE = 1024;
 const MAX_PROCESS_SIDE = 1600;
 const $ = (id) => document.getElementById(id);
 
@@ -14,6 +17,8 @@ const resultCanvas = $("result-canvas");
 const resultContext = resultCanvas.getContext("2d");
 const processCanvas = document.createElement("canvas");
 const processContext = processCanvas.getContext("2d", { willReadFrequently: true });
+const modelCanvas = document.createElement("canvas");
+const modelContext = modelCanvas.getContext("2d", { willReadFrequently: true });
 const maskCanvas = document.createElement("canvas");
 const maskContext = maskCanvas.getContext("2d", { willReadFrequently: true });
 
@@ -32,13 +37,11 @@ let brushMode = "none";
 let lastBrushPoint = null;
 let painting = false;
 let pickingColor = false;
-let segmenters = {};
+let sessions = {};
 
-env.useBrowserCache = true;
-env.useWasmCache = true;
-env.cacheKey = "imagegen-background-removal-v1";
-env.backends.onnx.wasm.wasmPaths = new URL("../vendor/transformers/", import.meta.url).href;
-env.backends.onnx.wasm.numThreads = 1;
+ort.env.wasm.wasmPaths = new URL("../../vendor/onnxruntime-web/", import.meta.url).href;
+ort.env.wasm.numThreads = 1;
+ort.env.logLevel = "warning";
 
 function setProgress(label, percent, detail) {
   $("progress-label").textContent = label;
@@ -57,6 +60,7 @@ function setBusy(busy) {
   $("pick-background").disabled = busy || !sourceFile;
   $("choose-image").disabled = busy;
   fileInput.disabled = busy;
+  $("backend").disabled = busy;
 }
 
 function setMaskControls(enabled) {
@@ -199,61 +203,170 @@ async function loadImage(file) {
   }
 }
 
-function updateModelProgress(event) {
-  if (!event) return;
-  const file = event.file ? event.file.split("/").pop() : "model files";
-  if (event.status === "progress" && Number.isFinite(event.progress)) {
-    setProgress("Downloading " + file, Math.min(95, event.progress), Math.round(event.progress) + "%");
-  } else if (event.status === "done") {
-    setProgress("Loaded " + file, 95, "Preparing runtime");
-  } else if (event.status === "initiate") {
-    setProgress("Fetching " + file, 5, "");
-  } else if (event.status === "ready") {
-    setProgress("Preparing model", 95, "");
-  } else if (event.status) {
-    setProgress(String(event.status), 5, file);
-  }
+function formatMiB(bytes) {
+  return (bytes / 1024 / 1024).toFixed(0) + " MiB";
 }
 
-async function getSegmenter(device) {
-  if (segmenters[device]) return segmenters[device];
-  const dtype = device === "webgpu" ? "fp16" : "q8";
-  setProgress("Loading RMBG-1.4", 2, device.toUpperCase() + " · " + dtype.toUpperCase());
-  setStatus("Loading the " + device.toUpperCase() + " background-removal model. The first run downloads model weights.");
-  const instance = await pipeline("image-segmentation", MODEL_ID, {
-    device,
-    dtype,
-    progress_callback: updateModelProgress
+async function loadModelBytes(device) {
+  const file = MODEL_FILES[device];
+  const url = MODEL_BASE + file;
+  let cache = null;
+
+  try {
+    if ("caches" in window) cache = await caches.open(MODEL_CACHE);
+  } catch (error) {
+    console.warn("Background Removal Lab: persistent model cache unavailable.", error);
+  }
+
+  if (cache) {
+    try {
+      const cached = await cache.match(url);
+      if (cached) {
+        setProgress("Loading cached RMBG-2.0 weights", 55, file);
+        const buffer = await cached.arrayBuffer();
+        setProgress("Cached model loaded", 78, formatMiB(buffer.byteLength));
+        return buffer;
+      }
+    } catch (error) {
+      console.warn("Background Removal Lab: cached model could not be read; downloading again.", error);
+    }
+  }
+
+  setProgress("Downloading RMBG-2.0 weights", 5, file);
+  const response = await fetch(url, { mode: "cors" });
+  if (!response.ok) {
+    throw new Error("Could not download " + file + " (" + response.status + "). Check the model host and network connection.");
+  }
+
+  let cacheWrite = Promise.resolve();
+  if (cache) {
+    cacheWrite = cache.put(url, response.clone()).catch((error) => {
+      console.warn("Background Removal Lab: model could not be persisted in Cache Storage.", error);
+    });
+  }
+
+  const total = Number(response.headers.get("content-length")) || 0;
+  let loaded = 0;
+  let buffer;
+
+  if (response.body && typeof TransformStream !== "undefined") {
+    const progressStream = response.body.pipeThrough(new TransformStream({
+      transform(chunk, controller) {
+        loaded += chunk.byteLength;
+        const detail = total
+          ? formatMiB(loaded) + " / " + formatMiB(total)
+          : formatMiB(loaded) + " received";
+        const percent = total ? 5 + Math.min(70, loaded / total * 70) : 8;
+        setProgress("Downloading RMBG-2.0 weights", percent, detail);
+        controller.enqueue(chunk);
+      }
+    }));
+    buffer = await new Response(progressStream).arrayBuffer();
+  } else {
+    buffer = await response.arrayBuffer();
+  }
+
+  await cacheWrite;
+  setProgress("RMBG-2.0 weights downloaded", 78, formatMiB(buffer.byteLength));
+  return buffer;
+}
+
+async function getSession(device) {
+  if (sessions[device]) return sessions[device];
+
+  const file = MODEL_FILES[device];
+  const precision = device === "webgpu" ? "FP16 weights" : "INT8 weights";
+  setProgress("Preparing RMBG-2.0", 2, device.toUpperCase() + " · " + precision);
+  setStatus("Loading RMBG-2.0 " + precision + " weights. The first run downloads the model; later runs use the browser cache.");
+
+  const modelBytes = await loadModelBytes(device);
+  setProgress("Initializing RMBG-2.0", 82, device.toUpperCase() + " · " + precision);
+
+  const session = await ort.InferenceSession.create(modelBytes, {
+    executionProviders: [device],
+    graphOptimizationLevel: "all"
   });
-  segmenters[device] = instance;
-  return instance;
-}
 
-function findForegroundSegment(segments) {
-  if (!Array.isArray(segments) || !segments.length) return null;
-  const foreground = segments.find((item) => /foreground|subject|object/i.test(item.label || ""));
-  if (foreground) return foreground;
-  const nonBackground = segments.find((item) => !/background/i.test(item.label || ""));
-  return nonBackground || segments[0];
-}
-
-function readMask(segment) {
-  const mask = segment && segment.mask;
-  if (!mask || !mask.data || !mask.width || !mask.height) {
-    throw new Error("The model returned a segmentation without a readable mask.");
+  const inputName = session.inputNames.find((name) => name === "pixel_values") || session.inputNames[0];
+  const outputName = session.outputNames.find((name) => name === "alphas") || session.outputNames[0];
+  if (!inputName || !outputName) {
+    await session.release();
+    throw new Error("Unexpected RMBG-2.0 ONNX graph inputs or outputs.");
   }
+
+  sessions[device] = { session, inputName, outputName, file };
+  return sessions[device];
+}
+
+function makeModelInput() {
+  modelCanvas.width = MODEL_INPUT_SIZE;
+  modelCanvas.height = MODEL_INPUT_SIZE;
+  modelContext.clearRect(0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
+  modelContext.imageSmoothingEnabled = true;
+  modelContext.imageSmoothingQuality = "high";
+  modelContext.drawImage(processCanvas, 0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE);
+
+  const rgba = modelContext.getImageData(0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE).data;
+  const area = MODEL_INPUT_SIZE * MODEL_INPUT_SIZE;
+  const values = new Float32Array(area * 3);
+  const mean = [0.485, 0.456, 0.406];
+  const std = [0.229, 0.224, 0.225];
+
+  for (let pixel = 0; pixel < area; pixel++) {
+    const source = pixel * 4;
+    values[pixel] = (rgba[source] / 255 - mean[0]) / std[0];
+    values[area + pixel] = (rgba[source + 1] / 255 - mean[1]) / std[1];
+    values[area * 2 + pixel] = (rgba[source + 2] / 255 - mean[2]) / std[2];
+  }
+
+  return new ort.Tensor("float32", values, [1, 3, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE]);
+}
+
+function halfToFloat(value) {
+  const sign = (value & 0x8000) ? -1 : 1;
+  const exponent = (value >> 10) & 31;
+  const fraction = value & 1023;
+  if (exponent === 0) return sign * Math.pow(2, -14) * (fraction / 1024);
+  if (exponent === 31) return fraction ? NaN : sign * Infinity;
+  return sign * Math.pow(2, exponent - 15) * (1 + fraction / 1024);
+}
+
+function readMask(tensor) {
+  if (!tensor || !tensor.data || !Array.isArray(tensor.dims) || tensor.dims.length < 2) {
+    throw new Error("RMBG-2.0 did not return a readable alpha matte.");
+  }
+
+  const width = tensor.dims[tensor.dims.length - 1];
+  const height = tensor.dims[tensor.dims.length - 2];
+  const data = tensor.data;
+  if (!width || !height || data.length < width * height) {
+    throw new Error("RMBG-2.0 returned an unexpected alpha matte shape: " + tensor.dims.join(" × "));
+  }
+
+  const readValue = (index) => {
+    let value = Number(data[index]);
+    if (tensor.type === "float16" && data instanceof Uint16Array) value = halfToFloat(data[index]);
+    if (!Number.isFinite(value)) return 0;
+    if (value >= 0 && value <= 1) value *= 255;
+    return Math.max(0, Math.min(255, value));
+  };
+
   const output = new Uint8ClampedArray(processWidth * processHeight);
-  const channels = mask.channels || 1;
-  const data = mask.data;
   for (let y = 0; y < processHeight; y++) {
-    const sy = Math.min(mask.height - 1, Math.floor(y * mask.height / processHeight));
+    const sourceY = Math.max(0, Math.min(height - 1, (y + 0.5) * height / processHeight - 0.5));
+    const y0 = Math.floor(sourceY);
+    const y1 = Math.min(height - 1, y0 + 1);
+    const fy = sourceY - y0;
+
     for (let x = 0; x < processWidth; x++) {
-      const sx = Math.min(mask.width - 1, Math.floor(x * mask.width / processWidth));
-      const sourceIndex = (sy * mask.width + sx) * channels;
-      let value = Number(data[sourceIndex]);
-      if (!Number.isFinite(value)) value = 0;
-      if (value >= 0 && value <= 1) value *= 255;
-      output[y * processWidth + x] = Math.max(0, Math.min(255, Math.round(value)));
+      const sourceX = Math.max(0, Math.min(width - 1, (x + 0.5) * width / processWidth - 0.5));
+      const x0 = Math.floor(sourceX);
+      const x1 = Math.min(width - 1, x0 + 1);
+      const fx = sourceX - x0;
+
+      const top = readValue(y0 * width + x0) * (1 - fx) + readValue(y0 * width + x1) * fx;
+      const bottom = readValue(y1 * width + x0) * (1 - fx) + readValue(y1 * width + x1) * fx;
+      output[y * processWidth + x] = Math.round(top * (1 - fy) + bottom * fy);
     }
   }
   return output;
@@ -267,7 +380,7 @@ async function removeWithAI() {
   $("pick-background").textContent = "Pick background color from image";
   pickingColor = false;
   sourceFrame.classList.remove("pick-mode");
-  $("model-status").textContent = "Loading model";
+  $("model-status").textContent = "Loading RMBG-2.0";
   $("model-status").classList.remove("ready");
 
   const requested = $("backend").value;
@@ -277,46 +390,69 @@ async function removeWithAI() {
   let lastError = null;
 
   try {
-    const rawImage = RawImage.fromCanvas(processCanvas);
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persist().catch(() => {});
+    }
+
+    setProgress("Preprocessing image", 1, "1024 × 1024");
+    const inputTensor = makeModelInput();
+
     for (let i = 0; i < candidates.length; i++) {
       const device = candidates[i];
       try {
         if (device === "webgpu" && !navigator.gpu) {
           throw new Error("WebGPU is unavailable in this browser.");
         }
-        const model = await getSegmenter(device);
-        setProgress("Segmenting foreground", 97, device.toUpperCase());
-        setStatus("Running foreground segmentation locally on " + device.toUpperCase() + "…");
-        const segments = await model(rawImage, { threshold: 0, mask_threshold: 0.5 });
-        const selected = findForegroundSegment(segments);
-        if (!selected) throw new Error("The segmentation model did not return a foreground mask.");
-        const nextMask = readMask(selected);
+
+        const runtime = await getSession(device);
+        setProgress("Segmenting foreground", 90, device.toUpperCase());
+        setStatus("Running RMBG-2.0 locally on " + device.toUpperCase() + "…");
+
+        const outputs = await runtime.session.run({ [runtime.inputName]: inputTensor });
+        const alpha = outputs.alphas || outputs[runtime.outputName];
+        const nextMask = readMask(alpha);
         let visible = 0;
-        for (let p = 0; p < nextMask.length; p++) if (nextMask[p] > 0) visible++;
-        if (!visible) throw new Error("The model returned an empty foreground mask.");
+        let minAlpha = 255;
+        let maxAlpha = 0;
+        for (let p = 0; p < nextMask.length; p++) {
+          const value = nextMask[p];
+          if (value > 4) visible++;
+          if (value < minAlpha) minAlpha = value;
+          if (value > maxAlpha) maxAlpha = value;
+        }
+        if (!visible || maxAlpha < 8 || maxAlpha - minAlpha < 1) {
+          throw new Error("RMBG-2.0 returned an empty or constant alpha matte. The model output may be incompatible.");
+        }
+
         commitMask(nextMask, true);
-        $("model-status").textContent = "Loaded · " + device.toUpperCase();
+        const precision = device === "webgpu" ? "FP16 weights" : "INT8 weights";
+        $("model-status").textContent = "RMBG-2.0 · " + device.toUpperCase();
         $("model-status").classList.add("ready");
-        setProgress("Background removed", 100, device.toUpperCase());
-        setStatus("AI cutout complete. Use Restore and Erase to refine the mask.");
-        $("source-tip").textContent = "Use the mask tools to clean up the cutout.";
+        setProgress("Background removed", 100, device.toUpperCase() + " · " + precision);
+        setStatus("RMBG-2.0 cutout complete. Restore and Erase refine the alpha matte.");
+        $("source-tip").textContent = "RMBG-2.0 · 1024px model input";
         return;
       } catch (error) {
         lastError = error;
         if (device === "webgpu" && requested === "auto" && i + 1 < candidates.length) {
-          setStatus("WebGPU failed; retrying with WebAssembly. " + (error.message || error));
-          delete segmenters.webgpu;
+          const failed = sessions.webgpu;
+          if (failed && failed.session) {
+            try { await failed.session.release(); } catch (releaseError) { console.warn(releaseError); }
+          }
+          delete sessions.webgpu;
+          setStatus("WebGPU failed; retrying with the quantized WebAssembly model. " + (error.message || error));
           continue;
         }
         throw error;
       }
     }
+
     throw lastError || new Error("No background-removal backend was available.");
   } catch (error) {
     console.error(error);
     setProgress("AI removal failed", 0, "");
     $("progress-label").classList.add("error");
-    setStatus("AI removal failed: " + (error.message || error));
+    setStatus("RMBG-2.0 failed: " + (error.message || error));
     $("model-status").textContent = "Model error";
   } finally {
     setBusy(false);

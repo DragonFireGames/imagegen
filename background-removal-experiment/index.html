@@ -44,17 +44,17 @@
         <section class="control-section">
           <div class="section-heading"><h2>2. Remove background</h2><span class="step">METHOD</span></div>
           <button class="primary" type="button" id="ai-remove" disabled>
-            <span>✧</span><span><strong>AI remove background</strong><small>RMBG-1.4 · WebGPU / WASM</small></span>
+            <span>✧</span><span><strong>AI remove background</strong><small>RMBG-2.0 · WebGPU FP16 / WASM INT8</small></span>
           </button>
-          <p class="hint license-hint">RMBG-1.4 is licensed for non-commercial use. Commercial use requires a separate agreement with BRIA.</p>
+          <p class="hint license-hint">RMBG-2.0 is licensed CC BY-NC 4.0 for non-commercial use. Commercial use requires a separate agreement with BRIA.</p>
           <div class="divider-label"><span>OR WITHOUT AI</span></div>
           <button class="secondary wide" type="button" id="pick-background" disabled>Pick background color from image</button>
           <p class="hint" id="pick-hint">Click the background in the Original panel. Connected areas of a similar color will be removed.</p>
           <label for="backend">AI backend</label>
           <select id="backend">
-            <option value="auto" selected>Auto · WebGPU, then WASM</option>
-            <option value="webgpu">WebGPU only</option>
-            <option value="wasm">WebAssembly CPU</option>
+            <option value="auto" selected>Auto · WebGPU FP16, then WASM INT8</option>
+            <option value="webgpu">WebGPU only · FP16</option>
+            <option value="wasm">WebAssembly CPU · INT8</option>
           </select>
         </section>
 
@@ -114,13 +114,13 @@
           <div class="progress-top"><span id="progress-label">Ready</span><span id="progress-detail">—</span></div>
           <div class="progress-track"><div id="progress-bar"></div></div>
         </div>
-        <div class="runtime-log" id="runtime-log" aria-live="polite">Local model loads only when you press “AI remove background.”</div>
+        <div class="runtime-log" id="runtime-log" aria-live="polite">RMBG-2.0 loads only when you press “AI remove background.”</div>
       </section>
     </main>
 
     <footer>
       <span>Background Removal Lab · local browser inference</span>
-      <span><a href="../">Imagegen home</a> · <a href="https://huggingface.co/briaai/RMBG-1.4" target="_blank" rel="noreferrer">RMBG-1.4 model card &amp; license</a> · <a href="https://huggingface.co/docs/transformers.js" target="_blank" rel="noreferrer">Transformers.js</a> · <a href="https://github.com/DragonFireGames/imagegen" target="_blank" rel="noreferrer">Source</a></span>
+      <span><a href="../">Imagegen home</a> · <a href="https://huggingface.co/briaai/RMBG-2.0" target="_blank" rel="noreferrer">BRIA RMBG-2.0 model card &amp; license</a> · <a href="https://huggingface.co/baby2008/RMBG-2.0-ONNX" target="_blank" rel="noreferrer">Fixed ONNX export</a> · <a href="https://github.com/DragonFireGames/imagegen" target="_blank" rel="noreferrer">Source</a></span>
     </footer>
   </div>
   <script type="module" src="./app.js"></script>
