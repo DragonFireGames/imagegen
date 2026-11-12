@@ -1034,6 +1034,7 @@ releaseEngineButton.addEventListener("click", async () => {
   } finally {
     button.disabled = false;
     prepareEngineButton.disabled = false;
+    releaseEngineButton.disabled = !residentEngineLock;
   }
 });
 
