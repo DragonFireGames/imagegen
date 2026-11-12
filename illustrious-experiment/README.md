@@ -49,6 +49,12 @@ per-run CPU command-submission overhead; it does not reduce the UNet's GPU
 computation. It is opt-in because not every model/operator combination is
 capture-compatible.
 
+Use `?layout=NHWC` to request NHWC as the preferred layout for the three UNet
+sessions. The default remains NCHW. Layout preference can change which kernels
+or layout conversions the WebGPU provider selects, so benchmark it on the
+target GPU; NHWC is not assumed to be faster. It does not change model weights
+or tensor precision. This option can be combined with graph capture.
+
 ## Brush infill experiment
 
 The standalone brush page uses the same WAI Illustrious v17 ONNX model pack.
