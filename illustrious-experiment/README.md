@@ -55,6 +55,13 @@ or layout conversions the WebGPU provider selects, so benchmark it on the
 target GPU; NHWC is not assumed to be faster. It does not change model weights
 or tensor precision. This option can be combined with graph capture.
 
+Use `?keepVae=1` to retain the VAE decoder after the first generated image.
+This avoids recreating its session for subsequent generations, at the cost of
+keeping the decoder's GPU allocations resident alongside the UNet. This is
+opt-in; the default releases VAE after each image. Releasing the inference
+engine frees it, and changing the adapter or resolution releases it before
+rebuilding the UNet.
+
 ## Brush infill experiment
 
 The standalone brush page uses the same WAI Illustrious v17 ONNX model pack.
