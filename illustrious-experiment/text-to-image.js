@@ -956,13 +956,17 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
     if (sessions.gpuScheduler) gpu.writeTimestep(timestep);
     else gpu.writeStep(batchSample, timestep);
     const startedA = performance.now();
+    const usePersistentOutputs = Boolean(sessions.gpuOutputs?.a && sessions.gpuOutputs?.b);
     outputsA = await sessions.a.run({
       sample: gpu.entries.sample.tensor,
       timestep: gpu.entries.timestep.tensor,
       encoder_hidden_states: gpu.entries.encoderHidden.tensor,
       text_embeds: gpu.entries.textEmbeds.tensor,
       time_ids: gpu.entries.timeIds.tensor
-    }, sessions.gpuOutputs.a.fetches);
+    }, usePersistentOutputs ? sessions.gpuOutputs.a.fetches : undefined);
+    if (!usePersistentOutputs) {
+      for (const name of ["hidden", "skip_6", "skip_7", "skip_8"]) disposeOutput(outputsA, name);
+    }
     timings.a = (performance.now() - startedA) / 1000;
     checkCancelled();
 
@@ -987,7 +991,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       skip_6: outputsA.skip_6,
       skip_7: outputsA.skip_7,
       skip_8: outputsA.skip_8
-    }, sessions.gpuOutputs.b.fetches);
+    }, usePersistentOutputs ? sessions.gpuOutputs.b.fetches : undefined);
     timings.b = (performance.now() - startedB) / 1000;
     checkCancelled();
     validateGpuTensor(outputsB.hidden_out, "UNET_B hidden_out",
@@ -1039,6 +1043,10 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
     return { guided, timings };
   } finally {
     if (!sessions.gpuScheduler) disposeRemaining(outputsC);
+    if (!usePersistentOutputs) {
+      disposeRemaining(outputsB);
+      disposeRemaining(outputsA);
+    }
   }
 }
 
@@ -1380,28 +1388,10 @@ async function buildUnetSessions(manifest, lora, conditioning, width, height, ba
     const patchedA = await patchedComponent("unet_a");
     sessions.a = await loadSession(manifest, "unet_a", "UNET_A", patchedA?.externalData, outputsA);
     sessions.gpuInputs = createGpuInputState(conditioning, width, height, batchSize, conditioningIndex);
-    const latentWidth = width / 8;
-    const latentHeight = height / 8;
-    sessions.gpuOutputs.a = createGpuOutputSet(ort.env.webgpu.device, {
-      hidden: [batchSize, 1280, latentHeight / 4, latentWidth / 4],
-      emb: [batchSize, 1280],
-      skip_0: [batchSize, 320, latentHeight, latentWidth],
-      skip_1: [batchSize, 320, latentHeight, latentWidth],
-      skip_2: [batchSize, 320, latentHeight, latentWidth],
-      skip_3: [batchSize, 320, latentHeight / 2, latentWidth / 2],
-      skip_4: [batchSize, 640, latentHeight / 2, latentWidth / 2],
-      skip_5: [batchSize, 640, latentHeight / 2, latentWidth / 2],
-      skip_6: [batchSize, 640, latentHeight / 4, latentWidth / 4],
-      skip_7: [batchSize, 1280, latentHeight / 4, latentWidth / 4],
-      skip_8: [batchSize, 1280, latentHeight / 4, latentWidth / 4]
-    }, "UNET_A");
     checkCancelled();
 
     const patchedB = await patchedComponent("unet_b");
     sessions.b = await loadSession(manifest, "unet_b", "UNET_B", patchedB?.externalData, outputsB);
-    sessions.gpuOutputs.b = createGpuOutputSet(ort.env.webgpu.device, {
-      hidden_out: [batchSize, 1280, latentHeight / 2, latentWidth / 2]
-    }, "UNET_B");
     checkCancelled();
 
     const patchedC = await patchedComponent("unet_c");
@@ -1429,14 +1419,42 @@ async function buildUnetSessions(manifest, lora, conditioning, width, height, ba
     );
 
     validateSessionInputs(sessions.a, ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], "UNET_A");
-    for (const name of Object.keys(sessions.gpuOutputs.a.fetches)) {
-      if (!sessions.a.outputNames.includes(name)) throw new Error("UNET_A is missing expected output " + name + ".");
-    }
-    for (const name of Object.keys(sessions.gpuOutputs.b.fetches)) {
-      if (!sessions.b.outputNames.includes(name)) throw new Error("UNET_B is missing expected output " + name + ".");
-    }
     validateSessionInputs(sessions.b, ["hidden", "emb", "encoder_hidden_states", "skip_6", "skip_7", "skip_8"], "UNET_B");
     validateSessionInputs(sessions.c, ["hidden", "emb", "encoder_hidden_states", "skip_0", "skip_1", "skip_2", "skip_3", "skip_4", "skip_5"], "UNET_C");
+
+    const latentWidth = width / 8;
+    const latentHeight = height / 8;
+    try {
+      sessions.gpuOutputs.a = createGpuOutputSet(ort.env.webgpu.device, {
+        hidden: [batchSize, 1280, latentHeight / 4, latentWidth / 4],
+        emb: [batchSize, 1280],
+        skip_0: [batchSize, 320, latentHeight, latentWidth],
+        skip_1: [batchSize, 320, latentHeight, latentWidth],
+        skip_2: [batchSize, 320, latentHeight, latentWidth],
+        skip_3: [batchSize, 320, latentHeight / 2, latentWidth / 2],
+        skip_4: [batchSize, 640, latentHeight / 2, latentWidth / 2],
+        skip_5: [batchSize, 640, latentHeight / 2, latentWidth / 2],
+        skip_6: [batchSize, 640, latentHeight / 4, latentWidth / 4],
+        skip_7: [batchSize, 1280, latentHeight / 4, latentWidth / 4],
+        skip_8: [batchSize, 1280, latentHeight / 4, latentWidth / 4]
+      }, "UNET_A");
+      sessions.gpuOutputs.b = createGpuOutputSet(ort.env.webgpu.device, {
+        hidden_out: [batchSize, 1280, latentHeight / 2, latentWidth / 2]
+      }, "UNET_B");
+      for (const name of Object.keys(sessions.gpuOutputs.a.fetches)) {
+        if (!sessions.a.outputNames.includes(name)) throw new Error("UNET_A is missing expected output " + name + ".");
+      }
+      for (const name of Object.keys(sessions.gpuOutputs.b.fetches)) {
+        if (!sessions.b.outputNames.includes(name)) throw new Error("UNET_B is missing expected output " + name + ".");
+      }
+      log("Persistent UNET_A/B output buffers allocated for reuse across denoising steps.");
+    } catch (error) {
+      sessions.gpuOutputs.a?.destroy();
+      sessions.gpuOutputs.b?.destroy();
+      sessions.gpuOutputs = { a: null, b: null };
+      log("Persistent UNet output buffers unavailable; using runtime-managed outputs. Reason: " +
+        (error?.message || String(error)));
+    }
     return sessions;
   } catch (error) {
     await releaseSessions(sessions);
