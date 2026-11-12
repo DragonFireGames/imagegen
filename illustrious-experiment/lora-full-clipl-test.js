@@ -199,11 +199,19 @@ button.addEventListener("click", async () => {
     for (const [name, info] of Object.entries(header)) {
       if (name === "__metadata__") continue;
       let side = null, stem = name;
-      if ((name.startsWith("lora_te1_") || name.startsWith("lora_te_")) && name.endsWith(".lora_down.weight")) {
-        side = "down"; stem = name.slice(0, -".lora_down.weight".length);
-      } else if ((name.startsWith("lora_te1_") || name.startsWith("lora_te_")) && name.endsWith(".lora_up.weight")) {
-        side = "up"; stem = name.slice(0, -".lora_up.weight".length);
+      for (const [suffix, candidate] of [
+        [".lora_down.weight", "down"],
+        [".lora_up.weight", "up"],
+        [".lora_A.weight", "down"],
+        [".lora_B.weight", "up"]
+      ]) {
+        if (name.endsWith(suffix)) {
+          side = candidate;
+          stem = name.slice(0, -suffix.length);
+          break;
+        }
       }
+      if (!side || !(stem.startsWith("lora_te1_") || stem.startsWith("lora_te_"))) continue;
       if (side) {
         if (!pairs.has(stem)) pairs.set(stem, {});
         pairs.get(stem)[side] = info;
@@ -325,7 +333,7 @@ button.addEventListener("click", async () => {
     row("Total test time", ((performance.now() - started) / 1000).toFixed(1) + " s");
     if (!difference.changed || !Number.isFinite(difference.rms)) throw new Error("Full CLIP-L patch produced no finite output difference.");
     output.textContent = "All compatible indexed CLIP-L LoRA pairs were fused into their FP16 ONNX initializers. Unsupported targets absent from the graph index were skipped. The original and patched CLIP-L sessions both ran successfully on identical inputs. This validates the mapped CLIP-L adapter component only; CLIP-bigG and all UNet partitions remain untested.";
-    setStatus("Full CLIP-L adapter patch passed: all 66 mapped pairs were applied and ONNX Runtime inference succeeded.", "success");
+    setStatus("Full CLIP-L adapter patch passed: " + mapped + " mapped pairs were applied and ONNX Runtime inference succeeded.", "success");
   } catch (error) {
     console.error("[Illustrious] Full CLIP-L LoRA test failed:", error);
     setStatus("Full CLIP-L patch failed: " + (error?.message || String(error)), "error");
