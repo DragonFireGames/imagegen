@@ -86,39 +86,14 @@ function gen_arch_config() {
     return config;
 }
 
+const MODEL_CDN_BASE = "https://unlimited.waifu2x.net/models/";
+const EDITOR_CORS_PROXY = "https://proxy.watermelonkatana.workers.dev/";
+
 export const CONFIG = {
     arch: gen_arch_config(),
-    model_base_url: "models/",
-    get_model_base_url: function () {
-        return this.model_base_url;
-    },
-    set_model_base_url: function (baseUrl) {
-        let value = (baseUrl || "").trim() || "models/";
-
-        if (/^https?:\/\//i.test(value)) {
-            const url = new URL(value);
-            if (url.search || url.hash) {
-                throw new Error("Model base URL must not include a query string or fragment.");
-            }
-            if (!url.pathname.endsWith("/")) {
-                url.pathname += "/";
-            }
-            value = url.href;
-        } else {
-            if (/^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith("//")) {
-                throw new Error("Use an HTTP(S) URL or a relative folder path such as models/.");
-            }
-            value = value.endsWith("/") ? value : value + "/";
-        }
-
-        this.model_base_url = value;
-        return value;
-    },
     resolve_model_path: function (path) {
-        if (/^https?:\/\//i.test(this.model_base_url)) {
-            return new URL(path, this.model_base_url).href;
-        }
-        return this.model_base_url + path;
+        const targetUrl = new URL(path, MODEL_CDN_BASE).href;
+        return EDITOR_CORS_PROXY + "?url=" + encodeURIComponent(targetUrl);
     },
     get_config: function (arch, style, method) {
         if ((arch in this.arch) && (style in this.arch[arch]) && (method in this.arch[arch][style])) {

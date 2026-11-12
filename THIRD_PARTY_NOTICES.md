@@ -9,6 +9,7 @@ The application source is MIT-licensed; the following components retain their ow
 | FLUX.2 Klein tokenizer assets | black-forest-labs/FLUX.2-klein-4B, revision 5e67da950fce4a097bc150c22958a05716994cea | Apache-2.0 | models/qwen3-4b-tokenizer/LICENSE |
 | FLUX.2 Klein 4B ONNX weights | cgb/flux2-klein-4b-onnx-webgpu | Apache-2.0, as declared by the publisher | Fetched at runtime; not stored in this repository |
 | Waifu2x Unlimited application | nagadomi/nunif, revision b1548e8ff08758f336cdab14443647318ef5e0e9 | MIT | waifu2x-unlimited/LICENSE-nunif |
+| Waifu2x ONNX models and helper models | nagadomi/nunif upstream model files | MIT (same license as upstream project, per maintainer clarification) | Fetched at runtime from unlimited.waifu2x.net via the Editor CORS proxy |
 | ONNX Runtime Web (Waifu2x experiment) | 1.30.0-dev.20260812-74c8ca5b3a | MIT | Loaded from jsDelivr at runtime by waifu2x-unlimited/index.html |
 
 Upstream projects:
