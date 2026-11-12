@@ -330,12 +330,3 @@ dropZone.addEventListener("drop", event => {
   fileInput.files = transfer.files;
   fileInput.dispatchEvent(new Event("change"));
 });
-
-document.querySelector("#copyTrigger").addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText("personal ami");
-    setStatus("Copied trigger phrase: personal ami", "success");
-  } catch {
-    setStatus("Clipboard access was blocked. Trigger phrase: personal ami", "error");
-  }
-});
