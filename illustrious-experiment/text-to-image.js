@@ -862,6 +862,8 @@ async function createGpuScheduler(device, gpuInputs, width, height, batchSize) {
         { binding: 4, resource: { buffer: uniformBuffer } }
       ]
     });
+    const paramsData = new ArrayBuffer(32);
+    const paramsView = new DataView(paramsData);
     return {
       latentBuffer, noiseBuffer, uniformBuffer, pipeline, bindGroup, latentSize, batchSize,
       initialize(latents, scaledLatents) {
@@ -875,8 +877,7 @@ async function createGpuScheduler(device, gpuInputs, width, height, batchSize) {
       step(noise, stepParams) {
         if (noise.length !== latentSize) throw new Error("GPU scheduler noise dimensions changed.");
         device.queue.writeBuffer(noiseBuffer, 0, noise);
-        const raw = new ArrayBuffer(32);
-        const view = new DataView(raw);
+        const view = paramsView;
         view.setUint32(0, latentSize, true);
         view.setUint32(4, batchSize, true);
         view.setFloat32(8, stepParams.cfg, true);
@@ -885,7 +886,7 @@ async function createGpuScheduler(device, gpuInputs, width, height, batchSize) {
         view.setFloat32(20, stepParams.nextScale, true);
         view.setUint32(24, latentSize, true);
         view.setUint32(28, 0, true);
-        device.queue.writeBuffer(uniformBuffer, 0, raw);
+        device.queue.writeBuffer(uniformBuffer, 0, paramsData);
         const encoder = device.createCommandEncoder();
         const pass = encoder.beginComputePass();
         pass.setPipeline(pipeline);
