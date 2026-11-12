@@ -1364,6 +1364,8 @@ async function buildUnetSessions(manifest, lora, conditioning, width, height, ba
           (error?.message || String(error)));
       }
     } else {
+      sessions.gpuInputs.entries.cOutput.buffer.destroy();
+      sessions.gpuInputs.entries.cOutput = null;
       log("Masked infill selected · CPU latent scheduler enabled for per-step source blending.");
     }
     sessions.c = await loadSession(
@@ -1711,7 +1713,13 @@ async function generate(options, infillData = null) {
   const manifest = await fetchJSON(MANIFEST_URL, "Model manifest");
   setProgress(1, "Preparing model downloads");
   setStatus("Downloading and verifying model files into persistent browser cache…");
-  const cacheResult = await prepareModelCache(manifest, log, (value, path) => setProgress(1 + value * 5, "Caching model files · " + path), checkCancelled);
+  const cacheResult = await prepareModelCache(
+    manifest,
+    log,
+    (value, path) => setProgress(1 + value * 5, "Caching model files · " + path),
+    checkCancelled,
+    Boolean(infillData)
+  );
   log("Preload complete · " + cacheResult.downloaded + " new downloads, " + cacheResult.reused + " cached files.");
   const schedulerConfig = await fetchJSON(SCHEDULER_URL, "Scheduler config");
   const latentWidth = options.width / 8;
