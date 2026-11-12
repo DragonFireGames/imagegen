@@ -458,7 +458,7 @@ function patchConv2d(buffer, down, up, shape, scale, label) {
   return new Uint8Array(patched.buffer);
 }
 
-async function patchShard(file, dataStart, component, shard, targets, fileMap, strength, onProgress, checkCancelled, log) {
+async function patchShard(file, dataStart, component, shard, targets, fileMap, strength, defaultAlpha, onProgress, checkCancelled, log) {
   const record = fileMap.get(shard);
   if (!record || !Number.isSafeInteger(record.size)) throw new Error("Manifest is missing shard size for " + shard + ".");
   const response = await fetchModelResource(MODEL_BASE + shard, { credentials: "omit", cache: "force-cache" });
@@ -497,9 +497,7 @@ async function patchShard(file, dataStart, component, shard, targets, fileMap, s
       : null;
     if (alpha && alpha.length !== 1) throw new Error("LoRA alpha must be scalar for " + target.stem + ".");
     const rank = validatePair(pair, target.entry, target.stem);
-    const metadataAlpha = Number(header.__metadata__?.ss_network_alpha);
-    const defaultAlpha = Number.isFinite(metadataAlpha) && metadataAlpha > 0 ? metadataAlpha : rank;
-    const scale = (alpha ? alpha[0] : defaultAlpha) / rank * strength;
+    const scale = (alpha ? alpha[0] : defaultAlpha || rank) / rank * strength;
     const targetBuffer = await base.slice(target.offset, target.offset + target.length).arrayBuffer();
     const patched = target.entry.torchShape.length === 2
       ? await patchLinear(targetBuffer, down, up, target.entry.torchShape, !!target.entry.transposed, scale, target.target, log)
@@ -565,6 +563,8 @@ export async function prepareLoraComponent(file, manifest, componentName, streng
   }
 
   const targetsByShard = new Map();
+  const metadataAlpha = Number(header.__metadata__?.ss_network_alpha);
+  const defaultAlpha = Number.isFinite(metadataAlpha) && metadataAlpha > 0 ? metadataAlpha : null;
   let mapped = 0, skipped = 0, payloadBytes = 0;
   for (const pair of pairs.values()) {
     checkCancelled();
@@ -610,6 +610,9 @@ export async function prepareLoraComponent(file, manifest, componentName, streng
   }
 
   if (!pairs.size) log(componentName + ": adapter contains no tensors for this component; using base weights.");
+  if (pairs.size && !mapped) {
+    throw new Error(componentName + ": found " + pairs.size + " adapter pairs, but none map to an indexed model weight.");
+  }
   log(componentName + ": mapped " + mapped + " LoRA pairs" +
     (skipped ? " · skipped " + skipped + " unsupported final text-encoder pairs" : "") +
     " · reading " + (payloadBytes / 1024 / 1024).toFixed(2) + " MiB of local FP16/BF16/FP32 factors.");
@@ -622,7 +625,7 @@ export async function prepareLoraComponent(file, manifest, componentName, streng
       continue;
     }
     log(componentName + ": downloading/verifying " + shard + " and applying " + targets.length + " patches…");
-    const blob = await patchShard(file, dataStart, component, shard, targets, fileMap, strength,
+    const blob = await patchShard(file, dataStart, component, shard, targets, fileMap, strength, defaultAlpha,
       () => {}, checkCancelled, log);
     patched.push({ path: shard.split("/").pop(), data: blob });
     log(componentName + ": patched " + targets.length + " initializers in " + shard + ".");
