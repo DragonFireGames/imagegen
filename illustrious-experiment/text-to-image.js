@@ -1,7 +1,7 @@
 import * as ort from "../vendor/onnxruntime-web/ort.webgpu.min.mjs";
 import { CLIPTokenizer } from "../vendor/transformers/transformers.min.js";
 import { acquireHeavyModelTest, releaseHeavyModelTest } from "./heavy-model-test-lock.js";
-import { preparePersonalAmiComponent, releasePersonalAmiPayload } from "./personal-ami-lora.js";
+import { prepareLoraComponent, releaseLoraPayload } from "./lora-patcher.js";
 import { fetchModelResource, prepareModelCache, exportModelBundle, importModelBundle } from "./model-cache.js";
 
 const MODEL_ID = "aaaaaeeeee/blip-sdxl-anime-wai-illustrious17";
@@ -44,7 +44,7 @@ const fields = {
   steps: document.querySelector("#generationSteps"),
   cfg: document.querySelector("#generationCfg"),
   seed: document.querySelector("#generationSeed"),
-  personalAmi: document.querySelector("#generationPersonalAmi"),
+  lora: document.querySelector("#generationLoraEnabled"),
   loraStrength: document.querySelector("#generationLoraStrength"),
   loraFile: document.querySelector("#loraFile")
 };
@@ -368,7 +368,7 @@ function splitFp16Batch(values, sampleSize, batchIndex) {
   return new Float16Array(values.subarray(batchIndex * sampleSize, (batchIndex + 1) * sampleSize));
 }
 
-async function encodePrompts(manifest, prompt, negativePrompt, personalAmi, cfg) {
+async function encodePrompts(manifest, prompt, negativePrompt, lora, cfg) {
   const options = { padding: "max_length", truncation: true, max_length: 77 };
   const branchIndex = cfg === 0 ? 0 : cfg === 1 ? 1 : null;
   const encodePositive = branchIndex !== 0;
@@ -389,8 +389,8 @@ async function encodePrompts(manifest, prompt, negativePrompt, personalAmi, cfg)
   let hiddenL;
   let negativeHiddenL;
   try {
-    const patchedL = personalAmi
-      ? await preparePersonalAmiComponent(personalAmi.file, manifest, "text_encoder", personalAmi.strength, log, checkCancelled)
+    const patchedL = lora
+      ? await prepareLoraComponent(lora.file, manifest, "text_encoder", lora.strength, log, checkCancelled)
       : null;
     sessionL = await loadSession(manifest, "text_encoder", "CLIP-L", patchedL?.externalData);
     if (branchIndex !== null) {
@@ -434,8 +434,8 @@ async function encodePrompts(manifest, prompt, negativePrompt, personalAmi, cfg)
   let pooledG;
   let negativePooledG;
   try {
-    const patchedG = personalAmi
-      ? await preparePersonalAmiComponent(personalAmi.file, manifest, "text_encoder_2", personalAmi.strength, log, checkCancelled)
+    const patchedG = lora
+      ? await prepareLoraComponent(lora.file, manifest, "text_encoder_2", lora.strength, log, checkCancelled)
       : null;
     sessionG = await loadSession(manifest, "text_encoder_2", "CLIP-bigG", patchedG?.externalData);
     if (branchIndex !== null) {
@@ -1077,7 +1077,7 @@ function renderImage(tensor, width, height) {
 }
 
 const GENERATION_SETTINGS_FORMAT = "dragonfiregames.illustrious-generation-settings";
-const GENERATION_SETTINGS_VERSION = 1;
+const GENERATION_SETTINGS_VERSION = 2;
 const settingsExportButton = document.querySelector("#exportGenerationSettings");
 const settingsImportButton = document.querySelector("#importGenerationSettings");
 const settingsImportInput = document.querySelector("#importGenerationSettingsFile");
@@ -1104,8 +1104,8 @@ function buildGenerationSettings() {
       steps: fields.steps.value === "" ? null : Number(fields.steps.value),
       cfgScale: fields.cfg.value === "" ? null : Number(fields.cfg.value),
       seed: fields.seed.value === "" ? null : Number(fields.seed.value),
-      personalAmi: {
-        enabled: fields.personalAmi.checked,
+      lora: {
+        enabled: fields.lora.checked,
         strength: fields.loraStrength.value === "" ? null : Number(fields.loraStrength.value),
         file: adapterFile ? {
           name: adapterFile.name,
@@ -1136,7 +1136,7 @@ function validateGenerationSettings(settings) {
     }
   }
 
-  const { width, height, steps, cfgScale, seed, personalAmi } = generation;
+  const { width, height, steps, cfgScale, seed, lora } = generation;
   if (!Number.isInteger(width) || width < 512 || width > 1024 || width % 64 !== 0) {
     throw new Error("Imported width must be 512–1024 and divisible by 64.");
   }
@@ -1152,14 +1152,14 @@ function validateGenerationSettings(settings) {
   if (!Number.isSafeInteger(seed) || seed < 0 || seed > 4294967295) {
     throw new Error("Imported seed must be an integer from 0 to 4294967295.");
   }
-  if (!personalAmi || typeof personalAmi.enabled !== "boolean" ||
-      !Number.isFinite(personalAmi.strength) || personalAmi.strength < 0 || personalAmi.strength > 2) {
-    throw new Error("Imported Personal Ami settings are invalid.");
+  if (!lora || typeof lora.enabled !== "boolean" ||
+      !Number.isFinite(lora.strength) || lora.strength < 0 || lora.strength > 2) {
+    throw new Error("Imported LoRA settings are invalid.");
   }
-  if (personalAmi.file !== null && (
-      !personalAmi.file || typeof personalAmi.file !== "object" ||
-      typeof personalAmi.file.name !== "string" || !personalAmi.file.name ||
-      !Number.isSafeInteger(personalAmi.file.sizeBytes) || personalAmi.file.sizeBytes < 0)) {
+  if (lora.file !== null && (
+      !lora.file || typeof lora.file !== "object" ||
+      typeof lora.file.name !== "string" || !lora.file.name ||
+      !Number.isSafeInteger(lora.file.sizeBytes) || lora.file.sizeBytes < 0)) {
     throw new Error("Imported adapter file metadata is invalid.");
   }
   return generation;
@@ -1177,13 +1177,13 @@ function downloadGenerationSettings() {
     settings.generation.height + "-seed-" + settings.generation.seed + ".json";
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
-  settingsStatus.textContent = "Exported generation settings JSON. The Personal Ami .safetensors file is referenced by name and size, not embedded.";
+  settingsStatus.textContent = "Exported generation settings JSON. The LoRA .safetensors file is referenced by name and size, not embedded.";
 }
 
 async function importGenerationSettings(file) {
   const parsed = JSON.parse(await file.text());
   const generation = validateGenerationSettings(parsed);
-  const adapterFile = generation.personalAmi.file;
+  const adapterFile = generation.lora.file;
 
   fields.prompt.value = generation.prompt;
   fields.negative.value = generation.negativePrompt;
@@ -1193,9 +1193,9 @@ async function importGenerationSettings(file) {
   fields.steps.value = String(generation.steps);
   fields.cfg.value = String(generation.cfgScale);
   fields.seed.value = String(generation.seed);
-  fields.personalAmi.checked = generation.personalAmi.enabled;
-  fields.loraStrength.value = String(generation.personalAmi.strength);
-  fields.loraStrength.disabled = !generation.personalAmi.enabled;
+  fields.lora.checked = generation.lora.enabled;
+  fields.loraStrength.value = String(generation.lora.strength);
+  fields.loraStrength.disabled = !generation.lora.enabled;
 
   expectedAdapterFile = adapterFile ? {
     name: adapterFile.name,
@@ -1212,10 +1212,10 @@ async function importGenerationSettings(file) {
     notes.push("Model mismatch: this file targets " + parsed.model.id + ", while this page uses " + MODEL_ID + ".");
   }
   if (expectedAdapterFile && !adapterFileMatches(fields.loraFile.files?.[0] || null, expectedAdapterFile)) {
-    notes.push("Re-select the Personal Ami file " + expectedAdapterFile.name + " (" +
+    notes.push("Re-select the LoRA file " + expectedAdapterFile.name + " (" +
       formatBytes(expectedAdapterFile.sizeBytes) + "); local adapter files are not stored in JSON.");
-  } else if (generation.personalAmi.enabled && !expectedAdapterFile) {
-    notes.push("Personal Ami is enabled, but no adapter file was recorded; select the matching .safetensors file.");
+  } else if (generation.lora.enabled && !expectedAdapterFile) {
+    notes.push("LoRA is enabled, but no adapter file was recorded; select the matching .safetensors file.");
   }
   settingsStatus.textContent = "Imported settings JSON. " +
     (notes.length ? notes.join(" ") : "All generation fields were restored.");
@@ -1242,30 +1242,27 @@ function readOptions() {
   if (!Number.isSafeInteger(seed) || seed < 0 || seed > 4294967295) {
     throw new Error("Seed must be an integer from 0 to 4294967295.");
   }
-  if (fields.personalAmi.checked) {
+  if (fields.lora.checked) {
     const adapterFile = fields.loraFile.files?.[0] || null;
-    if (!adapterFile) throw new Error("Choose the Personal Ami .safetensors file in the adapter inspector above.");
+    if (!adapterFile) throw new Error("Choose the LoRA .safetensors file in the adapter inspector above.");
     if (expectedAdapterFile && !adapterFileMatches(adapterFile, expectedAdapterFile)) {
-      throw new Error("The selected Personal Ami file does not match the adapter recorded in the imported settings JSON. Select " +
+      throw new Error("The selected LoRA file does not match the adapter recorded in the imported settings JSON. Select " +
         expectedAdapterFile.name + " (" + formatBytes(expectedAdapterFile.sizeBytes) + ").");
     }
     const strength = Number(fields.loraStrength.value);
     if (!Number.isFinite(strength) || strength < 0 || strength > 2) {
-      throw new Error("Personal Ami strength must be between 0 and 2.");
+      throw new Error("LoRA strength must be between 0 and 2.");
     }
   }
-  const adapterPrompt = fields.personalAmi.checked && !/\bpersonal\s+ami\b/i.test(prompt)
-    ? prompt + ", personal ami"
-    : prompt;
   return {
-    prompt: adapterPrompt + (suffix ? ", " + suffix : ""),
+    prompt: prompt + (suffix ? ", " + suffix : ""),
     negative,
     width,
     height,
     steps,
     cfg,
     seed,
-    personalAmi: fields.personalAmi.checked ? {
+    lora: fields.lora.checked ? {
       file: fields.loraFile.files?.[0] || null,
       strength: Number(fields.loraStrength.value)
     } : null
@@ -1273,14 +1270,14 @@ function readOptions() {
 }
 
 
-function adapterCacheKey(personalAmi) {
-  if (!personalAmi) return "base";
-  const file = personalAmi.file;
+function adapterCacheKey(lora) {
+  if (!lora) return "base";
+  const file = lora.file;
   return [
     file.name,
     file.size,
     file.lastModified,
-    personalAmi.strength
+    lora.strength
   ].join("|");
 }
 
@@ -1289,7 +1286,7 @@ function conditioningCacheKey(options) {
     options.prompt,
     options.negative,
     options.cfg === 0 ? 0 : options.cfg === 1 ? 1 : 2,
-    adapterCacheKey(options.personalAmi)
+    adapterCacheKey(options.lora)
   ]);
 }
 
@@ -1306,7 +1303,7 @@ async function getConditioning(manifest, options) {
     manifest,
     options.prompt,
     options.negative,
-    options.personalAmi,
+    options.lora,
     options.cfg
   );
   conditioningCache.set(key, conditioning);
@@ -1317,13 +1314,13 @@ async function getConditioning(manifest, options) {
   return conditioning;
 }
 
-async function buildUnetSessions(manifest, personalAmi, conditioning, width, height, batchSize, conditioningIndex, patchCache) {
+async function buildUnetSessions(manifest, lora, conditioning, width, height, batchSize, conditioningIndex, patchCache) {
   const sessions = { a: null, b: null, c: null, gpuInputs: null, batchSize };
   const patchedComponent = async name => {
-    if (!personalAmi) return null;
+    if (!lora) return null;
     if (!patchCache.has(name)) {
-      patchCache.set(name, await preparePersonalAmiComponent(
-        personalAmi.file, manifest, name, personalAmi.strength, log, checkCancelled
+      patchCache.set(name, await prepareLoraComponent(
+        lora.file, manifest, name, lora.strength, log, checkCancelled
       ));
     }
     return patchCache.get(name);
@@ -1380,10 +1377,10 @@ async function buildUnetSessions(manifest, personalAmi, conditioning, width, hei
   }
 }
 
-async function ensureUnetSessions(manifest, personalAmi, conditioning, width, height, cfg) {
+async function ensureUnetSessions(manifest, lora, conditioning, width, height, cfg) {
   const batchSize = cfg === 0 || cfg === 1 ? 1 : 2;
   const conditioningIndex = cfg === 1 ? 1 : 0;
-  const key = adapterCacheKey(personalAmi) + "|" + width + "x" + height + "|batch" + batchSize;
+  const key = adapterCacheKey(lora) + "|" + width + "x" + height + "|batch" + batchSize;
   if (residentUnetSessions && residentUnetKey === key) {
     log("Reusing resident UNET_A, UNET_B, and UNET_C sessions.");
     residentUnetSessions.gpuInputs.updateConditioning(conditioning, conditioningIndex);
@@ -1408,7 +1405,7 @@ async function ensureUnetSessions(manifest, personalAmi, conditioning, width, he
   let sessions;
   try {
     sessions = await buildUnetSessions(
-      manifest, personalAmi, conditioning, width, height, batchSize, conditioningIndex, patchCache
+      manifest, lora, conditioning, width, height, batchSize, conditioningIndex, patchCache
     );
     log("UNET_A/B/C ready · standard WebGPU dispatch with persistent GPU inputs and GPU-resident partition handoffs." +
       (batchSize === 1 ? " Single-branch CFG path · batch=1." : " Classifier-free guidance path · batch=2."));
@@ -1425,9 +1422,9 @@ async function ensureUnetSessions(manifest, personalAmi, conditioning, width, he
       "s · A " + warmup.timings.a.toFixed(2) + "s · B " + warmup.timings.b.toFixed(2) +
       "s · C " + warmup.timings.c.toFixed(2) + "s. Subsequent images reuse the compiled pipelines.");
 
-    if (personalAmi) {
-      releasePersonalAmiPayload(personalAmi.file);
-      log("Released the temporary in-memory LoRA factor copy after all five components were patched.");
+    if (lora) {
+      releaseLoraPayload(lora.file);
+      log("Released the temporary in-memory LoRA factor copy after all five components were processed.");
     }
     residentUnetSessions = sessions;
     residentUnetKey = key;
@@ -1540,7 +1537,7 @@ async function prepareInferenceEngine() {
     checkCancelled();
 
     setStatus("Preparing resident UNet sessions…");
-    await ensureUnetSessions(manifest, options.personalAmi, conditioning, options.width, options.height, options.cfg);
+    await ensureUnetSessions(manifest, options.lora, conditioning, options.width, options.height, options.cfg);
     checkCancelled();
 
     // Keep the multi-part UNet resident, but do not pin the VAE beside its
@@ -1586,10 +1583,10 @@ async function generate(options) {
   log("Negative: " + (options.negative || "(empty)"));
   log("Seed " + options.seed + " · CFG " + options.cfg);
   log("CLIP positive/negative prompts are batched when supported. CFG 0 or 1 uses one UNet branch (batch 1); other CFG values use both branches (batch 2). Reusable GPU inputs and A→B→C GPU-resident handoffs are enabled.");
-  if (options.personalAmi) {
-    log("Personal Ami enabled · " + options.personalAmi.file.name + " · strength " + options.personalAmi.strength.toFixed(3) + " · all 980 mapped pairs will be patched.");
+  if (options.lora) {
+    log("LoRA enabled · " + options.lora.file.name + " · strength " + options.lora.strength.toFixed(3) + " · compatible mapped weights will be patched.");
   } else {
-    log("Personal Ami disabled · using unmodified WAI Illustrious v17 base weights.");
+    log("LoRA disabled · using unmodified WAI Illustrious v17 base weights.");
   }
 
   checkCancelled();
@@ -1613,7 +1610,7 @@ async function generate(options) {
   // A resident VAE competes with the three large UNet partitions for GPU
   // resources. Keep the UNet resident and make VAE a decode-only session.
   await releaseVaeSession("starting UNet denoising");
-  const sessions = await ensureUnetSessions(manifest, options.personalAmi, conditioning, options.width, options.height, options.cfg);
+  const sessions = await ensureUnetSessions(manifest, options.lora, conditioning, options.width, options.height, options.cfg);
   const gpuScheduler = sessions.gpuScheduler;
   if (gpuScheduler) {
     const initialScaled = scheduler.scaleModelInput(latents, 0);
@@ -1796,8 +1793,8 @@ button.addEventListener("click", async () => {
   }
 });
 
-fields.personalAmi.addEventListener("change", () => {
-  fields.loraStrength.disabled = !fields.personalAmi.checked;
+fields.lora.addEventListener("change", () => {
+  fields.loraStrength.disabled = !fields.lora.checked;
 });
 
 settingsExportButton?.addEventListener("click", () => {
