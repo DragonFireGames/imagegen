@@ -53,13 +53,13 @@ The generator now supports an explicit **Prepare inference engine** phase:
 - It verifies/downloads the full model cache before inference.
 - It precomputes the currently selected positive/negative prompt conditioning.
 - It creates the three Personal Ami-patched (or unmodified base) UNet WebGPU sessions and keeps them resident in page memory.
-- It also creates and retains the VAE decoder session.
+- It deliberately does **not** retain the VAE decoder alongside the multi-part UNet. The VAE is loaded for decoding after denoising, its output tensors are disposed, and the session is released so the next generation starts with the UNet as the only resident model.
 - It caches up to eight exact prompt-conditioning combinations, keyed by positive prompt, negative prompt, and adapter file identity/strength.
-- Repeated generations with the same adapter reuse the resident UNet and VAE sessions. Repeated prompts also skip both CLIP encoders.
+- Repeated generations with the same adapter reuse the resident UNet sessions. Repeated prompts also skip both CLIP encoders. The VAE session is re-created for each decode and released afterward to reduce GPU memory pressure.
 - Changing the adapter file or strength causes the UNet sessions to be released and rebuilt with the new fused weights.
 - **Release engine** disposes the resident sessions and unlocks the memory-heavy test harness. The downloaded model files remain in Cache Storage.
 
-This is an in-memory browser-tab cache, not a persistent GPU cache: a page reload or browser restart requires the WebGPU sessions to be created again. The model downloads themselves remain in Cache Storage. Keeping the UNet resident reserves several GiB of GPU memory, so release the engine before running the standalone memory-heavy diagnostic tests or using other GPU-intensive applications.
+This is an in-memory browser-tab cache, not a persistent GPU cache: a page reload or browser restart requires the WebGPU sessions to be created again. The model downloads themselves remain in Cache Storage. Keeping the UNet resident reserves several GiB of GPU memory, so release the engine before running the standalone memory-heavy diagnostic tests or using other GPU-intensive applications. The VAE is intentionally transient: it is loaded only for decode and released immediately afterward to avoid competing with the UNet partitions for GPU memory.
 
 The first browser run after this change still needs to validate session retention, adapter switching, explicit release, and repeat-generation timings. No claim is made yet that this lifecycle has been browser-tested.
 
