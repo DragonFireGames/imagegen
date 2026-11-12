@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Illustrious Diagnostics</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; padding: 32px 16px; background: #111319; color: #e5e6eb; font: 15px/1.6 system-ui, sans-serif; }
+    main { width: min(980px, 100%); margin: 16px auto; }
+    a { color: #f08acb; }
+    h1, h2, h3 { line-height: 1.2; }
+    h1 { font-size: clamp(28px, 5vw, 38px); }
+    h2 { font-size: 20px; margin: 0 0 12px; }
+    h3 { font-size: 15px; margin: 22px 0 8px; }
+    p { color: #bfc1ca; }
+    code { color: #f3b6dc; overflow-wrap: anywhere; }
+    .panel { padding: 22px; margin: 18px 0; border: 1px solid #343740; border-radius: 12px; background: #191b21; }
+    .eyebrow { color: #e5a64b; font-size: 12px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+    .status { margin: 12px 0; color: #bfc1ca; }
+    .status[data-type="success"] { color: #9bd8ae; }
+    .status[data-type="error"] { color: #ff9b9b; }
+    .model-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 14px 0; }
+    .fact { padding: 12px; border-radius: 8px; background: #22252d; }
+    .fact span { display: block; color: #9b9eaa; font-size: 12px; }
+    .fact strong { display: block; margin-top: 3px; }
+    .button { appearance: none; border: 0; border-radius: 7px; padding: 10px 16px; color: #17131a; background: #f08acb; font: inherit; font-weight: 700; cursor: pointer; }
+    .button:disabled { opacity: .55; cursor: wait; }
+    .drop-zone { margin: 14px 0; padding: 22px; border: 1px dashed #656978; border-radius: 9px; text-align: center; background: #20232b; }
+    .drop-zone.dragging { border-color: #f08acb; background: #2a2230; }
+    input[type="file"] { display: block; width: 100%; margin: 10px 0; color: #bfc1ca; }
+    .file-name { color: #e5e6eb; overflow-wrap: anywhere; }
+    .data-list { display: grid; gap: 6px; }
+    .data-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(0, 2fr); gap: 14px; padding: 7px 0; border-bottom: 1px solid #30333c; }
+    .data-label { color: #9b9eaa; overflow-wrap: anywhere; }
+    .data-value { overflow-wrap: anywhere; }
+    .shape { color: #9b9eaa; margin-left: 12px; font-size: 12px; }
+    .tensor-list { max-height: 360px; overflow: auto; padding-left: 22px; }
+    .tensor-list li { margin: 7px 0; overflow-wrap: anywhere; }
+    .notice { padding: 12px 14px; border-left: 3px solid #e5a64b; background: #22252d; color: #c7c9d1; }
+    [hidden] { display: none !important; }
+    .inspect-output { max-height: 680px; overflow: auto; padding: 14px; border-radius: 8px; background: #111319; color: #d5d7e0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .prompt-input { display: block; width: 100%; margin: 10px 0 14px; padding: 12px; border: 1px solid #4a4e59; border-radius: 8px; resize: vertical; background: #111319; color: #e5e6eb; font: inherit; }
+    .number-input { display: block; width: 110px; margin: 8px 0 14px; padding: 9px; border: 1px solid #4a4e59; border-radius: 7px; background: #111319; color: #e5e6eb; font: inherit; }
+
+    .generator-controls { display: flex; flex-wrap: wrap; gap: 14px 22px; margin: 10px 0; }
+    .generator-controls > div { min-width: 112px; }
+    .generator-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+    .secondary-button { color: #e5e6eb; background: #393d48; }
+    #generationProgress { display: block; width: 100%; height: 12px; accent-color: #f08acb; }
+    .progress-label { margin: 4px 0 12px; font-size: 12px; }
+    .generated-result { display: grid; justify-items: start; gap: 10px; margin-top: 14px; }
+    #generatedImage { display: block; max-width: 100%; height: auto; border-radius: 8px; background: #111319; }
+    #downloadGeneratedImage { font-weight: 700; }
+    .generation-log { min-height: 120px; max-height: 420px; }
+
+    @media (max-width: 560px) { body { padding: 18px 12px; } .panel { padding: 16px; } .data-row { grid-template-columns: 1fr; gap: 2px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <p><a href="./">← Back to image generator</a></p>
+    
+    <p><a href="../">← Back to FLUX.2 generator</a></p>
+    <p class="eyebrow">Developer workbench</p>
+    <h1>Diagnostics & adapter tools</h1>
+    <p class="notice">The image generator lives on the <a href="./">main page</a>. This page contains standalone validation tools, model probes, and local adapter inspection. These tests can allocate substantial memory; close or release the generator engine before running them.</p>
+    <section class="panel">
+      <p class="eyebrow">Target adapter</p>
+      <h2><a href="https://civitai.com/models/1309467/personal-ami-style-illustrious" target="_blank" rel="noreferrer">Personal Ami Style – Illustrious</a></h2>
+      <div class="model-facts">
+        <div class="fact"><span>Training base</span><strong>Illustrious XL v0.1</strong></div>
+        <div class="fact"><span>Trigger</span><strong><code>personal ami</code></strong></div>
+        <div class="fact"><span>Suggested LoRA strength</span><strong>0.6–0.9</strong></div>
+      </div>
+      <button class="button" id="copyTrigger" type="button">Copy trigger phrase</button>
+      <p>Trigger and suggested strength are sourced from a <a href="https://tensorhub.art/models/909887413176810771" target="_blank" rel="noreferrer">TensorHub mirror</a>; the original Civitai page is linked above. The mirror is not the rights holder. Exact tensor compatibility still needs inspection.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Candidate browser model pack</p>
+      <h2><a href="https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17" target="_blank" rel="noreferrer">WAI Illustrious v17 · ONNX WebGPU</a></h2>
+      <div class="model-facts">
+        <div class="fact"><span>Declared base</span><strong>Illustrious XL early-release v0</strong></div>
+        <div class="fact"><span>Repository size</span><strong>8.75 GB total</strong></div>
+        <div class="fact"><span>FP16 base components</span><strong>6.93 GB</strong></div>
+        <div class="fact"><span>INT4 UNet alternatives</span><strong>1.82 GB additional</strong></div>
+        <div class="fact"><span>Graph layout</span><strong>3-part SDXL UNet</strong></div>
+        <div class="fact"><span>Adapter maps</span><strong>FP16 weights-index files</strong></div>
+      </div>
+      <p class="notice">This is WAI Illustrious v17, a fine-tune based on Illustrious v0.1—not the untouched v0.1 base. The manifest lists 232 MB for CLIP-L, 1.39 GB for CLIP-bigG, 5.14 GB for the three FP16 UNet graphs, and about 167 MB for the VAE pair. The two INT4 UNet alternatives are additional files and are not the initial LoRA target. Each external-data shard is below 1 GB. The 4 GiB WebGPU buffer limit reported by this browser is a per-buffer limit, not a measurement of total available GPU memory. We will start with CLIP-L only.</p>
+      <p><a href="https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0" target="_blank" rel="noreferrer">Original Illustrious XL v0.1 base</a> · <a href="https://huggingface.co/aaaaaeeeee/blip-sdxl-anime-wai-illustrious17/blob/main/LICENSE.txt" target="_blank" rel="noreferrer">Candidate pack license</a></p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Existing implementation reference</p>
+      <h2><a href="https://github.com/d0grr/generate-ai-images" target="_blank" rel="noreferrer">Browser SDXL · ONNX WebGPU</a></h2>
+      <p>A separate project already runs SDXL in Chrome with a JavaScript pipeline, OPFS caching, FP16 and INT4 UNet variants. Its inpainting example fuses a specific LoRA before export; it does not demonstrate arbitrary live LoRA swapping.</p>
+      <p>We can adapt its SDXL pipeline architecture, then validate the Personal Ami LoRA against Illustrious. This is a reference implementation, not a dependency.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Actual Personal Ami header scan</p>
+      <h2>Adapter structure confirmed</h2>
+      <p>The browser inspector has now been run against <code>personal_ami_style_illustrious-000006.safetensors</code>. These are the reported header statistics; the multi-gigabyte base model and LoRA tensor payloads have not been uploaded to this repository.</p>
+      <div class="model-facts">
+        <div class="fact"><span>Adapter file</span><strong>217.9 MB</strong></div>
+        <div class="fact"><span>Tensors / parameters</span><strong>2,958 / 114.0M</strong></div>
+        <div class="fact"><span>Complete LoRA pairs</span><strong>986</strong></div>
+        <div class="fact"><span>Rank / alpha / alpha-rank ratio</span><strong>32 / 16 / 0.5</strong></div>
+      </div>
+      <div class="data-list">
+        <div class="data-row"><span class="data-label">CLIP-L (text encoder 1)</span><span class="data-value">216 tensors · 72 pairs</span></div>
+        <div class="data-row"><span class="data-label">CLIP-bigG (text encoder 2)</span><span class="data-value">576 tensors · 192 pairs</span></div>
+        <div class="data-row"><span class="data-label">SDXL UNet</span><span class="data-value">2,166 tensors · 722 pairs</span></div>
+        <div class="data-row"><span class="data-label">Header validation</span><span class="data-value">0 incomplete pairs · 0 rank mismatches</span></div>
+        <div class="data-row"><span class="data-label">Tensor dtype</span><span class="data-value">BF16</span></div>
+      </div>
+      <p class="notice">All three SDXL components are present. The embedded <code>ss_base_model_version=sdxl_base_v1-0</code> tag is generic SDXL metadata; the author’s model listing says the LoRA was trained on Illustrious 0.1. The exporter now loads the local Safetensors state dict and explicitly checks all three components before fusion.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Local-only utility</p>
+      <h2>Inspect a LoRA file</h2>
+      <p>Choose the Personal Ami .safetensors file. This reads only the file header; tensor payloads are not uploaded, downloaded, or loaded into memory.</p>
+      <div class="drop-zone" id="dropZone">
+        <strong>Drop a .safetensors file here</strong>
+        <input id="loraFile" type="file" accept=".safetensors">
+        <div class="file-name" id="fileName">No file selected</div>
+      </div>
+      <button class="button" id="inspectLora" type="button">Inspect header</button>
+      <p class="status" id="inspectStatus" data-type="info" aria-live="polite">No file inspected yet.</p>
+      <div id="loraResult" hidden>
+        <h3>Tensor summary</h3>
+        <div class="data-list" id="loraSummary"></div>
+        <h3>Training metadata</h3>
+        <div class="data-list" id="loraMetadata"></div>
+        <h3>Example tensor names and shapes</h3>
+        <ol class="tensor-list" id="tensorList"></ol>
+      </div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Local adapter compatibility inspection</p>
+      <h2>Personal Ami → ONNX weight-index mapping</h2>
+      <p>Select the Personal Ami file in the local inspector above, then compare its LoRA pair names and matrix shapes against the candidate pack's CLIP-L, CLIP-bigG, and three UNet weight indexes. This reads only the safetensors header and downloads only the small index JSON files.</p>
+      <p class="notice">No LoRA tensor payloads, ONNX graph files, or multi-gigabyte weight shards are read. The report identifies target names, shape compatibility, and ONNX transpose requirements. It separately flags six CLIP-L layer-11 pairs absent from this graph index, consistent with the graph exposing a penultimate hidden state. It cannot calculate A×B deltas or prove numerical equivalence.</p>
+      <button class="button" id="mapLoraWeights" type="button">Map local LoRA to ONNX weights</button>
+      <p class="status" id="loraMapStatus" data-type="info" aria-live="polite">Choose the local .safetensors file above first.</p>
+      <div class="data-list" id="loraMapSummary" hidden></div>
+      <pre class="inspect-output" id="loraMapOutput" hidden></pre>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Local adapter tensor-value test</p>
+      <h2>Decode one Personal Ami BF16 LoRA pair</h2>
+      <p>Read one representative shape-compatible CLIP-L down/up pair plus its scalar alpha directly from the selected local file. Decode BF16 payloads, apply the pair to a deterministic FP32 test vector, and verify the resulting low-rank delta is finite and nonzero.</p>
+      <p class="notice">This reads only a small pair's byte ranges from the local .safetensors file (typically well under 1 MB). No adapter payload is uploaded. It does not patch ONNX weights or claim model-output equivalence.</p>
+      <button class="button" id="testLoraPayload" type="button">Test one local BF16 LoRA pair</button>
+      <p class="status" id="loraPayloadStatus" data-type="info" aria-live="polite">Choose the Personal Ami .safetensors file above first.</p>
+      <div class="data-list" id="loraPayloadSummary" hidden></div>
+      <pre class="inspect-output" id="loraPayloadOutput" hidden></pre>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">First ONNX LoRA patch</p>
+      <h2>Patch one real Personal Ami pair into CLIP-L</h2>
+      <p>Read one shape-compatible BF16 down/up pair and its alpha from the selected local adapter, apply its low-rank delta to the indexed FP16 CLIP-L initializer, and give ONNX Runtime a patched external-data Blob. The test runs the same token IDs through the original and patched CLIP-L sessions and compares their outputs.</p>
+      <p class="notice">This downloads the 232 MB CLIP-L external-data shard and temporarily composes a patched Blob. Only one representative matrix is changed; the full adapter is not applied. The local .safetensors bytes remain in this browser and are never uploaded.</p>
+      <label for="loraPatchStrength">Test LoRA strength</label>
+      <input class="number-input" id="loraPatchStrength" type="number" min="0" max="2" step="0.05" value="0.75">
+      <button class="button" id="testSingleLoraPatch" type="button">Test one patched CLIP-L weight</button>
+      <p class="status" id="loraPatchStatus" data-type="info" aria-live="polite">Choose Personal Ami in the local .safetensors picker above first.</p>
+      <div class="data-list" id="loraPatchSummary" hidden></div>
+      <pre class="inspect-output" id="loraPatchOutput" hidden></pre>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Full CLIP-L adapter patch</p>
+      <h2>Apply all mapped Personal Ami CLIP-L weights</h2>
+      <p>This applies all 66 shape-compatible CLIP-L LoRA pairs to the matching FP16 ONNX initializers. The six layer-11 pairs remain excluded because the graph exposes the penultimate hidden state and does not index that final block. It then loads both the original and patched CLIP-L sessions and compares their outputs.</p>
+      <p class="notice">This is the next validation stage, not full image generation. It downloads the CLIP-L external-data shard and reads the selected local adapter's CLIP-L factor tensors. The .safetensors file is not uploaded. CLIP-bigG and the three UNet partitions are not patched by this test.</p>
+      <label for="fullClipLStrength">Full CLIP-L LoRA strength</label>
+      <input class="number-input" id="fullClipLStrength" type="number" min="0" max="2" step="0.05" value="0.75">
+      <button class="button" id="testFullClipL" type="button">Test all 66 CLIP-L LoRA pairs</button>
+      <p class="status" id="fullClipLStatus" data-type="info" aria-live="polite">Select Personal Ami in the shared .safetensors picker above first.</p>
+      <div class="data-list" id="fullClipLSummary" hidden></div>
+      <pre class="inspect-output" id="fullClipLOutput" hidden></pre>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Full local adapter integrity check</p>
+      <h2>Verify all Personal Ami BF16 payload values</h2>
+      <p>Stream the entire selected .safetensors data block in 4 MiB chunks, validate every tensor's shape and byte range, and scan all BF16 values for NaN/Infinity. This checks the actual 218 MB adapter payload rather than just its JSON header.</p>
+      <p class="notice">All reads come directly from the local file selected above. The script does not upload the LoRA, does not fetch model weights, and does not allocate WebGPU. It scans in small chunks instead of loading the complete tensor payload into memory.</p>
+      <button class="button" id="verifyAllLoraPayloads" type="button">Verify all local BF16 payloads (about 218 MB)</button>
+      <p class="status" id="loraIntegrityStatus" data-type="info" aria-live="polite">Choose the Personal Ami .safetensors file above first.</p>
+      <div class="data-list" id="loraIntegritySummary" hidden></div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Browser-side LoRA format reference</p>
+      <h2><a href="https://huggingface.co/aaaaaeeeee/blip-lora-sdxl-lightning8" target="_blank" rel="noreferrer">SDXL LoRA browser package</a></h2>
+      <p>The same publisher repacks a standard Kohya .safetensors LoRA into <code>lora.json</code> plus <code>lora.bin</code> for its browser runtime (FP16 factors; its example has 788 UNet layers). This is a custom format, not built-in ONNX Runtime support, and its layer map cannot be reused for Personal Ami.</p>
+      <p>We'll need to map the actual Personal Ami tensors onto the Illustrious ONNX graph, then validate the converted adapter against a Diffusers reference.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">First real model test</p>
+      <h2>CLIP-L ONNX WebGPU smoke test</h2>
+      <p>Load only the candidate pack's CLIP-L text encoder and run one minimal test inference. This downloads about 232 MB of external weights from Hugging Face. It does not download the bigG encoder, UNet, VAE, or LoRA, and it does not generate an image.</p>
+      <button class="button" id="testClipEncoder" type="button">Test CLIP-L (about 232 MB)</button>
+      <p class="status" id="clipSmokeStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="clipSmokeSummary" hidden></div>
+      <p class="notice">A successful result will verify that this browser can load one real SDXL ONNX graph with external data and execute it on WebGPU. It will not yet prove UNet operator coverage, full-model memory use, or Personal Ami LoRA compatibility.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Second model component test</p>
+      <h2>CLIP-bigG ONNX WebGPU smoke test</h2>
+      <p>Load only the candidate pack's second SDXL text encoder and run one dummy-token inference. This downloads about 1.39 GB of graph and external weights. It is needed for full SDXL text conditioning, but is a much larger allocation than CLIP-L; close memory-heavy tabs before starting. It does not download the UNet, VAE, or LoRA.</p>
+      <button class="button" id="testClipBigG" type="button">Test CLIP-bigG (about 1.39 GB)</button>
+      <p class="status" id="clipBigGStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="clipBigGSummary" hidden></div>
+      <p class="notice">The test checks every graph output for finite values. It does not validate the UNet, full-model memory use, or Personal Ami LoRA compatibility.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Third model component test</p>
+      <h2>VAE decoder ONNX WebGPU smoke test</h2>
+      <p>Load only the candidate pack's VAE decoder and run a zero-latent FP16 decode (the graph expects a float16 latent input). This downloads about 99 MB of graph and weights. It does not download the UNet, bigG encoder, VAE encoder, or LoRA, and it does not generate a meaningful image.</p>
+      <button class="button" id="testVaeDecoder" type="button">Test VAE decoder (about 99 MB)</button>
+      <p class="status" id="vaeSmokeStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="vaeSmokeSummary" hidden></div>
+      <p class="notice">A successful result validates the VAE decoder's graph, external-data mapping, and WebGPU operators. It does not validate the split UNet or full text-to-image pipeline.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Next: inspect before loading the UNet</p>
+      <h2>Split UNet graph and LoRA-index metadata</h2>
+      <p>Inspect the three small ONNX graph files and their <code>weights-index.json</code> files. The inspector verifies each file against the model manifest's size and SHA-256, then reads graph input/output names, tensor types and shapes, node/initializer counts, external tensor references, and representative weight-index entries.</p>
+      <p class="notice">This downloads only about 3.8 MB of graph metadata and index JSON. It does not download any of the multi-gigabyte UNet tensor shards, allocate a WebGPU session, or run inference.</p>
+      <button class="button" id="inspectUnetMetadata" type="button">Inspect UNet metadata (about 3.8 MB)</button>
+      <p class="status" id="unetMetadataStatus" data-type="info" aria-live="polite">Not inspected yet.</p>
+      <pre class="inspect-output" id="unetMetadataOutput" hidden></pre>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">First split-UNet execution test</p>
+      <h2>UNET_A ONNX WebGPU smoke test</h2>
+      <p>Load only the first UNet partition (down path and middle) and run one zero-input inference at 1024 × 1024 output resolution. This loads UNET_A's own multi-gigabyte weights, but does not load UNET_B, UNET_C, or any other model component. The three skip groups and hidden tensors are checked for finite values.</p>
+      <p class="notice">This is a substantially larger allocation than CLIP-bigG. Close memory-heavy tabs first, keep the other UNet tests closed, and run only one UNet partition at a time. The session is released after the test. A browser/GPU allocation failure is possible and does not imply that the smaller components are broken.</p>
+      <button class="button" id="testUnetA" type="button">Test UNET_A (about 2.49 GB)</button>
+      <p class="status" id="unetAStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="unetASummary" hidden></div>
+      <p class="notice">A successful result validates the first UNet partition only. UNET_B, UNET_C, split-graph chaining, end-to-end denoising, and LoRA application remain untested.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Next: test the partition boundary</p>
+      <h2>UNET_A → UNET_B sequential WebGPU chain</h2>
+      <p>Run UNET_A again with zero inputs, copy only the five FP16 tensors that UNET_B consumes (hidden, emb, skip_6, skip_7, skip_8), release A's session, then load UNET_B and feed it those exact A outputs. The text-conditioning tensor is zero-filled in both stages, so this validates the graph boundary and B's operators—not prompt conditioning or image quality.</p>
+      <p class="notice">This loads both multi-gigabyte partitions sequentially, not simultaneously. A's weights are about 2.32 GiB; B's exact size is read from the manifest when the test starts. Close memory-heavy tabs first. A may be fetched again if the browser does not retain its external shards in cache. Do not run the standalone UNET_A test at the same time.</p>
+      <button class="button" id="testUnetAB" type="button">Test UNET_A → UNET_B chain</button>
+      <p class="status" id="unetABStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="unetABSummary" hidden></div>
+      <p class="notice">A successful result validates A-to-B tensor handoff and UNET_B's output. UNET_C, the final denoiser output, scheduler, and LoRA remain untested.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Complete split-UNet forward pass</p>
+      <h2>UNET_A → UNET_B → UNET_C sequential WebGPU chain</h2>
+      <p>Run all three UNet partitions in order. A runs on zero latent/text/time inputs; only the A tensors needed downstream are copied to CPU memory. A is released before B loads; B consumes A's actual tensors and is released before C loads; C consumes B's actual hidden_out and A's remaining skip tensors. The final output should be FP16 [1, 4, 128, 128].</p>
+      <p class="notice">This is a long, multi-gigabyte test: each partition is loaded separately, but the browser may retain cached download data. Close memory-heavy tabs first and do not run another UNet test concurrently. This is a zero-conditioning forward pass, not an image-generation test.</p>
+      <button class="button" id="testUnetABC" type="button">Test full UNET_A → B → C chain</button>
+      <p class="status" id="unetABCStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="unetABCSummary" hidden></div>
+      <p class="notice">The zero-conditioning A → B → C chain has passed. This does not yet test repeated denoising steps, latent scheduler updates, or LoRA application.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Next: check whether all UNet weights can stay loaded</p>
+      <h2>Simultaneous UNET_A + UNET_B + UNET_C session preflight</h2>
+      <p>Create all three WebGPU sessions while keeping earlier sessions resident. The model payload totals approximately 4.8 GiB before activations and runtime overhead. This is required for an efficient multi-step denoising loop because reloading partitions for every step would be prohibitively expensive.</p>
+      <p class="notice">This is a high-memory test. It may fail or cause the browser/GPU process to run out of memory. Close other model tabs first. It does not run inference. Any sessions created before a failure are released in the test's cleanup path.</p>
+      <button class="button" id="testUnetResident" type="button">Test simultaneous UNet residency (about 4.8 GiB)</button>
+      <p class="status" id="unetResidentStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="unetResidentSummary" hidden></div>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Fourth VAE component test</p>
+      <h2>VAE encoder ONNX WebGPU smoke test</h2>
+      <p>Load only the candidate pack's VAE encoder and encode a zero-filled RGB input at 1024 × 1024. The test uses the graph's declared input shape/type where available and reports every output tensor's shape and dtype. It does not load the decoder or any UNet partition.</p>
+      <button class="button" id="testVaeEncoder" type="button">Test VAE encoder (about 68 MB)</button>
+      <p class="status" id="vaeEncoderStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="vaeEncoderSummary" hidden></div>
+      <p class="notice">This is an encoder-only test. It does not assume the output is already scaled for the decoder; latent scaling and encode/decode round-trip behavior need a separate check.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Real prompt conditioning</p>
+      <h2>Dual tokenizer + CLIP WebGPU conditioning test</h2>
+      <p>Tokenize a positive and negative prompt with both tokenizer folders, then run CLIP-L and CLIP-bigG sequentially on both token-ID sequences. The test assembles both SDXL conditioning pairs expected by classifier-free guidance: encoder_hidden_states [1, 77, 2048] and pooled text_embeds [1, 1280].</p>
+      <label for="conditioningPrompt">Positive prompt</label>
+      <textarea class="prompt-input" id="conditioningPrompt" rows="3">personal ami, 1girl, portrait, masterpiece, best quality</textarea>
+      <label for="conditioningNegativePrompt">Negative prompt</label>
+      <textarea class="prompt-input" id="conditioningNegativePrompt" rows="2">worst quality, low quality, bad anatomy, extra limbs, extra fingers, blurry, watermark</textarea>
+      <button class="button" id="testPromptConditioning" type="button">Test positive + negative conditioning</button>
+      <p class="status" id="promptConditioningStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="promptConditioningSummary" hidden></div>
+      <p class="notice">This loads the two small tokenizer folders and then the two text encoders sequentially. It runs both positive and negative prompts through both encoders to prepare classifier-free guidance. The model weights may be requested again if the browser does not keep the earlier downloads in cache. It does not load the UNet or VAE and does not generate an image.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Scheduler math validation</p>
+      <h2>Euler ancestral sampler smoke test</h2>
+      <p>Load the pinned Illustrious v0.1 scheduler configuration and run a deterministic, synthetic Euler ancestral denoising loop. The test checks the scaled-linear beta schedule, leading timesteps, monotonically decreasing sigmas, sigma-up/down relationship, seeded noise, and finite results. The model pack's published default is Euler ancestral at 28 steps; this test does not run a UNet.</p>
+      <p>Base configuration: <a href="https://huggingface.co/OnomaAIResearch/Illustrious-xl-early-release-v0/blob/b41f1c324e32e03f9e104bd9ace0992e4e135597/scheduler/scheduler_config.json" target="_blank" rel="noreferrer">Illustrious v0.1 scheduler_config.json</a> · Pack defaults: 28 steps, CFG 5.0, euler_a.</p>
+      <label for="schedulerSteps">Synthetic inference steps (1–100)</label>
+      <input class="number-input" id="schedulerSteps" type="number" min="1" max="100" step="1" value="28">
+      <button class="button" id="testSchedulerMath" type="button">Run scheduler math test</button>
+      <p class="status" id="schedulerMathStatus" data-type="info" aria-live="polite">Not tested yet.</p>
+      <div class="data-list" id="schedulerMathSummary" hidden></div>
+      <p class="notice">This is a scheduler-only math test over 1,024 synthetic values. It loads no ONNX models, does not allocate WebGPU, and does not generate an image.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Runtime diagnostics</p>
+      <h2>Check browser and ONNX Runtime support</h2>
+      <p>This local probe checks WebGPU, relevant adapter limits, the ONNX Runtime version, and the adapter API surface. ONNX Runtime's built-in LoRA adapter API is WASM-only, so it is not usable by this experiment's WebGPU execution path.</p>
+      <button class="button" id="probeRuntime" type="button">Check local runtime</button>
+      <p class="status" id="probeStatus" data-type="info" aria-live="polite">Not checked yet.</p>
+      <div class="data-list" id="runtimeProbeSummary" hidden></div>
+      <p class="notice">The built-in ONNX Runtime <code>LoraAdapter</code> API is available only on the WASM backend. It cannot be used with the WebGPU sessions targeted here, and it does not load Kohya <code>.safetensors</code> files directly. The browser-side path we are investigating is the candidate pack's FP16 <code>weights-index.json</code> format.</p>
+    </section>
+
+    <section class="panel">
+      <p class="eyebrow">Runtime status</p>
+      <h2>Full image-generation interface is wired up</h2>
+      <p>The first complete browser-side image generation succeeded with the WAI Illustrious v17 base model. The full 66-pair CLIP-L Personal Ami patch and complete local BF16 integrity scan have also passed in-browser. The generator now has an optional Personal Ami toggle and strength control wired to a patcher for all 980 indexed CLIP-L, CLIP-bigG, and split-UNet targets; the integrated full-adapter generation still needs a browser run. The adapter stays local and is never uploaded. Python is export-only; no Python inference server is intended. The FLUX.2 application remains untouched.</p>
+      <p><a href="./README.md">Technical plan and validation checklist</a> · <a href="./tools/README.md">Offline LoRA fusion / ONNX export instructions</a></p>
+    </section>
+  
+  </main>
+  <script type="module" src="./lora-inspector.js"></script>
+  <script type="module" src="./lora-weight-map-inspector.js"></script>
+  <script type="module" src="./lora-payload-smoke-test.js"></script>
+  <script type="module" src="./lora-payload-integrity-test.js"></script>
+  <script type="module" src="./lora-clipl-patch-test.js"></script>
+  <script type="module" src="./lora-full-clipl-test.js"></script>
+  <script type="module" src="./runtime-probe.js"></script>
+  <script type="module" src="./component-smoke-test.js"></script>
+  <script type="module" src="./text-encoder-2-smoke-test.js"></script>
+  <script type="module" src="./vae-smoke-test.js"></script>
+  <script type="module" src="./unet-metadata-inspector.js"></script>
+  <script type="module" src="./unet-a-smoke-test.js"></script>
+  <script type="module" src="./unet-ab-chain-test.js"></script>
+  <script type="module" src="./unet-abc-chain-test.js"></script>
+  <script type="module" src="./unet-resident-memory-preflight.js"></script>
+  <script type="module" src="./vae-encoder-smoke-test.js"></script>
+  <script type="module" src="./prompt-conditioning-smoke-test.js"></script>
+  <script type="module" src="./scheduler-math-smoke-test.js"></script>
+</body>
+</html>
