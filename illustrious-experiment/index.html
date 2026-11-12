@@ -87,13 +87,13 @@
       <input class="prompt-input" id="generationSuffix" type="text" value="masterpiece, best quality, absurdres, very aesthetic">
 
       <div class="generator-controls">
-        <div><label for="generationWidth">Width</label><input class="number-input" id="generationWidth" type="number" min="512" max="1024" step="64" value="1024"></div>
-        <div><label for="generationHeight">Height</label><input class="number-input" id="generationHeight" type="number" min="512" max="1024" step="64" value="1024"></div>
-        <div><label for="generationSteps">Steps</label><input class="number-input" id="generationSteps" type="number" min="1" max="100" value="28"></div>
-        <div><label for="generationCfg">CFG scale</label><input class="number-input" id="generationCfg" type="number" min="0" max="20" step="0.5" value="5"></div>
+        <div><label for="generationWidth">Width</label><input class="number-input" id="generationWidth" type="number" min="512" max="1024" step="64" value="512"></div>
+        <div><label for="generationHeight">Height</label><input class="number-input" id="generationHeight" type="number" min="512" max="1024" step="64" value="512"></div>
+        <div><label for="generationSteps">Steps</label><input class="number-input" id="generationSteps" type="number" min="1" max="100" value="12"></div>
+        <div><label for="generationCfg">CFG scale</label><input class="number-input" id="generationCfg" type="number" min="0" max="20" step="0.5" value="1"></div>
         <div><label for="generationSeed">Seed</label><input class="number-input" id="generationSeed" type="number" min="0" max="4294967295" step="1" value="1337"></div>
       </div>
-      <p class="notice">Speed tip: CFG 0 or 1 runs only one UNet branch (batch 1), avoiding the duplicate classifier-free guidance pass. CFG above 1 uses both branches. CFG 1 is ordinary conditional prediction, so visual results differ from guided CFG 5.</p>
+      <p class="notice">Fast defaults: 512×512 · 12 steps · CFG 1. CFG 1 uses only the positive UNet branch and skips negative-prompt encoding. This trades away negative-prompt control and some guided refinement for speed. For the original guided quality profile, use 28 steps and CFG 5. At the same settings, 1024×1024 requires roughly four times the UNet work of 512×512.</p>
 
       <div class="adapter-picker">
         <label for="loraFile"><strong>Personal Ami LoRA</strong> <span>(optional · local file only)</span></label>
