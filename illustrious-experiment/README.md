@@ -22,6 +22,15 @@ ONNX Runtime Web and WebGPU. It loads dual CLIP text encoders, three sequential
 UNet partitions (A, B, C), and the VAE decoder. Model files are cached locally
 in the browser; generation and adapter processing happen in the page.
 
+The generator prefers ONNX Runtime Web 1.31.1's JSPI build of the native WebGPU
+execution provider when the browser exposes WebAssembly JSPI. The JSPI runtime
+is loaded from jsDelivr; the repository's locally bundled Asyncify WebGPU
+runtime remains the fallback when JSPI is unsupported or its module import
+fails. Add `?runtime=asyncify` to force the local runtime, or
+`?runtime=jspi` to require JSPI and surface module-load errors. A JSPI WASM
+asset failure after the module imports still appears as a runtime/session error;
+use the Asyncify override to diagnose that case.
+
 The three UNet partitions pass intermediate tensors through GPU-resident
 outputs where supported by the current runtime. The Euler ancestral scheduler
 keeps classifier-free guidance and latent updates on WebGPU when its GPU path
@@ -32,6 +41,14 @@ afterward to reduce competition with the resident UNet sessions.
 Use `?gpuProfile=1` to enable ONNX Runtime WebGPU operator profiling. Profiling
 adds overhead, so use it to identify expensive operators, not to record final
 generation benchmarks.
+
+Use `?graphCapture=1` to try WebGPU graph capture for the three fixed-shape
+UNet sessions. The first disposable warm-up dispatch records the graphs. If
+session creation or warm-up fails, the generator releases the attempted
+sessions and retries with ordinary WebGPU dispatch. Graph capture may reduce
+per-run CPU command-submission overhead; it does not reduce the UNet's GPU
+computation. It is opt-in because not every model/operator combination is
+capture-compatible.
 
 ## Brush infill experiment
 
