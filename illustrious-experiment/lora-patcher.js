@@ -519,6 +519,13 @@ export async function prepareLoraComponent(file, manifest, componentName, streng
     throw new Error("Model manifest component is incomplete: " + componentName + ".");
   }
   const { header, dataStart } = await readHeader(file);
+  const unsupportedAdapterTypes = Object.keys(header).filter(name =>
+    /dora|magnitude_vector|lokr_|\\.lokr|hada_|\\.hada|oft_/i.test(name)
+  );
+  if (unsupportedAdapterTypes.length) {
+    throw new Error("Unsupported extended adapter tensors were found (DoRA/LoKr/LoHa/OFT are not supported by this patcher): " +
+      unsupportedAdapterTypes.slice(0, 5).join(", "));
+  }
   const fileMap = new Map((manifest.files || []).map(item => [item.path, item]));
   const index = await verifiedJson(component.weightsIndex, fileMap);
   const componentIndexes = new Map([[componentName, index]]);
@@ -552,9 +559,14 @@ export async function prepareLoraComponent(file, manifest, componentName, streng
     ]) {
       if (name.endsWith(suffix)) { side = value; stem = name.slice(0, -suffix.length); break; }
     }
-    if (!side) continue;
+    if (!side) {
+      if (/^lora_(?:te|te1|te2|unet)_/i.test(name) && /\\.weight$/i.test(name)) {
+        throw new Error("Unsupported LoRA tensor suffix: " + name + ".");
+      }
+      continue;
+    }
     const group = groupForStem(stem);
-    if (!group) continue;
+    if (!group) throw new Error("Unsupported LoRA tensor prefix: " + stem + ".");
     if (group.component === "unet" ? !componentName.startsWith("unet_") : group.component !== componentName) continue;
     if (!pairs.has(stem)) pairs.set(stem, { stem, group, alpha: null });
     const pair = pairs.get(stem);
