@@ -28,10 +28,6 @@ async function loadOrtRuntime() {
         note: ""
       };
     } catch (error) {
-      if (runtimePreference === "jspi") {
-        throw new Error("Could not load the JSPI runtime from jsDelivr: " +
-          (error?.message || String(error)) + ". Remove ?runtime=jspi to use automatic fallback.");
-      }
       const fallbackReason = error?.message || String(error);
       const runtime = await import("../vendor/onnxruntime-web/ort.webgpu.min.mjs");
       runtime.env.wasm.wasmPaths = new URL("../vendor/onnxruntime-web/", import.meta.url).href;
@@ -43,9 +39,6 @@ async function loadOrtRuntime() {
         note: "JSPI runtime import failed; using the locally bundled Asyncify runtime (" + fallbackReason + ")."
       };
     }
-  }
-  if (runtimePreference === "jspi" && !jspiSupported) {
-    throw new Error("This browser does not expose WebAssembly JSPI. Remove ?runtime=jspi to use the local Asyncify runtime.");
   }
   const runtime = await import("../vendor/onnxruntime-web/ort.webgpu.min.mjs");
   runtime.env.wasm.wasmPaths = new URL("../vendor/onnxruntime-web/", import.meta.url).href;
