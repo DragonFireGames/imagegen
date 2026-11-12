@@ -27,6 +27,21 @@ The component counts divide evenly into 72 text_encoder pairs, 192 text_encoder_
 **Compatibility assessment:** the real file has the expected SDXL architecture and all three adapter groups, in the Kohya layout Diffusers knows how to convert. This is strong evidence that it is loadable as an SDXL LoRA. The remaining test is an actual Diffusers load/fuse against the official Illustrious v0.1 pipeline, followed by output comparison. The user has not uploaded the raw model file into this repository or chat runtime; the report above is the user's browser-side scan.
 
 
+## Inference performance path
+
+The generator now has a more aggressive WebGPU execution path:
+
+- Positive and negative CLIP prompts are concatenated into a batch of two and run in one inference call per encoder when the ONNX graph exposes a compatible batch dimension. A graph fixed at batch one automatically keeps the prior two-call path.
+- The three UNet sessions request graph capture for the selected resolution. The app creates reusable input tensors over the ONNX Runtime-owned WebGPU device, keeps prompt conditioning and time IDs in GPU buffers, and updates only the latent and timestep inputs per denoising step.
+- UNET_A, UNET_B, and UNET_C request GPU-resident outputs. UNET_C's final prediction is read back because classifier-free guidance and the Euler ancestral scheduler still run on the CPU.
+- A zero-latent warm-up runs during engine preparation so graph capture happens before the first requested image. The resident UNet cache key includes resolution as well as adapter identity/strength; changing resolution rebuilds the graph-specific sessions.
+- If graph capture cannot be created or the warm-up fails for this model/device/shape, the app releases those sessions and rebuilds using ordinary WebGPU dispatch. It does not silently claim capture is active.
+- Session graph optimization is set to `all` rather than `basic`.
+
+When Personal Ami is enabled, the browser reads its ~218 MiB Safetensors payload into one temporary ArrayBuffer and reuses views into that buffer for the per-layer BF16 factors. This replaces thousands of tiny File.slice/arrayBuffer reads across CLIP-L, CLIP-bigG, and the three UNet patches. The buffer is released from the adapter cache after the resident UNet weights have been prepared; this trades a temporary ~218 MiB RAM allocation for much less file-read overhead. If that allocation fails, the patcher logs the reason and returns to per-tensor reads.
+
+**Performance status:** these are implemented optimizations, not yet benchmarked on the target browser. Compare the same prompt, seed, resolution, adapter, and step count against the earlier baseline. Graph capture mainly reduces CPU-side command preparation; it does not make the underlying UNet math disappear, and GPU throughput remains the dominant floor.
+
 ## Resident inference engine and repeated generation
 
 The generator now supports an explicit **Prepare inference engine** phase:
