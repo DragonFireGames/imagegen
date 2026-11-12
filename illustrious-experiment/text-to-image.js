@@ -2111,7 +2111,7 @@ async function generateMany(imageOptionsList, infillData = null, onImage = null)
     (preferredUnetValidationMode === "wgpuOnly"
       ? " · retains WebGPU/Dawn validation; skips additional ONNX basic validation."
       : preferredUnetValidationMode === "disabled"
-        ? " · all WebGPU validation disabled; benchmark-only because GPU errors are harder to diagnose."
+        ? " · skips ONNX-side validation; benchmark-only because invalid GPU operations are harder to diagnose."
         : "."));
   if (graphCaptureEnabled) log("Static UNet WebGPU graph capture requested · initialization falls back to standard dispatch if capture fails.");
   if (gpuProfilingRequested) {
