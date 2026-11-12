@@ -62,16 +62,32 @@ opt-in; the default releases VAE after each image. Releasing the inference
 engine frees it, and changing the adapter or resolution releases it before
 rebuilding the UNet.
 
-## Sequential image batches
+## Multi-image GPU batches
 
-Set **Batch** to generate 1–20 images sequentially with the same prompt,
-dimensions, sampler settings, and adapter. Each result is added to the gallery
-as soon as it finishes, with its own PNG download link and actual seed. The
-resident UNet engine and conditioning cache are reused across the batch.
+Set **Batch** to generate 1–20 output images. **Images per GPU pass** controls
+how many independent latents run through the split UNet together (1–4). The
+default is 1, which preserves sequential inference. Start with 2 and increase
+only if the GPU has enough memory; UNet activation and persistent output-buffer
+memory scale with the model batch. Brush infill stays at one image per pass.
 
-For a fixed starting seed, each image uses the next 32-bit seed in sequence
-(starting seed, starting seed + 1, and so on). The batch is rejected if that
-sequence would exceed the maximum 32-bit seed. With seed `-1`, each image
+Images in a GPU pass share the prompt, negative prompt, dimensions, sampler
+settings, adapter, and cached CLIP conditioning. Each image retains its own
+initial noise, per-step ancestral noise, latent state, and seed. Classifier-free
+guidance is still computed independently for every image. The split UNet
+partitions run once per denoising step for the whole image group, after which
+each image is decoded separately. The final partial group is padded with a
+duplicate latent to keep the resident graph shape; padded output is discarded.
+
+Each result is added to the gallery as soon as it is decoded, with its own PNG
+download link and actual seed. The resident UNet sessions and conditioning
+cache are reused across groups with the same shape. Changing the GPU batch
+size requires a different UNet session shape and therefore rebuilds the
+resident sessions.
+
+For a fixed starting seed, each requested image uses the next 32-bit seed in
+sequence (starting seed, starting seed + 1, and so on). Padding does not consume
+an additional output seed. The batch is rejected if the requested seed sequence
+would exceed the maximum 32-bit seed. With seed `-1`, each requested image
 gets a separately generated random seed. Cancelling stops the batch and keeps
 all images that already completed; an error also stops further images without
 removing earlier results.
@@ -122,8 +138,8 @@ of the user supplying it.
 
 The generator can export and import prompt, negative prompt, positive suffix,
 dimensions, step count, CFG scale, seed, batch count, and LoRA enablement/strength
-plus adapter filename/size metadata. Version 3 settings files retain backward
-compatibility with version 2 files; older files default to a batch count of one.
+plus adapter filename/size metadata. Version 4 settings files store the image count per GPU pass and retain backward
+compatibility with versions 2 and 3; older files default to one image per pass.
 The local model cache and the adapter payload are not embedded in the JSON.
 
 ## Offline reference exporter
