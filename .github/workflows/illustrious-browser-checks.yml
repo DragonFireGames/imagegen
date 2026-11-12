@@ -57,23 +57,29 @@ jobs:
           console.log("Persistent UNet output flag is in scope for try/finally.");
           NODE
 
-      - name: Check sequential batch generation wiring
+      - name: Check multi-image GPU batch wiring
         run: |
           node --input-type=module <<'NODE'
           import { readFileSync } from "node:fs";
           const source = readFileSync("illustrious-experiment/text-to-image.js", "utf8");
           const html = readFileSync("illustrious-experiment/index.html", "utf8");
           const required = [
-            ["batch control", html.includes('id="generationBatch"') && html.includes('max="20"')],
-            ["sequential loop", source.includes("for (let index = 0; index < batchCount; index++)")],
-            ["await each image", source.includes("await generate(imageOptions, infillData)")],
-            ["fixed seeds increment", source.includes("baseSeed + index")],
-            ["random seed per image", source.includes("randomSeed ? resolveGenerationSeed(-1) : baseSeed + index")],
-            ["keep previous results", source.includes("appendGeneratedResult(blob, imageOptions, index, batchCount)")],
-            ["batch settings export", source.includes("batchCount: fields.batch.value === \"\" ? null : Number(fields.batch.value)")],
-            ["settings v2 compatibility", source.includes("settings.version !== 2 && settings.version !== GENERATION_SETTINGS_VERSION")]
+            ["total batch control", html.includes('id="generationBatch"') && html.includes('max="20"')],
+            ["parallel GPU control", html.includes('id="generationParallel"') && html.includes('max="4"')],
+            ["multi-image generator", source.includes("async function generateMany(")],
+            ["batch uses multi-image execution", source.includes("await generateMany(imageOptions, infillData")],
+            ["conditioning is tiled across images", source.includes("makeConditioningBatch(conditioning, imageCount, branchCount, conditioningIndex)")],
+            ["each image has independent initial noise", source.includes("createNormalNoise(latentSize, imageOptionsList[image].seed)")],
+            ["each image has independent step noise", source.includes("imageOptionsList[image].seed + step + 1")],
+            ["GPU scheduler updates whole latent batch", source.includes("totalLatentSize = latentSize * imageCount") && source.includes("dispatchWorkgroups(Math.ceil(totalLatentSize / 2 / 256))")],
+            ["CFG uses distinct conditional branch", source.includes("halfAt(params.count + first)")],
+            ["requested seeds increment", source.includes("baseSeed + index + offset")],
+            ["random seed per image", source.includes("randomSeed ? resolveGenerationSeed(-1) : baseSeed + index + offset")],
+            ["results saved as each decodes", source.includes("appendGeneratedResult(blob, itemOptions, imageIndex, batchCount)")],
+            ["settings persist parallelism", source.includes("parallelImages: Number(fields.parallel?.value || 1)")],
+            ["settings v2/v3 compatibility", source.includes("settings.version !== 2 && settings.version !== 3 && settings.version !== GENERATION_SETTINGS_VERSION")]
           ];
           const failed = required.filter(([, passed]) => !passed).map(([name]) => name);
-          if (failed.length) throw new Error("Batch regression checks failed: " + failed.join(", "));
-          console.log("Sequential batch wiring passed: " + required.map(([name]) => name).join(", "));
+          if (failed.length) throw new Error("GPU batch regression checks failed: " + failed.join(", "));
+          console.log("Multi-image GPU batch wiring passed: " + required.map(([name]) => name).join(", "));
           NODE
