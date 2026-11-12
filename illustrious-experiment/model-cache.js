@@ -58,9 +58,9 @@ async function verifyBlob(blob, record, path) {
   }
 }
 
-export async function prepareModelCache(manifest, log, progress, checkCancelled) {
+export async function prepareModelCache(manifest, log, progress, checkCancelled, includeVaeEncoder = false) {
   if (!("caches" in globalThis)) throw new Error("This browser does not support persistent Cache Storage.");
-  const paths = generationPaths(manifest);
+  const paths = generationPaths(manifest, includeVaeEncoder);
   const records = new Map((manifest.files || []).map(item => [item.path, item]));
   const requiredBytes = paths.reduce((sum, path) => sum + Number(records.get(path)?.size || 0), 0);
   const estimate = await navigator.storage?.estimate?.();
