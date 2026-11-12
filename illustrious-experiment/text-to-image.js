@@ -1432,7 +1432,7 @@ async function ensureUnetSessions(manifest, personalAmi, conditioning, width, he
     residentUnetSessions = sessions;
     residentUnetKey = key;
     releaseEngineButton.disabled = false;
-    log("UNet engine prepared · all three sessions remain resident for subsequent images. No warm-up inference required.");
+    log("UNet engine prepared · all three sessions remain resident; one zero-latent pipeline-compilation pass completed.");
 
     if (!residentEngineLock) {
       releaseHeavyModelTest("full Illustrious image generation");
