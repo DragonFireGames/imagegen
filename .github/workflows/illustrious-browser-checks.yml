@@ -120,9 +120,9 @@ jobs:
             ["service worker resolves experiment and vendor assets under their actual folders", sw.includes('new URL("./illustrious-experiment/", self.registration.scope)') && sw.includes('new URL("../vendor/", APP_SCOPE)')],
             ["service worker limits request interception", sw.includes("if (!inExperiment && !inVendor) return;")],
             ["service worker precaches ONNX WASM", sw.includes("ort-wasm-simd-threaded.jspi.wasm") && sw.includes("ort-wasm-simd-threaded.asyncify.wasm")],
-            ["root service worker revalidates app source while preserving offline fallback", sw.includes('new Request(request, { cache: "no-cache" })') && sw.includes("isRefreshableAppSource(url)") && sw.includes("if (cached) return cached;")],
+            ["root service worker revalidates app source while preserving offline fallback", sw.includes('new Request(request, { cache: "no-cache" })') && sw.includes("isRefreshableAppSource(url)") && sw.includes('return /\\.(?:html|js|mjs|css)$/.test(url.pathname);') && sw.includes("if (cached) return cached;")],
             ["root app-shell cache is versioned to replace stale source entries", sw.includes('illustrious-app-shell-source-v2')],
-            ["legacy narrow-scope worker also revalidates app source", appSw.includes('new Request(request, { cache: "no-cache" })') && appSw.includes("isRefreshableAppSource(url)")]
+            ["legacy narrow-scope worker also revalidates app source", appSw.includes('new Request(request, { cache: "no-cache" })') && appSw.includes("isRefreshableAppSource(url)") && appSw.includes('return /\\.(?:html|js|mjs|css)$/.test(url.pathname);')]
           ];
           const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);
           if (failed.length) throw new Error("Offline cache checks failed: " + failed.join(", "));
