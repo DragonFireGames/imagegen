@@ -124,10 +124,30 @@ function readHeader(file) {
   })();
 }
 
-function readBf16(buffer, label) {
-  if (buffer.byteLength % 2) throw new Error(label + " has odd BF16 byte length.");
-  const view = new DataView(buffer);
-  const bits = new Uint32Array(buffer.byteLength / 2);
+const adapterPayloadCache = new WeakMap();
+
+async function getAdapterPayload(file, dataStart) {
+  let cached = adapterPayloadCache.get(file);
+  if (!cached) {
+    cached = file.slice(dataStart).arrayBuffer();
+    adapterPayloadCache.set(file, cached);
+  }
+  try {
+    return await cached;
+  } catch (error) {
+    adapterPayloadCache.delete(file);
+    throw error;
+  }
+}
+
+export function releasePersonalAmiPayload(file) {
+  if (file) adapterPayloadCache.delete(file);
+}
+
+function readBf16(buffer, label, byteOffset = 0, byteLength = buffer.byteLength - byteOffset) {
+  if (byteLength % 2) throw new Error(label + " has odd BF16 byte length.");
+  const view = new DataView(buffer, byteOffset, byteLength);
+  const bits = new Uint32Array(byteLength / 2);
   for (let i = 0; i < bits.length; i++) {
     const value = view.getUint16(i * 2, true);
     if ((value & 0x7f80) === 0x7f80) throw new Error(label + " contains NaN/Infinity.");
@@ -136,7 +156,7 @@ function readBf16(buffer, label) {
   return new Float32Array(bits.buffer);
 }
 
-async function readTensor(file, dataStart, name, info) {
+async function readTensor(file, dataStart, name, info, payloadBuffer = null) {
   if (!info || info.dtype !== "BF16" || !Array.isArray(info.shape) ||
       !info.shape.every(value => Number.isSafeInteger(value) && value >= 0) ||
       !Array.isArray(info.data_offsets) || info.data_offsets.length !== 2 ||
@@ -146,9 +166,11 @@ async function readTensor(file, dataStart, name, info) {
   const [start, end] = info.data_offsets;
   const count = info.shape.reduce((a, b) => a * b, 1);
   if (!Number.isSafeInteger(count) || end - start !== count * 2 ||
-      start < 0 || end < start || dataStart + end > file.size) {
+      start < 0 || end < start || dataStart + end > file.size ||
+      (payloadBuffer && end > payloadBuffer.byteLength)) {
     throw new Error("Invalid byte range for " + name + ".");
   }
+  if (payloadBuffer) return readBf16(payloadBuffer, name, start, end - start);
   return readBf16(await file.slice(dataStart + start, dataStart + end).arrayBuffer(), name);
 }
 
@@ -415,6 +437,15 @@ async function patchShard(file, dataStart, component, shard, targets, fileMap, s
     if (actual !== record.sha256) throw new Error("SHA-256 mismatch for " + shard + ".");
   }
   targets.sort((a, b) => a.offset - b.offset);
+  let payloadBuffer = null;
+  try {
+    payloadBuffer = await getAdapterPayload(file, dataStart);
+    log("LoRA factor payload opened once and reused for this component · " +
+      (payloadBuffer.byteLength / 1024 / 1024).toFixed(1) + " MiB.");
+  } catch (error) {
+    log("Could not hold the complete LoRA payload in memory; using per-tensor reads · " +
+      (error?.message || String(error)));
+  }
   const parts = [];
   let cursor = 0;
   for (let i = 0; i < targets.length; i++) {
@@ -425,9 +456,9 @@ async function patchShard(file, dataStart, component, shard, targets, fileMap, s
     }
     parts.push(base.slice(cursor, target.offset));
     const pair = target.pair;
-    const down = await readTensor(file, dataStart, pair.downName, pair.down);
-    const up = await readTensor(file, dataStart, pair.upName, pair.up);
-    const alpha = await readTensor(file, dataStart, pair.alphaName, pair.alpha);
+    const down = await readTensor(file, dataStart, pair.downName, pair.down, payloadBuffer);
+    const up = await readTensor(file, dataStart, pair.upName, pair.up, payloadBuffer);
+    const alpha = await readTensor(file, dataStart, pair.alphaName, pair.alpha, payloadBuffer);
     if (alpha.length !== 1) throw new Error("LoRA alpha must be scalar for " + target.stem + ".");
     const rank = validatePair(pair, target.entry, target.stem);
     const scale = alpha[0] / rank * strength;
