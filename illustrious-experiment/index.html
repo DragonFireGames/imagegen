@@ -77,6 +77,12 @@
     <section class="panel" id="generator">
       <p class="eyebrow">Create</p>
       <h2>Generate an image</h2>
+      <div class="generator-actions" aria-label="Generation settings">
+        <button class="button secondary-button" id="exportGenerationSettings" type="button">Export settings JSON</button>
+        <button class="button secondary-button" id="importGenerationSettings" type="button">Import settings JSON</button>
+        <input id="importGenerationSettingsFile" type="file" accept=".json,application/json" hidden>
+      </div>
+      <p class="status" id="generationSettingsStatus" data-type="info" aria-live="polite">Settings JSON includes prompts, dimensions, sampler, seed, and adapter metadata. The local LoRA file itself is not embedded.</p>
       <label for="generationPrompt">Prompt</label>
       <textarea class="prompt-input" id="generationPrompt" rows="4">1girl, detailed anime illustration, expressive eyes, beautiful lighting, highly detailed background</textarea>
 
