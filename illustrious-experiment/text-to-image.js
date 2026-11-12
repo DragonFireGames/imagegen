@@ -1687,7 +1687,7 @@ async function ensureUnetSessions(
   try {
     const runWarmup = async () => {
       const warmupStarted = performance.now();
-      const warmupLatents = new Float32Array(4 * (height / 8) * (width / 8));
+      const warmupLatents = new Float32Array(4 * (height / 8) * (width / 8) * imageCount);
       log("Compiling UNet GPU pipelines with one disposable zero-latent warm-up" +
         (graphCaptureEnabled ? " and recording the static WebGPU command graphs…" : "…"));
       const warmup = await runUnetStep(
