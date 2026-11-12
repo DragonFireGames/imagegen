@@ -73,7 +73,7 @@ function setBrushMode(mode) {
   brushMode = mode;
   document.querySelector("#brushTool").classList.toggle("selected", mode === "paint");
   document.querySelector("#eraseTool").classList.toggle("selected", mode === "erase");
-  paintOverlay.style.cursor = mode === "paint" ? "crosshair" : "cell";
+  canvasStack.style.cursor = mode === "paint" ? "crosshair" : "cell";
 }
 
 function brushStamp(context, x, y, color) {
@@ -102,33 +102,40 @@ function paintSegment(from, to) {
   const spacing = Math.max(1, Number(brushSize.value) * 0.18);
   const steps = Math.max(1, Math.ceil(distance / spacing));
   const maskContext = maskCanvas.getContext("2d");
-  const overlayContext = paintOverlay.getContext("2d");
   for (let i = 0; i <= steps; i++) {
     const t = i / steps;
     const x = from.x + (to.x - from.x) * t;
     const y = from.y + (to.y - from.y) * t;
     brushStamp(maskContext, x, y, "#fff");
-    brushStamp(overlayContext, x, y, "rgba(248,67,132,0.48)");
   }
+  renderPreview();
 }
 
 function pointFromEvent(event) {
-  const rect = paintOverlay.getBoundingClientRect();
+  const rect = canvasStack.getBoundingClientRect();
+  if (!rect.width || !rect.height) throw new Error("Brush canvas has no visible size.");
   return {
     x: Math.max(0, Math.min(imageWidth, (event.clientX - rect.left) * imageWidth / rect.width)),
     y: Math.max(0, Math.min(imageHeight, (event.clientY - rect.top) * imageHeight / rect.height))
   };
 }
 
-paintOverlay.addEventListener("pointerdown", event => {
+// Listen on the stack rather than the transparent canvas. This avoids browsers
+// intermittently hit-testing the overlaid canvas as a non-interactive surface.
+canvasStack.style.touchAction = "none";
+sourcePreview.style.pointerEvents = "none";
+paintOverlay.style.pointerEvents = "none";
+paintOverlay.style.zIndex = "2";
+canvasStack.addEventListener("pointerdown", event => {
   if (!sourceBitmap || pointerActive) return;
   event.preventDefault();
   pointerActive = true;
   previousPoint = pointFromEvent(event);
-  paintOverlay.setPointerCapture(event.pointerId);
+  canvasStack.setPointerCapture(event.pointerId);
   paintSegment(previousPoint, previousPoint);
+  setStatus("Painting mask…");
 });
-paintOverlay.addEventListener("pointermove", event => {
+canvasStack.addEventListener("pointermove", event => {
   if (!pointerActive) return;
   event.preventDefault();
   const point = pointFromEvent(event);
@@ -136,12 +143,13 @@ paintOverlay.addEventListener("pointermove", event => {
   previousPoint = point;
 });
 function stopPainting() {
+  if (pointerActive) setStatus("Mask updated. Keep painting or run infill.");
   pointerActive = false;
   previousPoint = null;
 }
-paintOverlay.addEventListener("pointerup", stopPainting);
-paintOverlay.addEventListener("pointercancel", stopPainting);
-paintOverlay.addEventListener("lostpointercapture", stopPainting);
+canvasStack.addEventListener("pointerup", stopPainting);
+canvasStack.addEventListener("pointercancel", stopPainting);
+canvasStack.addEventListener("lostpointercapture", stopPainting);
 
 sourceFile.addEventListener("change", async () => {
   const file = sourceFile.files?.[0];
