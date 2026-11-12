@@ -1543,8 +1543,9 @@ async function prepareInferenceEngine() {
     const conditioning = await getConditioning(manifest, options);
     checkCancelled();
 
+    const infillMode = Boolean(window.__illustriousInfill);
     setStatus("Preparing resident UNet sessions…");
-    await ensureUnetSessions(manifest, options.lora, conditioning, options.width, options.height, options.cfg);
+    await ensureUnetSessions(manifest, options.lora, conditioning, options.width, options.height, options.cfg, !infillMode);
     checkCancelled();
 
     // Keep the multi-part UNet resident, but do not pin the VAE beside its
