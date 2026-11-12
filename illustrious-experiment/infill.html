@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111319">
+  <title>Illustrious Brush Infill Experiment</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; padding: 24px 16px; background: #111319; color: #e5e6eb; font: 15px/1.55 system-ui, sans-serif; }
+    main { width: min(1320px, 100%); margin: 0 auto 48px; }
+    a { color: #f08acb; }
+    h1, h2, h3 { line-height: 1.2; }
+    h1 { margin: 8px 0 5px; font-size: clamp(28px, 4vw, 40px); letter-spacing: -.035em; }
+    h2 { margin: 0 0 12px; font-size: 19px; }
+    h3 { margin: 0 0 8px; font-size: 15px; }
+    p { color: #bfc1ca; }
+    label { display: block; margin: 14px 0 6px; font-weight: 650; }
+    textarea, input[type="number"], input[type="text"] { width: 100%; padding: 10px 12px; border: 1px solid #454956; border-radius: 8px; background: #111319; color: #e5e6eb; font: inherit; }
+    textarea { min-height: 82px; resize: vertical; }
+    input[type="file"] { width: 100%; margin: 8px 0; color: #bfc1ca; }
+    input[type="range"] { width: 100%; accent-color: #f08acb; }
+    .eyebrow { margin: 0; color: #e5a64b; font-size: 12px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; }
+    .intro { max-width: 900px; margin: 0 0 20px; color: #bfc1ca; }
+    .layout { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 18px; align-items: start; }
+    .panel { min-width: 0; padding: 20px; border: 1px solid #343740; border-radius: 12px; background: #191b21; }
+    .controls { position: sticky; top: 12px; }
+    .actions, .toolbar, .row, .model-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; }
+    .button { appearance: none; border: 0; border-radius: 7px; padding: 10px 14px; color: #17131a; background: #f08acb; font: inherit; font-weight: 700; cursor: pointer; }
+    .button:disabled { opacity: .48; cursor: not-allowed; }
+    .secondary { color: #e5e6eb; background: #393d48; }
+    .selected { outline: 2px solid #f08acb; outline-offset: 2px; }
+    .toolbar { margin: 12px 0 6px; }
+    .toolbar .button { padding: 8px 11px; font-size: 13px; }
+    .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .field-grid > div { min-width: 0; }
+    .field-grid label { margin-top: 10px; }
+    .small-label { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 2px; font-size: 13px; }
+    .small-label output { color: #f0a2d1; font-variant-numeric: tabular-nums; }
+    .hint { margin: 6px 0 0; color: #999daa; font-size: 12px; }
+    .notice { margin: 14px 0; padding: 11px 13px; border-left: 3px solid #e5a64b; border-radius: 0 7px 7px 0; background: #22252d; color: #c7c9d1; font-size: 13px; }
+    .status { min-height: 24px; margin: 11px 0; color: #bfc1ca; font-size: 13px; overflow-wrap: anywhere; }
+    .status[data-type="success"] { color: #9bd8ae; }
+    .status[data-type="error"] { color: #ff9b9b; }
+    .canvas-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .canvas-wrap { display: grid; justify-items: center; gap: 12px; min-height: 240px; padding: 14px; border: 1px solid #353944; border-radius: 10px; background: #101114; }
+    .canvas-stack { position: relative; width: min(100%, 900px); line-height: 0; overflow: hidden; border-radius: 6px; background: #0b0c0f; }
+    .canvas-stack canvas { display: block; width: 100%; height: auto; }
+    #paintOverlay { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+    .empty { display: grid; place-items: center; min-height: 240px; color: #9296a3; text-align: center; }
+    .empty strong { display: block; color: #e5e6eb; font-size: 17px; }
+    .result { margin-top: 18px; padding-top: 16px; border-top: 1px solid #343740; }
+    #generatedImage { display: block; max-width: 100%; max-height: 70vh; margin: 10px auto; border-radius: 8px; background: #0b0c0f; }
+    #downloadGeneratedImage { display: inline-block; margin-top: 4px; font-weight: 700; }
+    progress { display: block; width: 100%; height: 12px; accent-color: #f08acb; }
+    .progress-label { margin: 5px 0 0; color: #aeb1bd; font-size: 12px; }
+    .log { max-height: 240px; overflow: auto; margin: 10px 0 0; padding: 12px; border-radius: 8px; background: #101114; color: #c7c9d1; white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; margin: 20px 4px; color: #989ba8; font-size: 13px; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+    [hidden] { display: none !important; }
+    @media (max-width: 850px) { .layout { grid-template-columns: 1fr; } .controls { position: static; } }
+    @media (max-width: 540px) { body { padding: 14px 10px; } .panel { padding: 14px; } .canvas-wrap { padding: 8px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Browser-local WebGPU experiment</p>
+    <h1>Brush Infill</h1>
+    <p class="intro">Load an image, paint over the part you want replaced, describe what should appear there, and run WAI Illustrious v17 locally in your browser.</p>
+
+    <div class="layout">
+      <section class="panel controls">
+        <h2>1. Source image</h2>
+        <input id="sourceImageFile" type="file" accept="image/*">
+        <p class="hint" id="resolutionInfo">Choose a PNG, JPEG, or WebP image. It will be resized to a nearby SDXL-compatible resolution.</p>
+
+        <h2 style="margin-top:22px">2. Paint the mask</h2>
+        <div class="toolbar">
+          <button class="button selected" id="brushTool" type="button">Brush</button>
+          <button class="button secondary" id="eraseTool" type="button">Eraser</button>
+          <button class="button secondary" id="clearMask" type="button">Clear</button>
+          <button class="button secondary" id="invertMask" type="button">Invert</button>
+        </div>
+        <div>
+          <div class="small-label"><label for="brushSize">Brush size</label><output id="brushSizeValue">64 px</output></div>
+          <input id="brushSize" type="range" min="8" max="240" step="1" value="64">
+        </div>
+        <div>
+          <div class="small-label"><label for="brushSoftness">Edge softness</label><output id="brushSoftnessValue">35%</output></div>
+          <input id="brushSoftness" type="range" min="0" max="100" step="1" value="35">
+        </div>
+
+        <label for="generationPrompt">What should replace the painted area?</label>
+        <textarea id="generationPrompt">a small ceramic flower pot with a blooming sunflower, matching the original scene, detailed illustration</textarea>
+        <label for="generationNegativePrompt">Negative prompt</label>
+        <textarea id="generationNegativePrompt">blurry, low quality, distorted, duplicate, poorly drawn</textarea>
+        <input id="generationSuffix" type="hidden" value="masterpiece, best quality, absurdres, very aesthetic">
+
+        <div class="field-grid">
+          <div><label for="generationSteps">Steps</label><input id="generationSteps" type="number" min="1" max="100" value="12"></div>
+          <div><label for="generationCfg">CFG scale</label><input id="generationCfg" type="number" min="0" max="20" step="0.5" value="4"></div>
+          <div><label for="generationSeed">Seed</label><input id="generationSeed" type="number" min="0" max="4294967295" value="1337"></div>
+          <div><label for="infillStrength">Strength</label><input id="infillStrength" type="range" min="0.1" max="1" step="0.05" value="0.8"><p class="hint"><output id="infillStrengthValue">0.80</output> · higher allows more change</p></div>
+        </div>
+
+        <details style="margin-top:14px">
+          <summary>Optional local LoRA</summary>
+          <label for="loraFile">SDXL LoRA (.safetensors)</label>
+          <input id="loraFile" type="file" accept=".safetensors">
+          <div id="fileName" class="hint">No adapter selected</div>
+          <label><input id="generationLoraEnabled" type="checkbox"> Apply LoRA</label>
+          <label for="generationLoraStrength">LoRA strength</label>
+          <input id="generationLoraStrength" type="number" min="0" max="2" step="0.05" value="1" disabled>
+        </details>
+
+        <div class="notice">This first pass uses masked latent blending with the regular 4-channel Illustrious UNet. It keeps unpainted regions locked to the source, but it is not a purpose-trained inpainting checkpoint; transitions near mask edges may be less coherent.</div>
+        <div class="actions">
+          <button class="button" id="runInfill" type="button" disabled>Infill selection</button>
+          <button class="button secondary" id="prepareInferenceEngine" type="button">Prepare model</button>
+          <button class="button secondary" id="releaseInferenceEngine" type="button" disabled>Release</button>
+          <button class="button secondary" id="cancelGeneration" type="button" disabled>Cancel</button>
+        </div>
+        <button id="generateImage" type="button" hidden>Generate</button>
+
+        <label>Inference status</label>
+        <p class="status" id="generationStatus" data-type="info" aria-live="polite">Choose an image to begin.</p>
+        <progress id="generationProgress" max="100" value="0"></progress>
+        <p class="progress-label" id="generationProgressLabel">Idle</p>
+        <details>
+          <summary>Performance log</summary>
+          <pre class="log" id="generationLog"></pre>
+        </details>
+
+        <div class="sr-only" aria-hidden="true">
+          <input id="generationWidth" type="number" value="512">
+          <input id="generationHeight" type="number" value="512">
+          <input id="generationSuffix" type="text" value="masterpiece, best quality, absurdres, very aesthetic">
+          <input id="generationLoraStrength" type="number" value="1">
+          <div id="generationSettingsStatus"></div>
+          <img id="generatedImage" alt="Infilled result">
+          <a id="downloadGeneratedImage">Save PNG</a>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="canvas-head">
+          <div><h2>Brush canvas</h2><p class="hint" style="margin:0">Painted areas are highlighted in pink. Drag to draw; use the eraser to refine the mask.</p></div>
+          <span class="hint" id="canvasDimensions">No image loaded</span>
+        </div>
+        <div class="canvas-wrap">
+          <div class="empty" id="canvasEmpty"><div><strong>Your source image goes here</strong>Upload an image, then brush over the region to regenerate.</div></div>
+          <div class="canvas-stack" id="canvasStack" hidden>
+            <canvas id="sourcePreview"></canvas>
+            <canvas id="paintOverlay"></canvas>
+          </div>
+        </div>
+        <div class="result" id="resultPanel" hidden>
+          <h2>Infilled result</h2>
+          <img id="resultImage" alt="Generated infill result">
+          <a id="resultDownload">Save PNG</a>
+        </div>
+      </section>
+    </div>
+
+    <div class="footer">
+      <span>WAI Illustrious v17 · SDXL · ONNX Runtime WebGPU</span>
+      <span><a href="./index.html">Illustrious text-to-image</a> · <a href="../">Imagegen home</a></span>
+    </div>
+  </main>
+
+  <script type="module" src="./infill-brush.js"></script>
+  <script type="module" src="./text-to-image.js"></script>
+</body>
+</html>
