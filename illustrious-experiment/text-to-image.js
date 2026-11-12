@@ -1,7 +1,7 @@
 import * as ort from "../vendor/onnxruntime-web/ort.webgpu.min.mjs";
 import { CLIPTokenizer } from "../vendor/transformers/transformers.min.js";
 import { acquireHeavyModelTest, releaseHeavyModelTest } from "./heavy-model-test-lock.js";
-import { preparePersonalAmiComponent } from "./personal-ami-lora.js";
+import { preparePersonalAmiComponent, releasePersonalAmiPayload } from "./personal-ami-lora.js";
 import { fetchModelResource, prepareModelCache, exportModelBundle, importModelBundle } from "./model-cache.js";
 
 const MODEL_ID = "aaaaaeeeee/blip-sdxl-anime-wai-illustrious17";
@@ -1004,6 +1004,10 @@ async function ensureUnetSessions(manifest, personalAmi, conditioning, width, he
       sessions = await buildUnetSessions(manifest, personalAmi, conditioning, width, height, false, patchCache);
     }
 
+    if (personalAmi) {
+      releasePersonalAmiPayload(personalAmi.file);
+      log("Released the temporary in-memory LoRA factor copy after all five components were patched.");
+    }
     residentUnetSessions = sessions;
     residentUnetKey = key;
     releaseEngineButton.disabled = false;
