@@ -65,19 +65,15 @@ Use the generator's A/B/C wall-clock timings to compare partition-level runs.
 Those timings include the provider's dispatch and synchronization costs, not
 just the GPU kernels.
 
-Use `?validation=wgpuOnly` to opt the three repeated UNet sessions into
-ONNX Runtime's WebGPU-only validation mode. In the bundled 1.31.1 API, this
-retains WebGPU/Dawn validation while skipping the additional basic ONNX
-validation pass. This changes validation overhead only; it does not change the
-model graph, weights, tensor types, scheduler, or generated values. The default
-is unchanged (ONNX Runtime's `basic` mode). You can use `?validation=basic`
-to state that default explicitly, or `?validation=full` for extra debugging
-checks. `?validation=disabled` skips ONNX-side validation as well; use it only as
-a controlled performance benchmark, since fewer runtime checks make invalid
-GPU operations harder to diagnose. None of these modes changes the intended model computation, but
-the default validation mode remains the safest choice for ordinary use. This
-is an optional benchmark setting, not a guaranteed speedup; compare repeated
-warm runs with otherwise identical settings.
+The three repeated UNet sessions default to ONNX Runtime's `wgpuOnly`
+validation mode. This retains WebGPU/Dawn validation while skipping the
+additional basic ONNX validation pass. This changes validation overhead only;
+it does not change the model graph, weights, tensor types, scheduler, or
+generated values. Use `?validation=basic` or `?validation=full` to request
+additional ONNX-side checks for debugging. `?validation=disabled` skips
+ONNX-side validation as well; use it only for controlled performance tests,
+since fewer runtime checks make invalid GPU operations harder to diagnose.
+The default `wgpuOnly` mode keeps WebGPU/Dawn validation enabled.
 
 Use `?graphCapture=1` to try WebGPU graph capture for the three fixed-shape
 UNet sessions. The first disposable warm-up dispatch records the graphs. If
