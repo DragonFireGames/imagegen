@@ -207,7 +207,7 @@ jobs:
           };
           const field = (number, wire, payload) => wire === 2
             ? concat(varint(number * 8 + 2), varint(payload.length), payload)
-            : concat(varint(number * 8), varint(payload));
+            : concat(varint(number * 8), payload instanceof Uint8Array ? payload : varint(payload));
           const symbolicDimension = name => field(1, 2, field(2, 2, encoder.encode(name)));
           const numericDimension = value => field(1, 2, field(1, 0, varint(value)));
 
