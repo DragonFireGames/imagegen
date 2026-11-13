@@ -1980,12 +1980,16 @@ async function ensureUnetSessions(
         patchCache, useGpuScheduler, graphCaptureEnabled, preferredUnetLayout,
         validationMode
       );
-      log("UNET_A/B/C ready · " + (sessions.graphCaptureActive ? "graph capture active" : "standard") +
-        " WebGPU dispatch with persistent GPU inputs and GPU-resident partition handoffs." +
+      log("UNET_A/B/C sessions created · " +
+        (sessions.graphCaptureRequested ? "graph capture requested; initial capture pass pending" : "standard WebGPU dispatch") +
+        " with persistent GPU inputs and GPU-resident partition handoffs." +
         (branchCount === 1 ? " Single-branch CFG path." : " Classifier-free guidance path.") +
         " · " + imageCount + " image(s) · model batch=" + batchSize + ".");
       await runWarmup();
       sessions.graphCaptureActive = graphCaptureEnabled;
+      if (sessions.graphCaptureActive) {
+        log("WebGPU graph capture active · UNET_A/B/C warm-up completed and the captured command graphs are ready for replay.");
+      }
     } catch (captureError) {
       if (!graphCaptureEnabled) throw captureError;
       if (sessions) {
