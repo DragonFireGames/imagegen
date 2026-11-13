@@ -11,6 +11,11 @@ const VAE_SCALING_FACTOR = 0.18215; // The WAI pack's Kohaku XL beta5 base VAE c
 
 const runtimePreference = new URLSearchParams(window.location.search).get("runtime") || "auto";
 const graphCaptureEnabled = new URLSearchParams(window.location.search).get("graphCapture") === "1";
+const gpuSyncProfileEnabled = new URLSearchParams(window.location.search).get("gpuSyncProfile") === "1";
+const requestedUnetStorageBufferCacheMode = new URLSearchParams(window.location.search).get("bufferCache");
+const preferredUnetStorageBufferCacheMode = ["disabled", "lazyRelease", "simple", "bucket"].includes(requestedUnetStorageBufferCacheMode)
+  ? requestedUnetStorageBufferCacheMode
+  : null;
 const keepVaeResident = new URLSearchParams(window.location.search).get("keepVae") === "1";
 const preferredUnetLayout = new URLSearchParams(window.location.search).get("layout") === "NHWC" ? "NHWC" : null;
 const requestedUnetValidationMode = new URLSearchParams(window.location.search).get("validation");
@@ -668,7 +673,8 @@ async function loadSession(
   enableGraphCapture = false,
   preferredLayout = null,
   validationMode = null,
-  expectedShapeMap = null
+  expectedShapeMap = null,
+  storageBufferCacheMode = null
 ) {
   const component = manifest?.components?.[key];
   const started = performance.now();
@@ -685,8 +691,9 @@ async function loadSession(
   const webgpuProvider = { name: "webgpu" };
   if (preferredLayout) webgpuProvider.preferredLayout = preferredLayout;
   if (validationMode) webgpuProvider.validationMode = validationMode;
+  if (storageBufferCacheMode) webgpuProvider.storageBufferCacheMode = storageBufferCacheMode;
   const sessionOptions = {
-    executionProviders: preferredLayout || validationMode
+    executionProviders: preferredLayout || validationMode || storageBufferCacheMode
       ? [webgpuProvider]
       : ["webgpu"],
     graphOptimizationLevel: "all",
@@ -707,7 +714,8 @@ async function loadSession(
     "s · inputs: " + session.inputNames.join(", ") +
     (preferredOutputLocation ? " · GPU-resident outputs enabled" : "") +
     (enableGraphCapture ? " · WebGPU graph capture enabled" : "") +
-    (preferredLayout ? " · preferred layout " + preferredLayout : ""));
+    (preferredLayout ? " · preferred layout " + preferredLayout : "") +
+    (storageBufferCacheMode ? " · storage-buffer cache " + storageBufferCacheMode : ""));
   return session;
 }
 
@@ -1304,6 +1312,16 @@ async function createGpuScheduler(device, gpuInputs, width, height, batchSize, i
   }
 }
 
+async function drainGpuQueueForDiagnostics(device) {
+  if (!gpuSyncProfileEnabled) return 0;
+  if (!device?.queue || typeof device.queue.onSubmittedWorkDone !== "function") {
+    throw new Error("The browser's WebGPU queue does not expose onSubmittedWorkDone(); GPU queue-drain diagnostics are unavailable.");
+  }
+  const started = performance.now();
+  await device.queue.onSubmittedWorkDone();
+  return (performance.now() - started) / 1000;
+}
+
 function disposeOutput(outputs, name) {
   const tensor = outputs?.[name];
   if (tensor && typeof tensor.dispose === "function") tensor.dispose();
@@ -1335,6 +1353,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
   const usePersistentOutputs = Boolean(sessions.gpuOutputs?.a && sessions.gpuOutputs?.b);
 
   try {
+    timings.preAQueueDrain = await drainGpuQueueForDiagnostics(gpu.device);
     if (sessions.gpuScheduler) gpu.writeTimestep(timestep);
     else gpu.writeStep(batchSample, timestep);
     const startedA = performance.now();
@@ -1349,6 +1368,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       for (const name of ["hidden", "skip_6", "skip_7", "skip_8"]) disposeOutput(outputsA, name);
     }
     timings.a = (performance.now() - startedA) / 1000;
+    timings.aQueueDrain = await drainGpuQueueForDiagnostics(gpu.device);
     checkCancelled();
 
     validateGpuTensor(outputsA.hidden, "UNET_A hidden", shape(1280, latentHeight / 4, latentWidth / 4));
@@ -1374,6 +1394,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       skip_8: outputsA.skip_8
     }, usePersistentOutputs ? sessions.gpuOutputs.b.fetches : undefined);
     timings.b = (performance.now() - startedB) / 1000;
+    timings.bQueueDrain = await drainGpuQueueForDiagnostics(gpu.device);
     checkCancelled();
     validateGpuTensor(outputsB.hidden_out, "UNET_B hidden_out",
       shape(1280, latentHeight / 2, latentWidth / 2));
@@ -1398,6 +1419,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       outputsC = await sessions.c.run(feedsC);
     }
     timings.c = (performance.now() - startedC) / 1000;
+    timings.cQueueDrain = await drainGpuQueueForDiagnostics(gpu.device);
     checkCancelled();
 
     let guided = null;
@@ -1422,7 +1444,11 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       timings.b.toFixed(2) + "s · C " + timings.c.toFixed(2) +
       "s · CFG " + cfg + " · " + imageCount + " image(s) · model batch " + batch + " · A→B→C GPU-resident · reusable GPU inputs" +
       (sessions.graphCaptureActive ? " · graph capture active" : " · standard dispatch") +
-      (sessions.gpuScheduler ? " · GPU CFG/Euler" : " · CPU CFG/Euler"));
+      (sessions.gpuScheduler ? " · GPU CFG/Euler" : " · CPU CFG/Euler") +
+      (gpuSyncProfileEnabled
+        ? " · queue drains pre-A " + timings.preAQueueDrain.toFixed(2) + "s / A " + timings.aQueueDrain.toFixed(2) +
+          "s / B " + timings.bQueueDrain.toFixed(2) + "s / C " + timings.cQueueDrain.toFixed(2) + "s (diagnostic synchronization)"
+        : ""));
     return { guided, timings };
   } finally {
     if (!sessions.gpuScheduler) disposeRemaining(outputsC);
@@ -1795,11 +1821,12 @@ async function buildUnetSessions(
   useGpuScheduler = true,
   enableGraphCapture = false,
   preferredLayout = null,
-  validationMode = null
+  validationMode = null,
+  storageBufferCacheMode = null
 ) {
   const sessions = {
     a: null, b: null, c: null, gpuInputs: null, gpuOutputs: { a: null, b: null },
-    batchSize, imageCount, branchCount,
+    batchSize, imageCount, branchCount, storageBufferCacheMode,
     graphCaptureRequested: enableGraphCapture,
     graphCaptureActive: false,
     graphCaptureFallbackReason: null
@@ -1832,7 +1859,7 @@ async function buildUnetSessions(
     sessions.a = await loadSession(
       manifest, "unet_a", "UNET_A", patchedA?.externalData, outputsA,
       enableGraphCapture, preferredLayout, validationMode,
-      { width, height, batchSize }
+      { width, height, batchSize }, storageBufferCacheMode
     );
     sessions.gpuInputs = createGpuInputState(
       conditioning, width, height, batchSize, conditioningIndex, imageCount, branchCount
@@ -1843,7 +1870,7 @@ async function buildUnetSessions(
     sessions.b = await loadSession(
       manifest, "unet_b", "UNET_B", patchedB?.externalData, outputsB,
       enableGraphCapture, preferredLayout, validationMode,
-      { width, height, batchSize }
+      { width, height, batchSize }, storageBufferCacheMode
     );
     checkCancelled();
 
@@ -1872,7 +1899,7 @@ async function buildUnetSessions(
       enableGraphCapture,
       preferredLayout,
       validationMode,
-      { width, height, batchSize }
+      { width, height, batchSize }, storageBufferCacheMode
     );
 
     validateSessionInputs(sessions.a, ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], "UNET_A");
@@ -1921,7 +1948,8 @@ async function buildUnetSessions(
 
 async function ensureUnetSessions(
   manifest, lora, conditioning, width, height, cfg, useGpuScheduler = true,
-  imageCount = 1, validationMode = preferredUnetValidationMode
+  imageCount = 1, validationMode = preferredUnetValidationMode,
+  storageBufferCacheMode = preferredUnetStorageBufferCacheMode
 ) {
   const branchCount = cfg === 0 || cfg === 1 ? 1 : 2;
   const batchSize = branchCount * imageCount;
@@ -1931,7 +1959,8 @@ async function ensureUnetSessions(
     (useGpuScheduler ? "|gpu-scheduler" : "|cpu-scheduler") +
     (graphCaptureEnabled ? "|graph-capture" : "|standard-dispatch") +
     "|" + (preferredUnetLayout || "default-layout") +
-    "|validation:" + (validationMode || "wgpuOnly");
+    "|validation:" + (validationMode || "wgpuOnly") +
+    "|storage-buffer-cache:" + (storageBufferCacheMode || "bucket");
   if (residentUnetSessions && residentUnetKey === key &&
       graphCaptureEnabled && residentUnetSessions.graphCaptureActive !== true) {
     log("Discarding stale resident UNet cache entry: graph capture was requested, but these sessions use standard dispatch.");
@@ -1987,7 +2016,7 @@ async function ensureUnetSessions(
       sessions = await buildUnetSessions(
         manifest, lora, conditioning, width, height, batchSize, imageCount, branchCount, conditioningIndex,
         patchCache, useGpuScheduler, graphCaptureEnabled, preferredUnetLayout,
-        validationMode
+        validationMode, storageBufferCacheMode
       );
       log("UNET_A/B/C sessions created · " +
         (sessions.graphCaptureRequested ? "graph capture requested; initial capture pass pending" : "standard WebGPU dispatch") +
@@ -2011,7 +2040,7 @@ async function ensureUnetSessions(
       sessions = await buildUnetSessions(
         manifest, lora, conditioning, width, height, batchSize, imageCount, branchCount, conditioningIndex,
         patchCache, useGpuScheduler, false, preferredUnetLayout,
-        validationMode
+        validationMode, storageBufferCacheMode
       );
       await runWarmup();
       sessions.graphCaptureActive = false;
@@ -2361,8 +2390,12 @@ async function generateMany(imageOptionsList, infillData = null, onImage = null)
         : "."));
   if (graphCaptureEnabled) log("Static UNet WebGPU graph capture requested · initialization falls back to standard dispatch if capture fails.");
   if (gpuProfilingRequested) {
-    log("Per-operator GPU profiling is not exposed to JavaScript by the bundled ONNX Runtime 1.31.1 native WebGPU provider. No [profiling] entries are expected; the A/B/C wall-clock timings below remain available.");
+    log("Per-operator GPU profile traces are not exposed by the bundled ONNX Runtime 1.31.1 JavaScript WebAssembly wrapper. No [profiling] entries are expected.");
   }
+  if (gpuSyncProfileEnabled) {
+    log("GPU queue-drain diagnostics enabled · waits before A and after each A/B/C run to attribute queued GPU work. This serializes partitions and is not a throughput benchmark.");
+  }
+  log("UNet storage-buffer cache mode · " + (preferredUnetStorageBufferCacheMode || "bucket (ORT default)") + ".");
   log("Model " + (manifest.packageId || MODEL_ID) + " · WebGPU · " +
     options.width + "×" + options.height + " · " + options.steps + " steps.");
   log("Prompt: " + options.prompt);
@@ -2424,7 +2457,9 @@ async function generateMany(imageOptionsList, infillData = null, onImage = null)
   } else if (imageCount > 1) {
     throw new Error("Parallel image batches require the GPU-resident Euler scheduler; reduce Images per GPU batch to 1.");
   }
-  let totalUnetExecutionSeconds = 0;
+  let totalUnetRunCallSeconds = 0;
+  let totalUnetQueueDrainSeconds = 0;
+  let totalPreStepQueueDrainSeconds = 0;
   const stepNoise = new Float32Array(latents.length);
   log("All three UNet sessions are resident. Beginning " + options.steps + " denoising steps." +
     (gpuScheduler ? " GPU scheduler avoids per-step latent readback." : ""));
@@ -2447,7 +2482,11 @@ async function generateMany(imageOptionsList, infillData = null, onImage = null)
       options.cfg,
       step
     );
-    totalUnetExecutionSeconds += denoiser.timings.a + denoiser.timings.b + denoiser.timings.c;
+    totalUnetRunCallSeconds += denoiser.timings.a + denoiser.timings.b + denoiser.timings.c;
+    if (gpuSyncProfileEnabled) {
+      totalUnetQueueDrainSeconds += denoiser.timings.aQueueDrain + denoiser.timings.bQueueDrain + denoiser.timings.cQueueDrain;
+      totalPreStepQueueDrainSeconds += denoiser.timings.preAQueueDrain;
+    }
     if (infillData) {
       createNormalNoise(latentSize, options.seed + step + 1, stepNoise);
     } else {
@@ -2478,8 +2517,12 @@ async function generateMany(imageOptionsList, infillData = null, onImage = null)
       scheduler.sigmas[step].toFixed(5) + " → " + scheduler.sigmas[step + 1].toFixed(5));
     if ((step + 1) % 2 === 0 || step === options.steps - 1) await yieldFrames();
   }
-  log("Accumulated UNet execution time " + totalUnetExecutionSeconds.toFixed(2) +
-    "s across " + options.steps + " steps · " + imageCount + " image(s).");
+  log("Accumulated UNet session.run call time " + totalUnetRunCallSeconds.toFixed(2) +
+    "s across " + options.steps + " steps · " + imageCount + " image(s)." +
+    (gpuSyncProfileEnabled
+      ? " Post-A/B/C queue-drain wait " + totalUnetQueueDrainSeconds.toFixed(2) +
+        "s; pre-A queue-drain wait " + totalPreStepQueueDrainSeconds.toFixed(2) + "s."
+      : ""));
   if (gpuScheduler) {
     const readbackStarted = performance.now();
     latents = await gpuScheduler.readLatents();
