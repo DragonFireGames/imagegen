@@ -1353,7 +1353,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
   const usePersistentOutputs = Boolean(sessions.gpuOutputs?.a && sessions.gpuOutputs?.b);
 
   try {
-    timings.preAQueueDrain = await drainGpuQueueForDiagnostics(gpu.device);
+    if (gpuSyncProfileEnabled) timings.preAQueueDrain = await drainGpuQueueForDiagnostics(gpu.device);
     if (sessions.gpuScheduler) gpu.writeTimestep(timestep);
     else gpu.writeStep(batchSample, timestep);
     const startedA = performance.now();
@@ -1368,7 +1368,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       for (const name of ["hidden", "skip_6", "skip_7", "skip_8"]) disposeOutput(outputsA, name);
     }
     timings.a = (performance.now() - startedA) / 1000;
-    timings.aQueueDrain = await drainGpuQueueForDiagnostics(gpu.device);
+    if (gpuSyncProfileEnabled) timings.aQueueDrain = await drainGpuQueueForDiagnostics(gpu.device);
     checkCancelled();
 
     validateGpuTensor(outputsA.hidden, "UNET_A hidden", shape(1280, latentHeight / 4, latentWidth / 4));
@@ -1394,7 +1394,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       skip_8: outputsA.skip_8
     }, usePersistentOutputs ? sessions.gpuOutputs.b.fetches : undefined);
     timings.b = (performance.now() - startedB) / 1000;
-    timings.bQueueDrain = await drainGpuQueueForDiagnostics(gpu.device);
+    if (gpuSyncProfileEnabled) timings.bQueueDrain = await drainGpuQueueForDiagnostics(gpu.device);
     checkCancelled();
     validateGpuTensor(outputsB.hidden_out, "UNET_B hidden_out",
       shape(1280, latentHeight / 2, latentWidth / 2));
@@ -1419,7 +1419,7 @@ async function runUnetStep(sessions, conditioning, scaledLatents, timestep, widt
       outputsC = await sessions.c.run(feedsC);
     }
     timings.c = (performance.now() - startedC) / 1000;
-    timings.cQueueDrain = await drainGpuQueueForDiagnostics(gpu.device);
+    if (gpuSyncProfileEnabled) timings.cQueueDrain = await drainGpuQueueForDiagnostics(gpu.device);
     checkCancelled();
 
     let guided = null;
