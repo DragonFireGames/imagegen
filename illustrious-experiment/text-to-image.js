@@ -450,6 +450,206 @@ async function externalData(component, manifest) {
   }));
 }
 
+function readOnnxVarint(bytes, offset) {
+  let value = 0n;
+  let shift = 0n;
+  let position = offset;
+  while (position < bytes.length && shift <= 63n) {
+    const byte = bytes[position++];
+    value |= BigInt(byte & 0x7f) << shift;
+    if ((byte & 0x80) === 0) return { value, next: position };
+    shift += 7n;
+  }
+  throw new Error("Malformed ONNX protobuf varint while inspecting graph dimensions.");
+}
+
+function readOnnxFields(bytes) {
+  const fields = [];
+  let offset = 0;
+  while (offset < bytes.length) {
+    const tag = readOnnxVarint(bytes, offset);
+    offset = tag.next;
+    const number = Number(tag.value >> 3n);
+    const wire = Number(tag.value & 7n);
+    if (!number) throw new Error("ONNX protobuf contains an invalid field number.");
+    if (wire === 0) {
+      const item = readOnnxVarint(bytes, offset);
+      fields.push({ number, wire, value: item.value });
+      offset = item.next;
+    } else if (wire === 1) {
+      if (offset + 8 > bytes.length) throw new Error("Truncated ONNX fixed64 field.");
+      fields.push({ number, wire, value: bytes.subarray(offset, offset + 8) });
+      offset += 8;
+    } else if (wire === 2) {
+      const length = readOnnxVarint(bytes, offset);
+      offset = length.next;
+      const size = Number(length.value);
+      if (!Number.isSafeInteger(size) || size < 0 || offset + size > bytes.length) {
+        throw new Error("Invalid ONNX protobuf field length.");
+      }
+      fields.push({ number, wire, value: bytes.subarray(offset, offset + size) });
+      offset += size;
+    } else if (wire === 5) {
+      if (offset + 4 > bytes.length) throw new Error("Truncated ONNX fixed32 field.");
+      fields.push({ number, wire, value: bytes.subarray(offset, offset + 4) });
+      offset += 4;
+    } else {
+      throw new Error("Unsupported ONNX protobuf wire type " + wire + ".");
+    }
+  }
+  return fields;
+}
+
+function onnxField(fields, number, wire = 2) {
+  return fields.find(field => field.number === number && field.wire === wire);
+}
+
+function onnxFields(fields, number, wire = 2) {
+  return fields.filter(field => field.number === number && field.wire === wire);
+}
+
+function readOnnxValueInfo(bytes) {
+  const fields = readOnnxFields(bytes);
+  const nameField = onnxField(fields, 1);
+  const typeField = onnxField(fields, 2);
+  if (!nameField || !typeField) throw new Error("ONNX graph contains an unnamed or untyped input/output.");
+  const typeFields = readOnnxFields(typeField.value);
+  const tensorField = onnxField(typeFields, 1);
+  if (!tensorField) throw new Error("ONNX graph input/output is not a tensor.");
+  const tensorFields = readOnnxFields(tensorField.value);
+  const shapeField = onnxField(tensorFields, 2);
+  if (!shapeField) throw new Error("ONNX graph tensor has no declared shape.");
+  const shape = onnxFields(readOnnxFields(shapeField.value), 1).map(dimensionField => {
+    const dimension = readOnnxFields(dimensionField.value);
+    const numeric = onnxField(dimension, 1, 0);
+    const symbolic = onnxField(dimension, 2, 2);
+    if (numeric) return { value: Number(numeric.value) };
+    if (symbolic) return { param: new TextDecoder().decode(symbolic.value) };
+    return {};
+  });
+  return { name: new TextDecoder().decode(nameField.value), shape };
+}
+
+function readOnnxGraphPorts(graphData) {
+  const modelFields = readOnnxFields(new Uint8Array(graphData));
+  const graphField = onnxField(modelFields, 7);
+  if (!graphField) throw new Error("ONNX model has no graph while resolving graph-capture dimensions.");
+  const graphFields = readOnnxFields(graphField.value);
+  return {
+    inputs: onnxFields(graphFields, 11).map(field => readOnnxValueInfo(field.value)),
+    outputs: onnxFields(graphFields, 12).map(field => readOnnxValueInfo(field.value))
+  };
+}
+
+function expectedUnetPortShapes(component, width, height, batchSize) {
+  const latentHeight = height / 8;
+  const latentWidth = width / 8;
+  const image = (channels, h = latentHeight, w = latentWidth) => [batchSize, channels, h, w];
+  const embedding = [batchSize, 1280];
+  const encoder = [batchSize, 77, 2048];
+  if (component === "unet_a") {
+    return {
+      inputs: {
+        sample: image(4),
+        timestep: [batchSize],
+        encoder_hidden_states: encoder,
+        text_embeds: embedding,
+        time_ids: [batchSize, 6]
+      },
+      outputs: {
+        hidden: image(1280, latentHeight / 4, latentWidth / 4),
+        emb: embedding,
+        skip_0: image(320),
+        skip_1: image(320),
+        skip_2: image(320),
+        skip_3: image(320, latentHeight / 2, latentWidth / 2),
+        skip_4: image(640, latentHeight / 2, latentWidth / 2),
+        skip_5: image(640, latentHeight / 2, latentWidth / 2),
+        skip_6: image(640, latentHeight / 4, latentWidth / 4),
+        skip_7: image(1280, latentHeight / 4, latentWidth / 4),
+        skip_8: image(1280, latentHeight / 4, latentWidth / 4)
+      }
+    };
+  }
+  if (component === "unet_b") {
+    return {
+      inputs: {
+        hidden: image(1280, latentHeight / 4, latentWidth / 4),
+        emb: embedding,
+        encoder_hidden_states: encoder,
+        skip_6: image(640, latentHeight / 4, latentWidth / 4),
+        skip_7: image(1280, latentHeight / 4, latentWidth / 4),
+        skip_8: image(1280, latentHeight / 4, latentWidth / 4)
+      },
+      outputs: {
+        hidden_out: image(1280, latentHeight / 2, latentWidth / 2)
+      }
+    };
+  }
+  if (component === "unet_c") {
+    return {
+      inputs: {
+        hidden: image(1280, latentHeight / 2, latentWidth / 2),
+        emb: embedding,
+        encoder_hidden_states: encoder,
+        skip_0: image(320),
+        skip_1: image(320),
+        skip_2: image(320),
+        skip_3: image(320, latentHeight / 2, latentWidth / 2),
+        skip_4: image(640, latentHeight / 2, latentWidth / 2),
+        skip_5: image(640, latentHeight / 2, latentWidth / 2)
+      },
+      outputs: {
+        out_sample: image(4)
+      }
+    };
+  }
+  throw new Error("Unknown UNet partition for graph-capture shape resolution: " + component);
+}
+
+function resolveUnetFreeDimensions(graphData, component, width, height, batchSize) {
+  const expected = expectedUnetPortShapes(component, width, height, batchSize);
+  const ports = readOnnxGraphPorts(graphData);
+  const overrides = {};
+  const unresolved = [];
+  for (const direction of ["inputs", "outputs"]) {
+    const expectedByName = expected[direction];
+    for (const port of ports[direction]) {
+      const targetShape = expectedByName[port.name];
+      if (!targetShape) throw new Error(component + " graph has an unexpected " + direction.slice(0, -1) +
+        " '" + port.name + "'; cannot safely pin its graph-capture shape.");
+      if (port.shape.length !== targetShape.length) {
+        throw new Error(component + " " + port.name + " rank " + port.shape.length +
+          " does not match expected rank " + targetShape.length + ".");
+      }
+      for (let axis = 0; axis < port.shape.length; axis++) {
+        const dimension = port.shape[axis];
+        const target = targetShape[axis];
+        if (typeof dimension.param === "string" && dimension.param.length) {
+          const previous = overrides[dimension.param];
+          if (previous !== undefined && previous !== target) {
+            throw new Error(component + " ONNX dimension '" + dimension.param +
+              "' maps to conflicting runtime sizes " + previous + " and " + target + ".");
+          }
+          overrides[dimension.param] = target;
+        } else if (typeof dimension.value === "number") {
+          if (dimension.value !== target) {
+            throw new Error(component + " " + port.name + " axis " + axis +
+              " is fixed at " + dimension.value + ", but this run requires " + target + ".");
+          }
+        } else {
+          unresolved.push(port.name + "[" + axis + "]");
+        }
+      }
+    }
+  }
+  if (unresolved.length) {
+    throw new Error(component + " has dimensions without a dim_param or dim_value: " +
+      unresolved.join(", ") + ". Graph capture cannot safely pin these axes.");
+  }
+  return overrides;
+}
+
 async function loadSession(
   manifest,
   key,
@@ -458,7 +658,8 @@ async function loadSession(
   preferredOutputLocation = null,
   enableGraphCapture = false,
   preferredLayout = null,
-  validationMode = null
+  validationMode = null,
+  expectedShapeMap = null
 ) {
   const component = manifest?.components?.[key];
   const started = performance.now();
@@ -483,7 +684,15 @@ async function loadSession(
     externalData: weightData
   };
   if (preferredOutputLocation) sessionOptions.preferredOutputLocation = preferredOutputLocation;
-  if (enableGraphCapture) sessionOptions.enableGraphCapture = true;
+  if (enableGraphCapture) {
+    if (!expectedShapeMap) throw new Error("Graph capture was requested without a fixed-shape map for " + key + ".");
+    const overrides = resolveUnetFreeDimensions(graphData, key, expectedShapeMap.width,
+      expectedShapeMap.height, expectedShapeMap.batchSize);
+    sessionOptions.freeDimensionOverrides = overrides;
+    log(label + " graph-capture dimensions pinned · " +
+      (Object.keys(overrides).length ? JSON.stringify(overrides) : "graph already declares static input/output shapes") + ".");
+    sessionOptions.enableGraphCapture = true;
+  }
   const session = await ort.InferenceSession.create(graphData, sessionOptions);
   log(label + " session created in " + ((performance.now() - started) / 1000).toFixed(2) +
     "s · inputs: " + session.inputNames.join(", ") +
@@ -1612,7 +1821,8 @@ async function buildUnetSessions(
     const patchedA = await patchedComponent("unet_a");
     sessions.a = await loadSession(
       manifest, "unet_a", "UNET_A", patchedA?.externalData, outputsA,
-      enableGraphCapture, preferredLayout, validationMode
+      enableGraphCapture, preferredLayout, validationMode,
+      { width, height, batchSize }
     );
     sessions.gpuInputs = createGpuInputState(
       conditioning, width, height, batchSize, conditioningIndex, imageCount, branchCount
@@ -1622,7 +1832,8 @@ async function buildUnetSessions(
     const patchedB = await patchedComponent("unet_b");
     sessions.b = await loadSession(
       manifest, "unet_b", "UNET_B", patchedB?.externalData, outputsB,
-      enableGraphCapture, preferredLayout, validationMode
+      enableGraphCapture, preferredLayout, validationMode,
+      { width, height, batchSize }
     );
     checkCancelled();
 
@@ -1650,7 +1861,8 @@ async function buildUnetSessions(
       sessions.gpuScheduler ? "gpu-buffer" : null,
       enableGraphCapture,
       preferredLayout,
-      validationMode
+      validationMode,
+      { width, height, batchSize }
     );
 
     validateSessionInputs(sessions.a, ["sample", "timestep", "encoder_hidden_states", "text_embeds", "time_ids"], "UNET_A");
