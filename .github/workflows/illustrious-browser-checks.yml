@@ -6,12 +6,14 @@ on:
     paths:
       - "illustrious-experiment/**"
       - "service-worker.js"
+      - "vendor/onnxruntime-web/ort.jspi.bundle.min.mjs"
       - ".github/workflows/deploy.yml"
       - ".github/workflows/illustrious-browser-checks.yml"
   pull_request:
     paths:
       - "illustrious-experiment/**"
       - "service-worker.js"
+      - "vendor/onnxruntime-web/ort.jspi.bundle.min.mjs"
       - ".github/workflows/illustrious-browser-checks.yml"
   workflow_dispatch:
 
@@ -59,6 +61,19 @@ jobs:
             throw new Error("runUnetStep finally block must retain the persistent-output fallback cleanup.");
           }
           console.log("Persistent UNet output flag is in scope for try/finally.");
+          NODE
+
+      - name: Check ONNX graph-capture output buffer reuse
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const runtime = readFileSync("vendor/onnxruntime-web/ort.jspi.bundle.min.mjs", "utf8");
+          const graphCaptureOutputReuse =
+            'if(se===p[P]||J.includes(p[P])||(S&&x&&D&&i[P]?.[3]==="gpu-buffer")){Q.push(i[P]),se!==p[P]&&!(S&&x&&D)&&c._OrtReleaseTensor(se)!==0&&$("Can\'t release tensor.");continue}';
+          if (!runtime.includes(graphCaptureOutputReuse)) {
+            throw new Error("ONNX Runtime must return the persistent external output tensor on later graph-captured runs instead of looking up a second GPU buffer.");
+          }
+          console.log("Graph-captured IO binding retains and reuses its persistent output buffers.");
           NODE
 
       - name: Check multi-image GPU batch wiring
