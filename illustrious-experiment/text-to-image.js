@@ -2310,6 +2310,8 @@ async function generateMany(imageOptionsList, infillData = null, onImage = null)
     }
   }
 
+  const buildRevision = new URL(import.meta.url).searchParams.get("build") || "unversioned-source";
+  log("Generator source build · " + buildRevision);
   const manifest = await fetchJSON(MANIFEST_URL, "Model manifest");
   setProgress(1, "Reading cached model metadata");
   const schedulerConfig = await fetchJSON(SCHEDULER_URL, "Scheduler config");
