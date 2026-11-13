@@ -29,6 +29,7 @@ jobs:
         run: |
           sed -i "s|^const APP_CACHE_NAME = .*;|const APP_CACHE_NAME = \"illustrious-app-shell-${GITHUB_SHA}\";|" service-worker.js
           sed -i "s|__APP_BUILD_ID__|${GITHUB_SHA}|g" illustrious-experiment/index.html
+          printf '{"commit":"%s"}\\n' "$GITHUB_SHA" > illustrious-experiment/build-info.json
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
