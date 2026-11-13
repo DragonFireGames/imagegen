@@ -190,7 +190,7 @@ jobs:
             ["final GPU queue completion/readback time is measured", source.includes("const readbackStarted = performance.now()") && source.includes('readbackSeconds.toFixed(2)') && source.includes("outstanding GPU queue completion and buffer mapping")],
             ["README documents disabled validation and final readback timing", normalizedReadme.includes("`?validation=disabled`") && normalizedReadme.includes("final GPU scheduler latent readback")],
             ["legacy GPU profiling switch no longer enables unsupported profiling API", !source.includes("ort.env.webgpu.profiling =") && source.includes("gpuProfilingRequested")],
-            ["README describes the JavaScript profiling limitation", normalizedReadme.includes("JavaScript wrapper does not expose the resulting trace") && normalizedReadme.includes("endProfiling() discards the trace filename")],
+            ["README describes the JavaScript profiling limitation", normalizedReadme.includes("JavaScript wrapper does not expose the resulting trace") && normalizedReadme.includes("endProfiling()` discards the trace filename")],
             ["README explains serialized GPU queue-drain diagnostics", normalizedReadme.includes("gpuSyncProfile=1") && normalizedReadme.includes("not to compare end-to-end throughput")],
             ["README documents storage-buffer cache experiment and default", normalizedReadme.includes("bufferCache=simple") && normalizedReadme.includes("default remains ORT") && normalizedReadme.includes("bucket")],
             ["README documents wgpuOnly as the default", normalizedReadme.includes("sessions default to ONNX Runtime's `wgpuOnly`")],
