@@ -1792,7 +1792,8 @@ async function buildUnetSessions(
     a: null, b: null, c: null, gpuInputs: null, gpuOutputs: { a: null, b: null },
     batchSize, imageCount, branchCount,
     graphCaptureRequested: enableGraphCapture,
-    graphCaptureActive: false
+    graphCaptureActive: false,
+    graphCaptureFallbackReason: null
   };
   const patchedComponent = async name => {
     if (!lora) return null;
@@ -1922,8 +1923,19 @@ async function ensureUnetSessions(
     (graphCaptureEnabled ? "|graph-capture" : "|standard-dispatch") +
     "|" + (preferredUnetLayout || "default-layout") +
     "|validation:" + (validationMode || "wgpuOnly");
+  if (residentUnetSessions && residentUnetKey === key &&
+      graphCaptureEnabled && residentUnetSessions.graphCaptureActive !== true) {
+    log("Discarding stale resident UNet cache entry: graph capture was requested, but these sessions use standard dispatch.");
+    await releaseSessions(residentUnetSessions);
+    residentUnetSessions = null;
+    residentUnetKey = null;
+  }
   if (residentUnetSessions && residentUnetKey === key) {
-    log("Reusing resident UNET_A, UNET_B, and UNET_C sessions.");
+    log("Reusing resident UNET_A, UNET_B, and UNET_C sessions · " +
+      (residentUnetSessions.graphCaptureActive ? "graph capture active." : "standard dispatch."));
+    if (residentUnetSessions.graphCaptureFallbackReason) {
+      log("Previous graph-capture attempt failed · " + residentUnetSessions.graphCaptureFallbackReason);
+    }
     residentUnetSessions.gpuInputs.updateConditioning(conditioning, conditioningIndex);
     if (!residentEngineLock) {
       releaseHeavyModelTest("full Illustrious image generation");
@@ -1951,8 +1963,9 @@ async function ensureUnetSessions(
     const runWarmup = async () => {
       const warmupStarted = performance.now();
       const warmupLatents = new Float32Array(4 * (height / 8) * (width / 8) * imageCount);
+      const captureRequested = Boolean(sessions?.graphCaptureRequested);
       log("Compiling UNet GPU pipelines with one disposable zero-latent warm-up" +
-        (graphCaptureEnabled ? " and recording the static WebGPU command graphs…" : "…"));
+        (captureRequested ? " and recording the static WebGPU command graphs…" : "…"));
       const warmup = await runUnetStep(
         sessions, conditioning, warmupLatents, 0, width, height, cfg, 0
       );
@@ -1979,8 +1992,9 @@ async function ensureUnetSessions(
         await releaseSessions(sessions);
         sessions = null;
       }
+      const graphCaptureFallbackReason = captureError?.message || String(captureError);
       log("Graph capture was unavailable for this UNet shape/operator combination; retrying with standard WebGPU dispatch. Reason: " +
-        (captureError?.message || String(captureError)));
+        graphCaptureFallbackReason);
       sessions = await buildUnetSessions(
         manifest, lora, conditioning, width, height, batchSize, imageCount, branchCount, conditioningIndex,
         patchCache, useGpuScheduler, false, preferredUnetLayout,
@@ -1988,6 +2002,7 @@ async function ensureUnetSessions(
       );
       await runWarmup();
       sessions.graphCaptureActive = false;
+      sessions.graphCaptureFallbackReason = graphCaptureFallbackReason;
     }
 
     if (lora) {
