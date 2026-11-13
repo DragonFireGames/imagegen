@@ -182,7 +182,7 @@
         console.warn("[Illustrious] Offline app-shell cache is unavailable:", error);
       }
     }
-    await import("./text-to-image.js");
+    await import("./text-to-image.js?build=__APP_BUILD_ID__");
   </script>
 </body>
 </html>
