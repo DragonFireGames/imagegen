@@ -73,7 +73,7 @@ self.addEventListener("fetch", event => {
   if (request.mode === "navigate" && inExperiment) {
     event.respondWith((async () => {
       try {
-        const response = await fetch(request);
+        const response = await fetch(new Request(request, { cache: "no-cache" }));
         if (response.ok) {
           const cache = await caches.open(APP_CACHE_NAME);
           await cache.put(request, response.clone());
