@@ -18,13 +18,22 @@ const preferredUnetValidationMode = ["disabled", "wgpuOnly", "basic", "full"].in
   ? requestedUnetValidationMode
   : "wgpuOnly";
 const LOCAL_ORT_BASE = new URL("../vendor/onnxruntime-web/", import.meta.url).href;
+const APP_BUILD_ID = new URL(import.meta.url).searchParams.get("build") || "";
+
+function localRuntimeUrl(path) {
+  const url = new URL(path, import.meta.url);
+  if (APP_BUILD_ID && APP_BUILD_ID !== "__APP_BUILD_ID__") {
+    url.searchParams.set("build", APP_BUILD_ID);
+  }
+  return url.href;
+}
 
 async function loadOrtRuntime() {
   const jspiSupported = typeof WebAssembly.Suspending === "function" &&
     typeof WebAssembly.promising === "function";
   if (runtimePreference !== "asyncify" && jspiSupported) {
     try {
-      const runtime = await import("../vendor/onnxruntime-web/ort.jspi.bundle.min.mjs");
+      const runtime = await import(localRuntimeUrl("../vendor/onnxruntime-web/ort.jspi.bundle.min.mjs"));
       runtime.env.wasm.wasmPaths = LOCAL_ORT_BASE;
       runtime.env.wasm.numThreads = 0;
       runtime.env.logLevel = "warning";
@@ -35,7 +44,7 @@ async function loadOrtRuntime() {
       };
     } catch (error) {
       const fallbackReason = error?.message || String(error);
-      const runtime = await import("../vendor/onnxruntime-web/ort.webgpu.min.mjs");
+      const runtime = await import(localRuntimeUrl("../vendor/onnxruntime-web/ort.webgpu.min.mjs"));
       runtime.env.wasm.wasmPaths = new URL("../vendor/onnxruntime-web/", import.meta.url).href;
       runtime.env.wasm.numThreads = 0;
       runtime.env.logLevel = "warning";
