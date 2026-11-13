@@ -151,6 +151,12 @@ jobs:
             ["basic and full validation remain explicit overrides", source.includes('["disabled", "wgpuOnly", "basic", "full"].includes(requestedUnetValidationMode)')],
             ["disabled validation is an explicit benchmark-only option", source.includes('preferredUnetValidationMode === "disabled"') && source.includes("skips ONNX-side validation; benchmark-only")],
             ["graph-capture dispatch reports successful activation, not just the request", source.includes("graphCaptureActive: false") && source.includes("sessions.graphCaptureActive = graphCaptureEnabled") && source.includes('(sessions.graphCaptureActive ? " · graph capture active" : " · standard dispatch")') && source.includes('sessions.graphCaptureActive ? "|graph-capture" : "|standard-dispatch"')],
+            ["dynamic UNet graph axes are parsed from ONNX dim_param fields", source.includes("function readOnnxGraphPorts(") && source.includes("function resolveUnetFreeDimensions(")],
+            ["graph capture pins exact dynamic axes through freeDimensionOverrides", source.includes("sessionOptions.freeDimensionOverrides = overrides") && source.includes("expectedUnetPortShapes(component, width, height, batchSize)")],
+            ["all three UNet partitions provide shape maps", (source.match(/\{ width, height, batchSize \}/g) || []).length === 3],
+            ["capture fallback reason is retained and shown on resident reuse", source.includes("graphCaptureFallbackReason: null") && source.includes("sessions.graphCaptureFallbackReason = graphCaptureFallbackReason") && source.includes("Previous graph-capture attempt failed")],
+            ["stale standard-dispatch sessions cannot masquerade as a capture cache hit", source.includes("graphCaptureEnabled && residentUnetSessions.graphCaptureActive !== true") && source.includes("Discarding stale resident UNet cache entry")],
+            ["warm-up logging reflects the sessions actually being initialized", source.includes("const captureRequested = Boolean(sessions?.graphCaptureRequested)")]
             ["final GPU queue completion/readback time is measured", source.includes("const readbackStarted = performance.now()") && source.includes('readbackSeconds.toFixed(2)') && source.includes("outstanding GPU queue completion and buffer mapping")],
             ["README documents disabled validation and final readback timing", normalizedReadme.includes("`?validation=disabled`") && normalizedReadme.includes("final GPU scheduler latent readback")],
             ["legacy GPU profiling switch no longer enables unsupported profiling API", !source.includes("ort.env.webgpu.profiling =") && source.includes("gpuProfilingRequested")],
@@ -160,4 +166,82 @@ jobs:
           const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);
           if (failed.length) throw new Error("Optimization-setting checks failed: " + failed.join(", "));
           console.log("Optimization-setting checks passed: " + checks.map(([name]) => name).join("; "));
+          NODE
+
+      - name: Test dynamic UNet graph-capture dimension overrides
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { readFileSync } from "node:fs";
+          import { runInNewContext } from "node:vm";
+
+          const source = readFileSync("illustrious-experiment/text-to-image.js", "utf8");
+          const start = source.indexOf("function readOnnxVarint(");
+          const end = source.indexOf("\nasync function loadSession(", start);
+          if (start < 0 || end < 0) throw new Error("Could not isolate ONNX dimension helpers.");
+          const helpers = source.slice(start, end) +
+            "\nglobalThis.graphCaptureTestApi = { expectedUnetPortShapes, resolveUnetFreeDimensions };";
+          const sandbox = { TextDecoder };
+          runInNewContext(helpers, sandbox);
+
+          const encoder = new TextEncoder();
+          const concat = (...items) => {
+            const size = items.reduce((total, item) => total + item.length, 0);
+            const result = new Uint8Array(size);
+            let offset = 0;
+            for (const item of items) {
+              result.set(item, offset);
+              offset += item.length;
+            }
+            return result;
+          };
+          const varint = value => {
+            let number = BigInt(value);
+            const bytes = [];
+            while (number > 0x7fn) {
+              bytes.push(Number(number & 0x7fn) | 0x80);
+              number >>= 7n;
+            }
+            bytes.push(Number(number));
+            return new Uint8Array(bytes);
+          };
+          const field = (number, wire, payload) => wire === 2
+            ? concat(varint(number * 8 + 2), varint(payload.length), payload)
+            : concat(varint(number * 8), varint(payload));
+          const symbolicDimension = name => field(1, 2, field(2, 2, encoder.encode(name)));
+          const numericDimension = value => field(1, 2, field(1, 0, varint(value)));
+
+          function valueInfo(name, shape) {
+            const dimensions = shape.map((value, axis) => {
+              if (axis === 0) return symbolicDimension("batch_dim");
+              if (shape.length === 4 && axis === 2) return symbolicDimension("height_" + value);
+              if (shape.length === 4 && axis === 3) return symbolicDimension("width_" + value);
+              return numericDimension(value);
+            });
+            const shapeProto = concat(...dimensions.map(dimension => field(1, 2, dimension)));
+            const tensorType = concat(field(1, 0, 1), field(2, 2, shapeProto));
+            const typeProto = field(1, 2, tensorType);
+            return concat(field(1, 2, encoder.encode(name)), field(2, 2, typeProto));
+          }
+
+          for (const component of ["unet_a", "unet_b", "unet_c"]) {
+            const expected = sandbox.graphCaptureTestApi.expectedUnetPortShapes(component, 768, 1024, 2);
+            const graph = concat(
+              ...Object.entries(expected.inputs).map(([name, shape]) => field(11, 2, valueInfo(name, shape))),
+              ...Object.entries(expected.outputs).map(([name, shape]) => field(12, 2, valueInfo(name, shape)))
+            );
+            const model = field(7, 2, graph);
+            const buffer = model.buffer.slice(model.byteOffset, model.byteOffset + model.byteLength);
+            const overrides = sandbox.graphCaptureTestApi.resolveUnetFreeDimensions(
+              buffer, component, 768, 1024, 2
+            );
+            assert.equal(overrides.batch_dim, 2, component + " batch override");
+            assert.equal(overrides.height_128, 128, component + " full latent-height override");
+            assert.equal(overrides.height_64, 64, component + " half latent-height override");
+            assert.equal(overrides.height_32, 32, component + " quarter latent-height override");
+            assert.equal(overrides.width_96, 96, component + " full latent-width override");
+            assert.equal(overrides.width_48, 48, component + " half latent-width override");
+            assert.equal(overrides.width_24, 24, component + " quarter latent-width override");
+          }
+          console.log("ONNX dim_param parsing and fixed-shape overrides passed for UNET_A, UNET_B, and UNET_C.");
           NODE
