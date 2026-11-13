@@ -57,13 +57,12 @@ is available. A resident inference engine can be prepared once and reused for
 multiple generations. The VAE decoder is loaded for image decoding and released
 afterward to reduce competition with the resident UNet sessions.
 
-The bundled ONNX Runtime Web 1.31.1 native WebGPU execution provider does
-not currently expose per-operator GPU profile traces to JavaScript. The legacy
-`?gpuProfile=1` switch is retained as a diagnostic request, but it only logs
-that limitation; it does not enable profiling or produce `[profiling]` entries.
-Use the generator's A/B/C wall-clock timings to compare partition-level runs.
-Those timings include the provider's dispatch and synchronization costs, not
-just the GPU kernels.
+The bundled ONNX Runtime Web 1.31.1 native WebGPU execution provider
+contains GPU timestamp-query profiling internally, but its WebAssembly
+JavaScript wrapper does not expose the resulting trace: `startProfiling()`
+is unimplemented and `endProfiling()` discards the trace filename. The legacy
+`?gpuProfile=1` switch therefore only logs this limitation; it does not
+produce per-operator `[profiling]` entries.
 
 The three repeated UNet sessions default to ONNX Runtime's `wgpuOnly`
 validation mode. This retains WebGPU/Dawn validation while skipping the
@@ -83,15 +82,29 @@ per-run CPU command-submission overhead; it does not reduce the UNet's GPU
 computation. It is opt-in because not every model/operator combination is
 capture-compatible.
 
-The A/B/C partition timings measure the duration of each ONNX
-`session.run()` call. With GPU-resident outputs, the native WebGPU provider
-can submit command buffers without waiting for the device queue to finish all
-the submitted work. The final GPU scheduler latent readback maps a CPU-readable
-buffer and therefore waits for the preceding queue work as well. The generator
-logs that final wait separately. For benchmark comparisons, consider both the
-sum of A/B/C timings and the denoising wall time through completion of the
-final readback; the early per-step timings alone can make queued GPU work look
-instantaneous.
+The A/B/C partition timings normally measure the duration of each ONNX
+`session.run()` promise. With GPU-resident outputs, the provider can return
+while submitted GPU work remains queued, so these values are not reliable
+per-partition GPU execution times. The final GPU scheduler latent readback
+maps a CPU-readable buffer and waits for prior queue work as well; the copied
+latent is small, so a long readback interval is evidence of outstanding work,
+not a large transfer.
+
+Use `?gpuSyncProfile=1` for a diagnostic pass. It waits for the WebGPU queue
+before UNET_A and after each A/B/C `session.run()`, then reports the queue-drain
+time separately from the JavaScript call time. This helps identify which
+partition is leaving GPU work queued. These forced waits serialize the split
+UNet and perturb its normal scheduling, so use this mode to locate work, not
+to compare end-to-end throughput. It does not change the model math or
+generation settings.
+
+Use `?bufferCache=simple` to test ONNX Runtime's exact-size storage-buffer
+free-list instead of its default `bucket` cache. The provider also accepts
+`disabled`, `lazyRelease`, and `bucket` through this setting. The setting is
+applied to the three UNet sessions and participates in their resident-session
+cache key. The default remains ORT's `bucket` mode; `simple` can reduce
+allocation churn and memory for static shapes, but should be benchmarked on
+the target GPU and is not assumed to be faster.
 
 Use `?layout=NHWC` to request NHWC as the preferred layout for the three UNet
 sessions. The default remains NCHW. Layout preference can change which kernels
