@@ -236,12 +236,11 @@ jobs:
               buffer, component, 768, 1024, 2
             );
             assert.equal(overrides.batch_dim, 2, component + " batch override");
-            assert.equal(overrides.height_128, 128, component + " full latent-height override");
-            assert.equal(overrides.height_64, 64, component + " half latent-height override");
-            assert.equal(overrides.height_32, 32, component + " quarter latent-height override");
-            assert.equal(overrides.width_96, 96, component + " full latent-width override");
-            assert.equal(overrides.width_48, 48, component + " half latent-width override");
-            assert.equal(overrides.width_24, 24, component + " quarter latent-width override");
+            const shapes = [...Object.values(expected.inputs), ...Object.values(expected.outputs)];
+            const heights = new Set(shapes.filter(shape => shape.length === 4).map(shape => shape[2]));
+            const widths = new Set(shapes.filter(shape => shape.length === 4).map(shape => shape[3]));
+            for (const value of heights) assert.equal(overrides["height_" + value], value, component + " height override " + value);
+            for (const value of widths) assert.equal(overrides["width_" + value], value, component + " width override " + value);
           }
           console.log("ONNX dim_param parsing and fixed-shape overrides passed for UNET_A, UNET_B, and UNET_C.");
           NODE
