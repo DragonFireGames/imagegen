@@ -182,7 +182,15 @@
         console.warn("[Illustrious] Offline app-shell cache is unavailable:", error);
       }
     }
-    await import("./text-to-image.js?build=__APP_BUILD_ID__");
+    const buildInfoResponse = await fetch("./build-info.json", { cache: "no-store" });
+    if (!buildInfoResponse.ok) {
+      throw new Error("Could not retrieve the deployed build ID: HTTP " + buildInfoResponse.status);
+    }
+    const buildInfo = await buildInfoResponse.json();
+    if (!/^[0-9a-f]{40}$/.test(buildInfo.commit || "")) {
+      throw new Error("The deployed build-info.json does not contain a valid commit SHA.");
+    }
+    await import("./text-to-image.js?build=" + buildInfo.commit);
   </script>
 </body>
 </html>
