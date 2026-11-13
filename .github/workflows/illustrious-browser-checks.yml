@@ -156,7 +156,7 @@ jobs:
             ["all three UNet partitions provide shape maps", (source.match(/\{ width, height, batchSize \}/g) || []).length === 3],
             ["capture fallback reason is retained and shown on resident reuse", source.includes("graphCaptureFallbackReason: null") && source.includes("sessions.graphCaptureFallbackReason = graphCaptureFallbackReason") && source.includes("Previous graph-capture attempt failed")],
             ["stale standard-dispatch sessions cannot masquerade as a capture cache hit", source.includes("graphCaptureEnabled && residentUnetSessions.graphCaptureActive !== true") && source.includes("Discarding stale resident UNet cache entry")],
-            ["warm-up logging reflects the sessions actually being initialized", source.includes("const captureRequested = Boolean(sessions?.graphCaptureRequested)")]
+            ["warm-up logging reflects the sessions actually being initialized", source.includes("const captureRequested = Boolean(sessions?.graphCaptureRequested)")],
             ["final GPU queue completion/readback time is measured", source.includes("const readbackStarted = performance.now()") && source.includes('readbackSeconds.toFixed(2)') && source.includes("outstanding GPU queue completion and buffer mapping")],
             ["README documents disabled validation and final readback timing", normalizedReadme.includes("`?validation=disabled`") && normalizedReadme.includes("final GPU scheduler latent readback")],
             ["legacy GPU profiling switch no longer enables unsupported profiling API", !source.includes("ort.env.webgpu.profiling =") && source.includes("gpuProfilingRequested")],
