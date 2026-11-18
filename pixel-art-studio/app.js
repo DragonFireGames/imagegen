@@ -69,8 +69,8 @@ async function boot() {
         setStatus("WebGPU unavailable · switching to CPU…"); backend = "wasm"; model = await loadLocalModel("wasm");
         setStatus("Local model ready · CPU"); $("phase").textContent = "Ready · CPU inference (slower)";
         $("go").disabled = false; $("go").textContent = "✦ Generate sprites"; $("loadModel").textContent = "Model loaded ✓"; return;
-      } catch (fallbackError) { showError(fallbackError); }
-    } else showError(error);
+      } catch (fallbackError) { model = null; showError(fallbackError); }
+    } else { model = null; showError(error); }
     setStatus("Could not load the local model"); $("phase").textContent = "See error details"; $("go").disabled = true;
   } finally {
     loadingModel = false;
