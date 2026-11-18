@@ -338,9 +338,12 @@ export class SpriteModel {
   /** One call of decoder_static.onnx: token x (B*d) at position pos. (No preallocated outputs: for CPU tensors
    * onnxruntime-web 1.31 hands back the same objects but leaves their data untouched, so the cache stayed zero and
    * the model saw only the current pixel: horizontal stripes on phones.) */
-  async stepFixed(x, B, pos, cache) {
-    const feeds = { x: new this.ort.Tensor("float32", x, [B, 1, this.d]),
-                    pos: new this.ort.Tensor("int64", BigInt64Array.of(BigInt(pos)), [1]) };
+  async stepFixed(x, B, pos, cache, reusable = null) {
+    const feeds = reusable ? reusable.feeds : {
+      x: new this.ort.Tensor("float32", x, [B, 1, this.d]),
+      pos: new this.ort.Tensor("int64", BigInt64Array.of(BigInt(pos)), [1]),
+    };
+    if (reusable) reusable.position[0] = BigInt(pos);
     for (let i = 0; i < this.L; i++) { feeds[`past_k_${i}`] = cache[2 * i]; feeds[`past_v_${i}`] = cache[2 * i + 1]; }
     const out = await this.session.run(feeds);
     const next = [];
@@ -367,23 +370,34 @@ export class SpriteModel {
       this.writePixel(x0, (j * T0 + T0 - 1) * d, this.BOS, 0, 0, edge[0]);
     }
     let logits, cache, pos = 0, lastYield = performance.now();
-    const advance = async (xt) => {  // one more token -> logits of the next pixel
+    const x = new Float32Array(B * d);
+    let fixedStepState = null;
+    if (this.fixedCache) {
+      const position = new BigInt64Array(1);
+      fixedStepState = {
+        position,
+        feeds: {
+          x: new this.ort.Tensor("float32", x, [B, 1, d]),
+          pos: new this.ort.Tensor("int64", position, [1]),
+        },
+      };
+    }
+    const advance = async () => {  // one more token -> logits of the next pixel
       const prev = cache;
-      const r = this.fixedCache ? await this.stepFixed(xt, B, pos, cache) : await this.step(xt, B, 1, cache);
+      const r = this.fixedCache ? await this.stepFixed(x, B, pos, cache, fixedStepState) : await this.step(x, B, 1, cache);
       pos++;
       logits = r.logits; cache = r.cache;
       if (prev !== cache) SpriteModel.release(prev);
     };
-    if (this.fixedCache) {  // fixed-size cache: the prefix goes in one token at a time, like the pixels
+    if (this.fixedCache) {  // fixed-size cache: reuse input tensors and feed objects for every token
       cache = await this.cacheSet(B, 2 + S + n);
-      const xt = new Float32Array(B * d);
       for (let i = 0; i < T0; i++) {
-        for (let j = 0; j < B; j++) xt.set(x0.subarray((j * T0 + i) * d, (j * T0 + i + 1) * d), j * d);
-        await advance(xt);
+        for (let j = 0; j < B; j++) x.set(x0.subarray((j * T0 + i) * d, (j * T0 + i + 1) * d), j * d);
+        await advance();
       }
     } else ({ logits, cache } = await this.step(x0, B, T0, this.emptyCache(B)));
     const out = Array.from({ length: b }, () => new Int16Array(n).fill(-1));
-    const x = new Float32Array(B * d), tok = new Int32Array(b);
+    const tok = new Int32Array(b);
     const ctx = { K, temperature, topP, col: new Float64Array(K), order: topP < 1 ? new Int32Array(K) : null };
     try {
       for (let t = 0; t < n; t++) {
@@ -403,7 +417,7 @@ export class SpriteModel {
         if (t + 1 === n) break;
         const r = ((t + 1) / S) | 0, c = (t + 1) % S;
         for (let j = 0; j < B; j++) this.writePixel(x, j * d, tok[owner[j]], r, c, edge[t + 1]);
-        await advance(x);
+        await advance();
         if (performance.now() - lastYield > 40) { await yieldToBrowser(); lastYield = performance.now(); }
       }
     } finally {
