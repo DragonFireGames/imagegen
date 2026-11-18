@@ -6,6 +6,7 @@ const ENCODER_BASE = "https://huggingface.co/" + ENCODER.repo + "/resolve/" + EN
 const ORT_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.webgpu.min.mjs";
 const TOKENIZERS_URL = "https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.min.mjs";
 const CACHE_NAME = "pixel-foundry-model-v1";
+const RUNTIME_CACHE = "pixel-foundry-runtime-v1";
 const $ = (id) => document.getElementById(id);
 let ort, model, encoder, backend = "wasm", controller = null, loading = false, loadingModel = false;
 function setStatus(s) { $("status").textContent = s; }
@@ -20,6 +21,17 @@ function showError(error) {
   console.error(error);
 }
 function clearError() { $("error").textContent = ""; $("error").classList.add("hidden"); }
+async function prepareOfflineSupport() {
+  if (!("serviceWorker" in navigator)) throw new Error("Offline model caching requires a browser with service-worker support. Open this page over HTTPS in a supported browser.");
+  await navigator.serviceWorker.register("./sw.js", { scope: "./", updateViaCache: "none" });
+  await navigator.serviceWorker.ready;
+  if (!navigator.serviceWorker.controller) {
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error("Offline cache is not controlling this page yet. Reload the page and press Load model again.")), 10000);
+      navigator.serviceWorker.addEventListener("controllerchange", () => { clearTimeout(timeout); resolve(); }, { once: true });
+    });
+  }
+}
 async function fetchBytes(url, onProgress) {
   let cache = null;
   try { cache = await caches.open(CACHE_NAME); const hit = await cache.match(url); if (hit) return new Uint8Array(await hit.arrayBuffer()); }
@@ -33,7 +45,9 @@ async function fetchBytes(url, onProgress) {
     for (;;) { const part = await reader.read(); if (part.done) break; if (received + part.value.length > total) throw new Error("Download larger than announced: " + url); bytes.set(part.value, received); received += part.value.length; onProgress(received, total); }
     if (received !== total) throw new Error("Download was incomplete: " + url);
   } else { bytes = new Uint8Array(await response.arrayBuffer()); if (onProgress) onProgress(bytes.length, total || bytes.length); }
-  if (cache) try { await cache.put(url, new Response(bytes)); } catch (e) { console.warn("Could not cache model file:", e); }
+  if (!cache) throw new Error("Browser storage is unavailable; model files cannot be saved for offline use.");
+  try { await cache.put(url, new Response(bytes)); }
+  catch (e) { throw new Error("Downloaded a model file but could not save it in browser storage. Check available site storage and try again. " + e.message); }
   return bytes;
 }
 const downloadProgress = (label) => (got, total) => setProgress(total ? got / total : 0, label + ": " + (got / 1e6).toFixed(0) + " / " + (total ? (total / 1e6).toFixed(0) : "?") + " MB");
@@ -47,8 +61,10 @@ async function loadLocalModel(ep) {
 async function boot() {
   if (model || loadingModel) return;
   loadingModel = true;
-  clearError(); $("loadModel").disabled = true; $("loadModel").textContent = "Loading model…";
+  clearError(); $("loadModel").disabled = true; $("loadModel").textContent = "Preparing offline cache…";
   try {
+    setStatus("Preparing offline cache…"); $("phase").textContent = "Setting up browser storage";
+    await prepareOfflineSupport();
     setStatus("Loading browser inference runtime…"); $("phase").textContent = "Loading ONNX Runtime Web";
     ort = await import(ORT_URL);
     ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
@@ -59,16 +75,19 @@ async function boot() {
     const x = new Float32Array(model.d); model.writePixel(x, 0, model.BOS, 0, 0, 3);
     const cache = await model.cacheSet(1, 4); const a = await model.stepFixed(x, 1, 0, cache);
     model.constructor.release(cache); model.constructor.release(a.cache);
-    setStatus("Local model ready · " + (backend === "webgpu" ? "WebGPU" : "CPU"));
+    setStatus("Loading text encoder for offline use…"); $("phase").textContent = "Caching text encoder and tokenizer";
+    await loadEncoder();
+    setStatus("Local model ready · " + (backend === "webgpu" ? "WebGPU" : "CPU") + " · offline");
     $("phase").textContent = backend === "webgpu" ? "Ready · GPU inference" : "Ready · CPU inference (slower)";
-    setProgress(1); $("go").disabled = false; $("go").textContent = "✦ Generate sprites"; $("loadModel").textContent = "Model loaded ✓";
+    setProgress(1); $("go").disabled = false; $("go").textContent = "✦ Generate sprites"; $("loadModel").textContent = "Model loaded · offline ✓";
   } catch (error) {
     if (backend === "webgpu") {
       try {
         console.warn("WebGPU model load failed; falling back to CPU.", error);
         setStatus("WebGPU unavailable · switching to CPU…"); backend = "wasm"; model = await loadLocalModel("wasm");
-        setStatus("Local model ready · CPU"); $("phase").textContent = "Ready · CPU inference (slower)";
-        $("go").disabled = false; $("go").textContent = "✦ Generate sprites"; $("loadModel").textContent = "Model loaded ✓"; return;
+        setStatus("Loading text encoder for offline use…"); $("phase").textContent = "Caching text encoder and tokenizer"; await loadEncoder();
+        setStatus("Local model ready · CPU · offline"); $("phase").textContent = "Ready · CPU inference (slower)";
+        $("go").disabled = false; $("go").textContent = "✦ Generate sprites"; $("loadModel").textContent = "Model loaded · offline ✓"; return;
       } catch (fallbackError) { model = null; showError(fallbackError); }
     } else { model = null; showError(error); }
     setStatus("Could not load the local model"); $("phase").textContent = "See error details"; $("go").disabled = true;
@@ -132,4 +151,4 @@ $("go").addEventListener("click", () => { if (loading && controller) { controlle
 $("prompt").addEventListener("keydown", (event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") generate(); });
 $("clear").addEventListener("click", () => { $("results").replaceChildren($("empty")); $("empty").classList.remove("hidden"); $("empty").textContent = "No sprites yet. Write a prompt and generate a batch."; $("caption").textContent = "Sprites will appear here."; });
 $("loadModel").addEventListener("click", boot);
-setStatus("Ready · model not loaded"); $("phase").textContent = "Load the model when you are ready";
+setStatus("Ready · model not loaded"); $("phase").textContent = "Load and cache everything for offline inference";
