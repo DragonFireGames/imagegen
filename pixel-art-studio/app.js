@@ -22,10 +22,13 @@ function showError(error) {
 function clearError() { $("error").textContent = ""; $("error").classList.add("hidden"); }
 function inferenceChunk() {
   const memory = Number(navigator.deviceMemory);
-  return Number.isFinite(memory) && memory > 0 && memory <= 4 ? 2 : 4;
+  const lowMemory = Number.isFinite(memory) && memory > 0 ? memory <= 4 : (navigator.hardwareConcurrency || 4) <= 4;
+  return lowMemory ? 2 : 4;
 }
 async function warmupDecoder() {
-  const size = 32, batch = inferenceChunk() * 2, cacheLength = 2 + size + size * size;
+  const size = Number($("size").value) || 32;
+  const batch = Math.min(inferenceChunk(), Number($("count").value) || 4) * 2;
+  const cacheLength = 2 + size + size * size;
   const x = new Float32Array(batch * model.d);
   for (let row = 0; row < batch; row++) model.writePixel(x, row * model.d, model.BOS, 0, 0, 3);
   const cache = await model.cacheSet(batch, cacheLength);
@@ -160,7 +163,8 @@ async function generate() {
       try {
         console.warn("GPU inference failed; retrying on CPU.", error); setStatus("GPU inference failed · switching to CPU…");
         try { await model.session.release(); } catch (_) {}
-        backend = "wasm"; model = await loadLocalModel("wasm"); $("results").replaceChildren(); setStatus("Retrying generation on CPU…");
+        backend = "wasm"; model = await loadLocalModel("wasm"); $("results").replaceChildren();
+        setStatus("Warming up CPU inference…"); await warmupDecoder(); setStatus("Retrying generation on CPU…");
         await model.generate(settings); setStatus("Finished · generated locally on CPU"); $("phase").textContent = "Complete · CPU"; setProgress(1);
       } catch (fallbackError) { showError(fallbackError); setStatus("Generation failed"); }
     } else { showError(error); setStatus("Generation failed"); $("phase").textContent = "See error details"; }
