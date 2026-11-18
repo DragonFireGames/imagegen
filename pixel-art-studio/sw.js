@@ -29,7 +29,7 @@ self.addEventListener("fetch", (event) => {
       try {
         await cache.put(request, response.clone());
       } catch (error) {
-        console.warn("Could not cache runtime asset for offline use:", request.url, error);
+        throw new Error("Could not cache runtime asset for offline use: " + request.url + " · " + error.message);
       }
     }
     return response;
