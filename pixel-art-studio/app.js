@@ -20,6 +20,22 @@ function showError(error) {
   console.error(error);
 }
 function clearError() { $("error").textContent = ""; $("error").classList.add("hidden"); }
+function inferenceChunk() {
+  const memory = Number(navigator.deviceMemory);
+  return Number.isFinite(memory) && memory > 0 && memory <= 4 ? 2 : 4;
+}
+async function warmupDecoder() {
+  const size = 32, batch = inferenceChunk() * 2, cacheLength = 2 + size + size * size;
+  const x = new Float32Array(batch * model.d);
+  for (let row = 0; row < batch; row++) model.writePixel(x, row * model.d, model.BOS, 0, 0, 3);
+  const cache = await model.cacheSet(batch, cacheLength);
+  let output = null;
+  try { output = await model.stepFixed(x, batch, 0, cache); }
+  finally {
+    model.constructor.release(cache);
+    if (output) model.constructor.release(output.cache);
+  }
+}
 async function prepareOfflineSupport() {
   if (!("serviceWorker" in navigator)) throw new Error("Offline model caching requires a browser with service-worker support. Open this page over HTTPS in a supported browser.");
   await navigator.serviceWorker.register("./sw.js", { scope: "./", updateViaCache: "none" });
@@ -57,6 +73,7 @@ async function chooseBackend() {
   try { return await navigator.gpu.requestAdapter() ? "webgpu" : "wasm"; } catch (_) { return "wasm"; }
 }
 async function loadLocalModel(ep) {
+  ort.env.wasm.proxy = ep === "wasm";
   return loadModel({ ort, files: modelFiles(MODEL_BASE), ep, fetchBytes, fixedCache: true, onProgress: downloadProgress("Downloading sprite model") });
 }
 async function boot() {
@@ -68,15 +85,13 @@ async function boot() {
     await prepareOfflineSupport();
     setStatus("Loading browser inference runtime…"); $("phase").textContent = "Loading ONNX Runtime Web";
     ort = await import(ORT_URL);
-    ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+    ort.env.wasm.numThreads = self.crossOriginIsolated ? 0 : 1;
     backend = await chooseBackend();
     setStatus("Downloading local sprite model…"); model = await loadLocalModel(backend);
     setStatus(backend === "webgpu" ? "Warming up WebGPU…" : "Warming up CPU inference…");
-    $("phase").textContent = backend === "webgpu" ? "Compiling GPU shaders" : "Preparing WebAssembly";
-    const x = new Float32Array(model.d); model.writePixel(x, 0, model.BOS, 0, 0, 3);
-    const cache = await model.cacheSet(1, 4); const a = await model.stepFixed(x, 1, 0, cache);
-    model.constructor.release(cache); model.constructor.release(a.cache);
-    setStatus("Loading text encoder for offline use…"); $("phase").textContent = "Caching text encoder and tokenizer";
+    $("phase").textContent = "Preparing the normal batch size and 32 × 32 cache";
+    await warmupDecoder();
+    setStatus("Loading text encoder for offline use…"); $("phase").textContent = "Caching and warming the text encoder";
     await loadEncoder();
     setStatus("Local model ready · " + (backend === "webgpu" ? "WebGPU" : "CPU") + " · offline");
     $("phase").textContent = backend === "webgpu" ? "Ready · GPU inference" : "Ready · CPU inference (slower)";
@@ -85,8 +100,10 @@ async function boot() {
     if (backend === "webgpu") {
       try {
         console.warn("WebGPU model load failed; falling back to CPU.", error);
-        setStatus("WebGPU unavailable · switching to CPU…"); backend = "wasm"; model = await loadLocalModel("wasm");
-        setStatus("Loading text encoder for offline use…"); $("phase").textContent = "Caching text encoder and tokenizer"; await loadEncoder();
+        try { if (model && model.session) await model.session.release(); } catch (_) {}
+        model = null; setStatus("WebGPU unavailable · switching to CPU…"); backend = "wasm"; model = await loadLocalModel("wasm");
+        setStatus("Warming up CPU inference…"); $("phase").textContent = "Preparing the normal batch size and 32 × 32 cache"; await warmupDecoder();
+        setStatus("Loading text encoder for offline use…"); $("phase").textContent = "Caching and warming the text encoder"; await loadEncoder();
         setStatus("Local model ready · CPU · offline"); $("phase").textContent = "Ready · CPU inference (slower)";
         $("go").disabled = false; $("go").textContent = "✦ Generate sprites"; $("loadModel").textContent = "Model loaded · offline ✓"; return;
       } catch (fallbackError) { model = null; showError(fallbackError); }
@@ -100,9 +117,11 @@ async function boot() {
 }
 async function loadEncoder() {
   if (encoder) return encoder;
+  ort.env.wasm.proxy = true;
   setStatus("Downloading text encoder to this browser…"); $("phase").textContent = "First-time text encoder download";
   const { Tokenizer } = await import(TOKENIZERS_URL);
   encoder = await loadTextEncoder({ ort, Tokenizer, files: encoderFiles(ENCODER_BASE), fetchBytes, onProgress: downloadProgress("Downloading text encoder") });
+  await encoder.encode("pixel art sprite");
   return encoder;
 }
 function addSprite(indices, size, index) {
@@ -123,8 +142,11 @@ async function generate() {
   let seed = Number($("seed").value); if (!Number.isFinite(seed)) seed = 0;
   const settings = {
     n: count, size, seed, gShape: Number($("shape").value), gColour: Number($("colour").value),
-    temperature: 1, topP: 1, chunk: 4, signal: controller.signal,
-    onPixel: (ids, t, images, view) => setProgress((t + 1) / (view.S * view.S), "Drawing pixels · " + (t + 1) + " / " + (view.S * view.S)),
+    temperature: 1, topP: 1, chunk: inferenceChunk(), signal: controller.signal,
+    onPixel: (ids, t, images, view) => {
+      if ((t + 1) % view.S === 0 || t + 1 === view.S * view.S)
+        setProgress((t + 1) / (view.S * view.S), "Drawing row · " + Math.ceil((t + 1) / view.S) + " / " + view.S);
+    },
     onSprite: (id, image) => addSprite(image, size, id + 1)
   };
   try {
