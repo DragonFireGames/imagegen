@@ -77,7 +77,15 @@ async function fetchBytes(url, onProgress) {
 const downloadProgress = (label) => (got, total) => setProgress(total ? got / total : 0, label + ": " + (got / 1e6).toFixed(0) + " / " + (total ? (total / 1e6).toFixed(0) : "?") + " MB");
 async function chooseBackend() {
   if (!navigator.gpu) return "wasm";
-  try { return await navigator.gpu.requestAdapter({ powerPreference: "high-performance" }) ? "webgpu" : "wasm"; } catch (_) { return "wasm"; }
+  try {
+    if (await navigator.gpu.requestAdapter({ powerPreference: "high-performance" })) {
+      ort.env.webgpu.powerPreference = "high-performance"; return "webgpu";
+    }
+    if (await navigator.gpu.requestAdapter({ powerPreference: "low-power" })) {
+      ort.env.webgpu.powerPreference = "low-power"; return "webgpu";
+    }
+  } catch (_) {}
+  return "wasm";
 }
 async function loadLocalModel(ep) {
   ort.env.wasm.proxy = ep === "wasm";
@@ -93,7 +101,6 @@ async function boot() {
     setStatus("Loading browser inference runtime…"); $("phase").textContent = "Loading ONNX Runtime Web";
     ort = await import(ORT_URL);
     ort.env.wasm.numThreads = self.crossOriginIsolated ? 0 : 1;
-    ort.env.webgpu.powerPreference = "high-performance";
     backend = await chooseBackend();
     setStatus("Downloading local sprite model…"); model = await loadLocalModel(backend);
     setStatus(backend === "webgpu" ? "Warming up WebGPU…" : "Warming up CPU inference…");
