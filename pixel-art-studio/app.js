@@ -26,9 +26,9 @@ function inferenceChunk() {
   return lowMemory ? 2 : 4;
 }
 async function warmupDecoder() {
-  const size = Number($("size").value) || 32;
-  const batch = Math.min(inferenceChunk(), Number($("count").value) || 4) * 2;
-  const cacheLength = 2 + size + size * size;
+  const size = backend === "webgpu" ? Number($("size").value) || 32 : 16;
+  const batch = backend === "webgpu" ? Math.min(inferenceChunk(), Number($("count").value) || 4) * 2 : 1;
+  const cacheLength = backend === "webgpu" ? 2 + size + size * size : 4;
   const x = new Float32Array(batch * model.d);
   for (let row = 0; row < batch; row++) model.writePixel(x, row * model.d, model.BOS, 0, 0, 3);
   const cache = await model.cacheSet(batch, cacheLength);
