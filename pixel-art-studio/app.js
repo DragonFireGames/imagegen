@@ -90,7 +90,7 @@ async function generate() {
   if (loading || !model) return;
   const prompt = $("prompt").value.trim(); if (!prompt) { $("prompt").focus(); return; }
   loading = true; clearError(); setProgress(0, "Preparing prompt…"); $("go").disabled = false; $("go").textContent = "Stop generation";
-  $("results").replaceChildren(); $("results").appendChild($("empty")); $("caption").textContent = prompt; $("empty").classList.remove("hidden");
+  const empty = $("empty"); $("results").replaceChildren(empty); $("caption").textContent = prompt; empty.classList.remove("hidden");
   $("empty").textContent = "Preparing prompt and generating sprites locally…"; controller = new AbortController();
   const size = Number($("size").value), count = Number($("count").value);
   let seed = Number($("seed").value); if (!Number.isFinite(seed)) seed = 0;
