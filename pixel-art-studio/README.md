@@ -1,20 +1,28 @@
-# Pixel Art Studio
+# Pixel Foundry — local AI pixel-art generator
 
-Local-first pixel art editor experiment for DragonFireGames Imagegen.
+The previous pixel editor has been removed. This is an AI-only sprite generator: no drawing canvas, brush tools, layers, or Illustrious model.
 
-Open: https://dragonfiregames.github.io/imagegen/pixel-art-studio/
+## Model
 
-## Current features
-- Pixel-perfect canvas: pencil, eraser, bucket fill, eyedropper, line, rectangle, ellipse.
-- Canvas resize, zoom, brush size, color picker, custom palette, undo/redo.
-- Import PNG, WebP, JPEG, or GIF (first frame); export transparent PNG.
-- Local pixelation, palette quantization, Floyd–Steinberg dithering, outline, and Game Boy / NES / PICO-8 / 1-bit presets.
-- AI handoff to the existing local Illustrious browser generator. The prompt is passed into the generator URL. Generate at 512px, download the PNG, then import and reduce to the requested sprite size.
-- AI edit handoff to the existing local brush-infill experiment. Import the source image there, edit, download, and bring it back here.
+[Sprite32 1.0 fast](https://huggingface.co/danemarguglio/sprite32) is a text-to-sprite diffusion model trained from scratch on 660,585 images. It generates native 32×32 RGBA sprites with transparency using a 143M-parameter pixel-space UNet. The fast release uses a fine-tuned Qwen3-0.6B text encoder and a distilled 12-step sampler.
 
-## Important AI distinction
-Sprite Fusion advertises a purpose-built pixel-art model for exact-size generation, prompt-based sprite editing, style matching, 8-direction sets, and animation. This project does **not** yet have an equivalent dedicated local pixel-art model. The current AI workflow reuses the local SDXL/Illustrious model already in this repository, then uses explicit pixel-art conversion and manual editing. Pixel processors are deterministic local image operations, not AI.
+- About 2.3 GB of model files including the bundled text encoder.
+- Apache-2.0.
+- Downloaded and run locally; no API key or hosted inference.
+- Fixed 32×32 output, intended for icons, objects, characters and game sprites.
 
-A dedicated local pixel-art model and true image-conditioned prompt editing are the next research/integration tasks. The app does not claim that the existing SDXL generator is a specialized pixel-art model.
+## Run
 
-No generation server, API key, account, or app-side upload is used. Model weights remain managed by the sibling experiments and are downloaded/cached separately.
+macOS: double-click start.command, or run ./start.sh in Terminal.
+Linux: run ./start.sh.
+Requirements: Python 3.11+ and Git. First launch clones the upstream inference code, installs dependencies, and downloads weights. Then open http://127.0.0.1:8077.
+
+The model author's fast checkpoint has been tested on Linux CPU/GPU. Apple Silicon device selection is supported in the upstream code, but the fast checkpoint's MPS path has not been independently verified. The full checkpoint is the author's documented Apple-Silicon-tested alternative, but requires about 8.7 GB.
+
+## Honest capability boundary
+
+Current: text-to-sprite generation, batches, random/fixed seeds, prompt-strength control, local history and transparent PNG export.
+
+Not yet implemented: editing an uploaded sprite, masked inpainting, pose transfer, animation, or guaranteed character identity. Sprite32 is a text-to-image model, not an image-editing model. These features need a separate model trained for image conditioning; this project does not fake them with pixel filters.
+
+The upstream model code is cloned into .runtime/sprite32 at first launch. We reuse its sampler and local FastAPI server instead of duplicating the model implementation.
