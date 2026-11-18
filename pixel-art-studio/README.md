@@ -23,7 +23,7 @@ https://github.com/umanets/pixelsprite
 
 ## Licensing
 
-- Model weights: CC BY-NC 4.0 — non-commercial use only. Do not use these weights or their outputs commercially without resolving the license.
+- Model weights: CC BY-NC 4.0 — non-commercial use only. Review the model card and license for any intended downstream use.
 - Upstream inference code: Apache-2.0.
 - Text encoder: Xenova/paraphrase-multilingual-MiniLM-L12-v2; see its model repository for its license.
 - ONNX Runtime Web: MIT.
