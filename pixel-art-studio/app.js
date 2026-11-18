@@ -7,7 +7,7 @@ const ORT_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.we
 const TOKENIZERS_URL = "https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.min.mjs";
 const CACHE_NAME = "pixel-foundry-model-v1";
 const $ = (id) => document.getElementById(id);
-let ort, model, encoder, backend = "wasm", controller = null, loading = false;
+let ort, model, encoder, backend = "wasm", controller = null, loading = false, loadingModel = false;
 function setStatus(s) { $("status").textContent = s; }
 function setProgress(value, label) {
   $("progress").style.width = Math.max(0, Math.min(100, value * 100)) + "%";
@@ -45,6 +45,9 @@ async function loadLocalModel(ep) {
   return loadModel({ ort, files: modelFiles(MODEL_BASE), ep, fetchBytes, fixedCache: true, onProgress: downloadProgress("Downloading sprite model") });
 }
 async function boot() {
+  if (model || loadingModel) return;
+  loadingModel = true;
+  clearError(); $("loadModel").disabled = true; $("loadModel").textContent = "Loading model…";
   try {
     setStatus("Loading browser inference runtime…"); $("phase").textContent = "Loading ONNX Runtime Web";
     ort = await import(ORT_URL);
@@ -58,17 +61,21 @@ async function boot() {
     model.constructor.release(cache); model.constructor.release(a.cache);
     setStatus("Local model ready · " + (backend === "webgpu" ? "WebGPU" : "CPU"));
     $("phase").textContent = backend === "webgpu" ? "Ready · GPU inference" : "Ready · CPU inference (slower)";
-    setProgress(1); $("go").disabled = false; $("go").textContent = "✦ Generate sprites";
+    setProgress(1); $("go").disabled = false; $("go").textContent = "✦ Generate sprites"; $("loadModel").textContent = "Model loaded ✓";
   } catch (error) {
     if (backend === "webgpu") {
       try {
         console.warn("WebGPU model load failed; falling back to CPU.", error);
         setStatus("WebGPU unavailable · switching to CPU…"); backend = "wasm"; model = await loadLocalModel("wasm");
         setStatus("Local model ready · CPU"); $("phase").textContent = "Ready · CPU inference (slower)";
-        $("go").disabled = false; $("go").textContent = "✦ Generate sprites"; return;
+        $("go").disabled = false; $("go").textContent = "✦ Generate sprites"; $("loadModel").textContent = "Model loaded ✓"; return;
       } catch (fallbackError) { showError(fallbackError); }
     } else showError(error);
     setStatus("Could not load the local model"); $("phase").textContent = "See error details"; $("go").disabled = true;
+  } finally {
+    loadingModel = false;
+    $("loadModel").disabled = !!model;
+    if (!model) $("loadModel").textContent = "↧ Load model";
   }
 }
 async function loadEncoder() {
@@ -124,4 +131,5 @@ $("colour").addEventListener("input", () => $("colourValue").textContent = Numbe
 $("go").addEventListener("click", () => { if (loading && controller) { controller.abort(); $("go").disabled = true; $("go").textContent = "Stopping…"; } else generate(); });
 $("prompt").addEventListener("keydown", (event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") generate(); });
 $("clear").addEventListener("click", () => { $("results").replaceChildren($("empty")); $("empty").classList.remove("hidden"); $("empty").textContent = "No sprites yet. Write a prompt and generate a batch."; $("caption").textContent = "Sprites will appear here."; });
-boot();
+$("loadModel").addEventListener("click", boot);
+setStatus("Ready · model not loaded"); $("phase").textContent = "Load the model when you are ready";
