@@ -6,7 +6,6 @@ const ENCODER_BASE = "https://huggingface.co/" + ENCODER.repo + "/resolve/" + EN
 const ORT_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.webgpu.min.mjs";
 const TOKENIZERS_URL = "https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.min.mjs";
 const CACHE_NAME = "pixel-foundry-model-v1";
-const RUNTIME_CACHE = "pixel-foundry-runtime-v1";
 const $ = (id) => document.getElementById(id);
 let ort, model, encoder, backend = "wasm", controller = null, loading = false, loadingModel = false;
 function setStatus(s) { $("status").textContent = s; }
@@ -27,8 +26,10 @@ async function prepareOfflineSupport() {
   await navigator.serviceWorker.ready;
   if (!navigator.serviceWorker.controller) {
     await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("Offline cache is not controlling this page yet. Reload the page and press Load model again.")), 10000);
-      navigator.serviceWorker.addEventListener("controllerchange", () => { clearTimeout(timeout); resolve(); }, { once: true });
+      const finish = () => { clearTimeout(timeout); resolve(); };
+      const timeout = setTimeout(() => { navigator.serviceWorker.removeEventListener("controllerchange", finish); reject(new Error("Offline cache is not controlling this page yet. Reload the page and press Load model again.")); }, 10000);
+      navigator.serviceWorker.addEventListener("controllerchange", finish, { once: true });
+      if (navigator.serviceWorker.controller) finish();
     });
   }
 }
