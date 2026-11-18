@@ -89,8 +89,8 @@ function addSprite(indices, size, index) {
 async function generate() {
   if (loading || !model) return;
   const prompt = $("prompt").value.trim(); if (!prompt) { $("prompt").focus(); return; }
-  loading = true; clearError(); $("go").disabled = true; $("go").textContent = "Generating…";
-  $("results").replaceChildren(); $("caption").textContent = prompt; $("empty").classList.remove("hidden");
+  loading = true; clearError(); $("go").disabled = false; $("go").textContent = "Stop generation";
+  $("results").replaceChildren(); $("results").appendChild($("empty")); $("caption").textContent = prompt; $("empty").classList.remove("hidden");
   $("empty").textContent = "Preparing prompt and generating sprites locally…"; controller = new AbortController();
   const size = Number($("size").value), count = Number($("count").value);
   let seed = Number($("seed").value); if (!Number.isFinite(seed)) seed = 0;
@@ -111,7 +111,7 @@ async function generate() {
       try {
         console.warn("GPU inference failed; retrying on CPU.", error); setStatus("GPU inference failed · switching to CPU…");
         try { await model.session.release(); } catch (_) {}
-        backend = "wasm"; model = await loadLocalModel("wasm"); setStatus("Retrying generation on CPU…");
+        backend = "wasm"; model = await loadLocalModel("wasm"); $("results").replaceChildren(); setStatus("Retrying generation on CPU…");
         await model.generate(settings); setStatus("Finished · generated locally on CPU"); $("phase").textContent = "Complete · CPU"; setProgress(1);
       } catch (fallbackError) { showError(fallbackError); setStatus("Generation failed"); }
     } else { showError(error); setStatus("Generation failed"); $("phase").textContent = "See error details"; }
