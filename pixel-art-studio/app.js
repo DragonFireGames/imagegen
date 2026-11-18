@@ -7,8 +7,12 @@ const ORT_URL = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.we
 const TOKENIZERS_URL = "https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.min.mjs";
 const CACHE_NAME = "pixel-foundry-model-v1";
 const $ = (id) => document.getElementById(id);
-let ort, model, encoder, backend = "wasm", controller = null, loading = false, loadingModel = false;
+let ort, model, encoder, backend = "wasm", controller = null, loading = false, loadingModel = false, inferenceStarted = 0;
 function setStatus(s) { $("status").textContent = s; }
+function setGenerationComplete(count) {
+  const seconds = Math.max((performance.now() - inferenceStarted) / 1000, 0.001);
+  setStatus("Finished · " + count + " sprites · " + seconds.toFixed(1) + " s · " + (count / seconds).toFixed(2) + " sprites/s");
+}
 function setProgress(value, label) {
   $("progress").style.width = Math.max(0, Math.min(100, value * 100)) + "%";
   $("percent").textContent = value ? Math.round(value * 100) + "%" : "";
@@ -73,7 +77,7 @@ async function fetchBytes(url, onProgress) {
 const downloadProgress = (label) => (got, total) => setProgress(total ? got / total : 0, label + ": " + (got / 1e6).toFixed(0) + " / " + (total ? (total / 1e6).toFixed(0) : "?") + " MB");
 async function chooseBackend() {
   if (!navigator.gpu) return "wasm";
-  try { return await navigator.gpu.requestAdapter() ? "webgpu" : "wasm"; } catch (_) { return "wasm"; }
+  try { return await navigator.gpu.requestAdapter({ powerPreference: "high-performance" }) ? "webgpu" : "wasm"; } catch (_) { return "wasm"; }
 }
 async function loadLocalModel(ep) {
   ort.env.wasm.proxy = ep === "wasm";
@@ -89,6 +93,7 @@ async function boot() {
     setStatus("Loading browser inference runtime…"); $("phase").textContent = "Loading ONNX Runtime Web";
     ort = await import(ORT_URL);
     ort.env.wasm.numThreads = self.crossOriginIsolated ? 0 : 1;
+    ort.env.webgpu.powerPreference = "high-performance";
     backend = await chooseBackend();
     setStatus("Downloading local sprite model…"); model = await loadLocalModel(backend);
     setStatus(backend === "webgpu" ? "Warming up WebGPU…" : "Warming up CPU inference…");
@@ -155,8 +160,9 @@ async function generate() {
   try {
     setStatus("Encoding prompt locally…"); const enc = await loadEncoder(); settings.vector = await enc.encode(prompt);
     setStatus("Generating on your " + (backend === "webgpu" ? "GPU" : "CPU") + "…"); $("empty").classList.add("hidden");
+    inferenceStarted = performance.now();
     await model.generate(settings);
-    setStatus("Finished · " + count + " sprites generated locally"); $("phase").textContent = "Complete"; setProgress(1);
+    setGenerationComplete(count); $("phase").textContent = "Complete"; setProgress(1);
   } catch (error) {
     if (error && error.name === "AbortError") { setStatus("Generation stopped"); $("phase").textContent = "Stopped"; }
     else if (backend === "webgpu" && model) {
@@ -165,7 +171,8 @@ async function generate() {
         try { await model.session.release(); } catch (_) {}
         backend = "wasm"; model = await loadLocalModel("wasm"); $("results").replaceChildren();
         setStatus("Warming up CPU inference…"); await warmupDecoder(); setStatus("Retrying generation on CPU…");
-        await model.generate(settings); setStatus("Finished · generated locally on CPU"); $("phase").textContent = "Complete · CPU"; setProgress(1);
+        inferenceStarted = performance.now();
+        await model.generate(settings); setGenerationComplete(count); $("phase").textContent = "Complete · CPU"; setProgress(1);
       } catch (fallbackError) { showError(fallbackError); setStatus("Generation failed"); }
     } else { showError(error); setStatus("Generation failed"); $("phase").textContent = "See error details"; }
   } finally { loading = false; controller = null; $("go").disabled = false; $("go").textContent = "✦ Generate sprites"; }
