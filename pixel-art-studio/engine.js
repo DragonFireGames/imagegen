@@ -89,9 +89,10 @@ function logSumExp(a, off, len) {
   return m + Math.log(s);
 }
 
-function emptyLogOdds(l, off, V, E) {  // log p(EMPTY) - log(1 - p(EMPTY)), as split_pick
-  const lp = l[off + E] - logSumExp(l, off, V);
-  return lp - Math.log1p(-Math.min(Math.exp(lp), 1 - 1e-6));
+function emptyLogOdds(l, off, K, E, colourLogSum = logSumExp(l, off, K)) {
+  // log(pEmpty / (1 - pEmpty)) simplifies exactly to emptyLogit - logsumexp(colourLogits).
+  // This avoids normalizing the full vocabulary and then converting the probability back to log-odds.
+  return l[off + E] - colourLogSum;
 }
 
 /** Guided distribution for one pixel. lc / lu: logits with and without text at offsets offC / offU (offU < 0 = no
@@ -100,15 +101,16 @@ export function guided(lc, offC, lu, offU, K, gShape, gColour, temperature, topP
   const V = K + 1, E = K;
   let s;
   if (offU >= 0) {
-    const sc = emptyLogOdds(lc, offC, V, E), su = emptyLogOdds(lu, offU, V, E);
-    s = su + gShape * (sc - su);
     const lsC = logSumExp(lc, offC, K), lsU = logSumExp(lu, offU, K);
+    const sc = emptyLogOdds(lc, offC, K, E, lsC), su = emptyLogOdds(lu, offU, K, E, lsU);
+    s = su + gShape * (sc - su);
     for (let j = 0; j < K; j++) {
       const u = lu[offU + j] - lsU;
       col[j] = u + gColour * ((lc[offC + j] - lsC) - u);
     }
   } else {
-    s = emptyLogOdds(lc, offC, V, E);
+    const lsC = logSumExp(lc, offC, K);
+    s = emptyLogOdds(lc, offC, K, E, lsC);
     for (let j = 0; j < K; j++) col[j] = lc[offC + j];
   }
   finishColour(col, K, temperature, topP, order);
@@ -120,14 +122,14 @@ export function guided(lc, offC, lu, offU, K, gShape, gColour, temperature, topP
  * s = s_u + sum_g w_g (s_g - s_u); then temperature and top-p as in guided(). */
 export function guidedMix(L, base, k, K, w, temperature, topP, col, order) {
   const V = K + 1, E = K, offU = (base + k) * V;
-  const su = emptyLogOdds(L, offU, V, E), lsU = logSumExp(L, offU, K);
+  const lsU = logSumExp(L, offU, K), su = emptyLogOdds(L, offU, K, E, lsU);
   let s = su;
   for (let j = 0; j < K; j++) col[j] = L[offU + j] - lsU;
   for (let g = 0; g < k; g++) {
     const off = (base + g) * V, wg = w[g];
     if (!wg) continue;
-    s += wg * (emptyLogOdds(L, off, V, E) - su);
     const ls = logSumExp(L, off, K);
+    s += wg * (emptyLogOdds(L, off, K, E, ls) - su);
     for (let j = 0; j < K; j++) col[j] += wg * ((L[off + j] - ls) - (L[offU + j] - lsU));
   }
   finishColour(col, K, temperature, topP, order);
