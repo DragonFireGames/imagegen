@@ -375,7 +375,9 @@ export class SpriteModel {
       const names = this.cacheOutputNames[i], o = 2 * i;
       next[o] = out[names[0]]; next[o + 1] = out[names[1]];
     }
-    return { logits: out.logits.data, cache: next };
+    const result = reusable ? reusable.result : {};
+    result.logits = out.logits.data; result.cache = next;
+    return result;
   }
 
   /** The runner: draws one sprite per strategy on an S x S canvas in parallel. Every strategy owns rows.length
@@ -407,6 +409,7 @@ export class SpriteModel {
           x: new this.ort.Tensor("float32", x, [B, 1, d]),
           pos: new this.ort.Tensor("int64", position, [1]),
         },
+        result: { logits: null, cache: null },
       };
     }
     const advance = async () => {  // one more token -> logits of the next pixel
