@@ -36,7 +36,8 @@ function inferenceChunk(rowsPerSprite = 2) {
   return selected === "auto" ? automatic : Math.max(1, Math.min(8, Number(selected) || automatic));
 }
 async function warmupDecoder() {
-  const size = backend === "webgpu" ? Number($("size").value) || 32 : 16;
+  const requestedSize = Number($("size").value) || 32;
+  const size = backend === "webgpu" ? (requestedSize <= 16 ? 16 : requestedSize === 24 ? 32 : requestedSize) : 16;
   const rowsPerSprite = $("mode").value === "fast" ? 1 : 2;
   const batch = backend === "webgpu" ? Math.min(inferenceChunk(rowsPerSprite), Number($("count").value) || 4) * rowsPerSprite : 1;
   const cacheLength = backend === "webgpu" ? 2 + size + size * size : 4;
