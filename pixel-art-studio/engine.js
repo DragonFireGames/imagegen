@@ -297,9 +297,20 @@ export class SpriteModel {
 
   /** Writes one pixel token: previous pixel's token + row + column + edge flag of this pixel. */
   writePixel(dst, o, prev, r, c, e) {
-    dst.fill(0, o, o + this.d);
-    this._add(dst, o, "tok", prev); this._add(dst, o, "row", r); this._add(dst, o, "col", c);
-    this._add(dst, o, "edge", e); this._add(dst, o, "kind", this.info.kinds.pixel);
+    // This runs for every batch row at every generated pixel. Walk the embedding
+    // dimension once instead of making five separate passes through the vector.
+    // Keep the original addition order and Float32 rounding exactly.
+    const d = this.d, tok = this.t.tok, row = this.t.row, col = this.t.col;
+    const edge = this.t.edge, kind = this.t.kind;
+    const to = prev * d, ro = r * d, co = c * d, eo = e * d, ko = this.info.kinds.pixel * d;
+    for (let j = 0; j < d; j++) {
+      const p = o + j;
+      dst[p] = tok[to + j];
+      dst[p] += row[ro + j];
+      dst[p] += col[co + j];
+      dst[p] += edge[eo + j];
+      dst[p] += kind[ko + j];
+    }
   }
 
   emptyCache(B) {
