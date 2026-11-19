@@ -42,7 +42,11 @@ async function warmupDecoder() {
   for (let row = 0; row < batch; row++) model.writePixel(x, row * model.d, model.BOS, 0, 0, 3);
   const cache = await model.cacheSet(batch, cacheLength);
   let output = null;
-  try { output = await model.stepFixed(x, batch, 0, cache); }
+  try {
+    output = await model.stepFixed(x, batch, 0, cache);
+    // Compile the GPU sampling pipeline during model startup, not during the first visible generation.
+    if (backend === "webgpu") await model.ensureGpuSampler(await ort.env.webgpu.device);
+  }
   finally {
     model.constructor.release(cache);
     if (output) model.constructor.release(output.cache);
