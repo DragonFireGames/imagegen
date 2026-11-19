@@ -431,7 +431,7 @@ export class SpriteModel {
       "var<workgroup> reduce:array<f32,64>;var<workgroup> scores:array<f32,"+this.K+">;",
       "var<workgroup> lsC:f32;var<workgroup> lsU:f32;var<workgroup> odds:f32;var<workgroup> chosen:u32;",
       "@compute @workgroup_size(64) fn main(@builtin(workgroup_id) group:vec3<u32>,@builtin(local_invocation_id) local:vec3<u32>){",
-      "let sprite=group.x;let lane=local.x;let count=p.B/p.rows;if(sprite>=count){return;}let V=p.K+1u;let base=sprite*p.rows;",
+      "let sprite=group.x;let lane=local.x;let count=p.B/p.rows;if(sprite>=count){return;}let V=p.K+1u;let base=sprite*p.rows;let forceEmpty=win[p.t]==0u||(p.hasMask!=0u&&mask[p.t]==0u);let forceFill=p.hasMask!=0u&&mask[p.t]!=0u;if(forceEmpty){if(lane==0u){chosen=p.E;}}else{",
       "var m=-3.402823466e+38;for(var j=lane;j<p.K;j+=64u){m=max(m,logits[base*V+j]);}reduce[lane]=m;workgroupBarrier();",
       "for(var stride=32u;stride>0u;stride=stride/2u){if(lane<stride){reduce[lane]=max(reduce[lane],reduce[lane+stride]);}workgroupBarrier();}",
       "let mc=reduce[0];var part=0.0;for(var j=lane;j<p.K;j+=64u){part+=exp(logits[base*V+j]-mc);}reduce[lane]=part;workgroupBarrier();",
@@ -446,7 +446,7 @@ export class SpriteModel {
       "for(var stride=32u;stride>0u;stride=stride/2u){if(lane<stride){reduce[lane]=max(reduce[lane],reduce[lane+stride]);}workgroupBarrier();}let maxScore=reduce[0];",
       "var ss=0.0;for(var j=lane;j<p.K;j+=64u){scores[j]=exp(scores[j]-maxScore);ss+=scores[j];}reduce[lane]=ss;workgroupBarrier();",
       "for(var stride=32u;stride>0u;stride=stride/2u){if(lane<stride){reduce[lane]+=reduce[lane+stride];}workgroupBarrier();}let total=reduce[0];for(var j=lane;j<p.K;j+=64u){scores[j]/=total;}workgroupBarrier();",
-      "if(lane==0u){let ix=(sprite*p.S*p.S+p.t)*2u;let outside=win[p.t]==0u||(p.hasMask!=0u&&mask[p.t]==0u);let inside=p.hasMask!=0u&&mask[p.t]!=0u;chosen=p.E;if(inside||(!outside&&randoms[ix]>=1.0/(1.0+exp(-odds)))){let u=randoms[ix+1u];var acc=0.0;for(var j=0u;j<p.K;j++){acc+=scores[j];if(u<acc){chosen=j;break;}}}}workgroupBarrier();",
+      "if(lane==0u){let ix=(sprite*p.S*p.S+p.t)*2u;if(forceFill||randoms[ix]>=1.0/(1.0+exp(-odds))){let u=randoms[ix+1u];var acc=0.0;for(var j=0u;j<p.K;j++){acc+=scores[j];if(u<acc){chosen=j;break;}}}}}workgroupBarrier();",
       "if(lane==0u){tokens[sprite*p.S*p.S+p.t]=chosen;}if(p.t+1u<p.S*p.S){let q=p.t+1u;let r=q/p.S;let column=q%p.S;let e=u32(edgeFlags[q]);for(var j=lane;j<p.d;j+=64u){var v=emb[p.tok+chosen*p.d+j];v+=emb[p.row+r*p.d+j];v+=emb[p.col+column*p.d+j];v+=emb[p.edge+e*p.d+j];v+=emb[p.kind+"+this.info.kinds.pixel+"u*p.d+j];for(var k=0u;k<p.rows;k++){nextX[(base+k)*p.d+j]=v;}}}}",
       "}",
     ].join("\\n");
