@@ -417,22 +417,40 @@ export class SpriteModel {
     for(const name of names){offsets[name]=total;total+=this.t[name].length;}
     const packed=new Float32Array(total);for(const name of names)packed.set(this.t[name],offsets[name]);
     const embeddings=device.createBuffer({size:packed.byteLength,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(embeddings,0,packed);
-    const shader=[
+    const shader = [
       "struct P{B:u32,K:u32,d:u32,E:u32,S:u32,t:u32,rows:u32,guided:u32,gs:f32,gc:f32,temp:f32,topP:f32,hasMask:u32,tok:u32,row:u32,col:u32,edge:u32,kind:u32,pad0:u32,pad1:u32};",
-      "@group(0) @binding(0) var<storage,read> logits:array<f32>;@group(0) @binding(1) var<storage,read_write> nextX:array<f32>;",
-      "@group(0) @binding(2) var<storage,read_write> tokens:array<u32>;@group(0) @binding(3) var<storage,read> emb:array<f32>;",
-      "@group(0) @binding(4) var<storage,read> edgeFlags:array<i32>;@group(0) @binding(5) var<storage,read> mask:array<u32>;",
-      "@group(0) @binding(6) var<storage,read> win:array<u32>;@group(0) @binding(7) var<storage,read> randoms:array<f32>;@group(0) @binding(8) var<uniform> p:P;",
-      "fn lse(r:u32,V:u32)->f32{var m=-3.402823466e+38;for(var j=0u;j<p.K;j++){m=max(m,logits[r*V+j]);}var s=0.0;for(var j=0u;j<p.K;j++){s+=exp(logits[r*V+j]-m);}return m+log(s);}",
-      "@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id:vec3<u32>){let sprite=id.x;let count=p.B/p.rows;if(sprite>=count){return;}let V=p.K+1u;let base=sprite*p.rows;",
-      "let lc=lse(base,V);var odds=min(logits[base*V+p.K]-lc,log(999999.0));var scores:array<f32,"+this.K+">;",
-      "if(p.guided!=0u){let ur=base+1u;let lu=lse(ur,V);let uOdds=min(logits[ur*V+p.K]-lu,log(999999.0));odds=uOdds+p.gs*(odds-uOdds);for(var j=0u;j<p.K;j++){let u=logits[ur*V+j]-lu;scores[j]=u+p.gc*((logits[base*V+j]-lc)-u);}}else{for(var j=0u;j<p.K;j++){scores[j]=logits[base*V+j];}}",
-      "let pe=1.0/(1.0+exp(-odds));let inv=1.0/max(p.temp,0.000001);var mx=-3.402823466e+38;for(var j=0u;j<p.K;j++){scores[j]*=inv;mx=max(mx,scores[j]);}var sum=0.0;for(var j=0u;j<p.K;j++){scores[j]=exp(scores[j]-mx);sum+=scores[j];}for(var j=0u;j<p.K;j++){scores[j]/=sum;}",
-      "let ix=(sprite*p.S*p.S+p.t)*2u;let outside=win[p.t]==0u||(p.hasMask!=0u&&mask[p.t]==0u);let inside=p.hasMask!=0u&&mask[p.t]!=0u;var token=p.E;",
-      "if(inside||(!outside&&randoms[ix]>=pe)){let u=randoms[ix+1u];var acc=0.0;var selected=p.K-1u;var found=false;for(var j=0u;j<p.K;j++){acc+=scores[j];if(!found&&u<acc){selected=j;found=true;}}token=selected;}tokens[sprite*p.S*p.S+p.t]=token;",
-      "if(p.t+1u<p.S*p.S){let q=p.t+1u;let r=q/p.S;let column=q%p.S;let e=u32(edgeFlags[q]);for(var j=0u;j<p.d;j++){var v=emb[p.tok+token*p.d+j];v+=emb[p.row+r*p.d+j];v+=emb[p.col+column*p.d+j];v+=emb[p.edge+e*p.d+j];v+=emb[p.kind+"+this.info.kinds.pixel+"u*p.d+j];for(var k=0u;k<p.rows;k++){nextX[(base+k)*p.d+j]=v;}}}}",
+      "@group(0) @binding(0) var<storage,read> logits:array<f32>;",
+      "@group(0) @binding(1) var<storage,read_write> nextX:array<f32>;",
+      "@group(0) @binding(2) var<storage,read_write> tokens:array<u32>;",
+      "@group(0) @binding(3) var<storage,read> emb:array<f32>;",
+      "@group(0) @binding(4) var<storage,read> edgeFlags:array<i32>;",
+      "@group(0) @binding(5) var<storage,read> mask:array<u32>;",
+      "@group(0) @binding(6) var<storage,read> win:array<u32>;",
+      "@group(0) @binding(7) var<storage,read> randoms:array<f32>;",
+      "@group(0) @binding(8) var<uniform> p:P;",
+      "var<workgroup> reduce:array<f32,64>;var<workgroup> scores:array<f32,"+this.K+">;",
+      "var<workgroup> lsC:f32;var<workgroup> lsU:f32;var<workgroup> odds:f32;var<workgroup> chosen:u32;",
+      "@compute @workgroup_size(64) fn main(@builtin(workgroup_id) group:vec3<u32>,@builtin(local_invocation_id) local:vec3<u32>){",
+      "let sprite=group.x;let lane=local.x;let count=p.B/p.rows;if(sprite>=count){return;}let V=p.K+1u;let base=sprite*p.rows;",
+      "var m=-3.402823466e+38;for(var j=lane;j<p.K;j+=64u){m=max(m,logits[base*V+j]);}reduce[lane]=m;workgroupBarrier();",
+      "for(var stride=32u;stride>0u;stride=stride/2u){if(lane<stride){reduce[lane]=max(reduce[lane],reduce[lane+stride]);}workgroupBarrier();}",
+      "let mc=reduce[0];var part=0.0;for(var j=lane;j<p.K;j+=64u){part+=exp(logits[base*V+j]-mc);}reduce[lane]=part;workgroupBarrier();",
+      "for(var stride=32u;stride>0u;stride=stride/2u){if(lane<stride){reduce[lane]+=reduce[lane+stride];}workgroupBarrier();}if(lane==0u){lsC=mc+log(reduce[0]);}workgroupBarrier();",
+      "if(p.guided!=0u){let ur=base+1u;var um=-3.402823466e+38;for(var j=lane;j<p.K;j+=64u){um=max(um,logits[ur*V+j]);}reduce[lane]=um;workgroupBarrier();",
+      "for(var stride=32u;stride>0u;stride=stride/2u){if(lane<stride){reduce[lane]=max(reduce[lane],reduce[lane+stride]);}workgroupBarrier();}let mu=reduce[0];var us=0.0;for(var j=lane;j<p.K;j+=64u){us+=exp(logits[ur*V+j]-mu);}reduce[lane]=us;workgroupBarrier();",
+      "for(var stride=32u;stride>0u;stride=stride/2u){if(lane<stride){reduce[lane]+=reduce[lane+stride];}workgroupBarrier();}if(lane==0u){lsU=mu+log(reduce[0]);}workgroupBarrier();",
+      "if(lane==0u){let sc=min(logits[base*V+p.K]-lsC,log(999999.0));let su=min(logits[ur*V+p.K]-lsU,log(999999.0));odds=su+p.gs*(sc-su);}workgroupBarrier();",
+      "for(var j=lane;j<p.K;j+=64u){let u=logits[ur*V+j]-lsU;scores[j]=u+p.gc*((logits[base*V+j]-lsC)-u);}",
+      "}else{if(lane==0u){odds=min(logits[base*V+p.K]-lsC,log(999999.0));}for(var j=lane;j<p.K;j+=64u){scores[j]=logits[base*V+j];}}workgroupBarrier();",
+      "var sm=-3.402823466e+38;for(var j=lane;j<p.K;j+=64u){scores[j]*=1.0/max(p.temp,0.000001);sm=max(sm,scores[j]);}reduce[lane]=sm;workgroupBarrier();",
+      "for(var stride=32u;stride>0u;stride=stride/2u){if(lane<stride){reduce[lane]=max(reduce[lane],reduce[lane+stride]);}workgroupBarrier();}let maxScore=reduce[0];",
+      "var ss=0.0;for(var j=lane;j<p.K;j+=64u){scores[j]=exp(scores[j]-maxScore);ss+=scores[j];}reduce[lane]=ss;workgroupBarrier();",
+      "for(var stride=32u;stride>0u;stride=stride/2u){if(lane<stride){reduce[lane]+=reduce[lane+stride];}workgroupBarrier();}let total=reduce[0];for(var j=lane;j<p.K;j+=64u){scores[j]/=total;}workgroupBarrier();",
+      "if(lane==0u){let ix=(sprite*p.S*p.S+p.t)*2u;let outside=win[p.t]==0u||(p.hasMask!=0u&&mask[p.t]==0u);let inside=p.hasMask!=0u&&mask[p.t]!=0u;chosen=p.E;if(inside||(!outside&&randoms[ix]>=1.0/(1.0+exp(-odds)))){let u=randoms[ix+1u];var acc=0.0;for(var j=0u;j<p.K;j++){acc+=scores[j];if(u<acc){chosen=j;break;}}}}workgroupBarrier();",
+      "if(lane==0u){tokens[sprite*p.S*p.S+p.t]=chosen;}if(p.t+1u<p.S*p.S){let q=p.t+1u;let r=q/p.S;let column=q%p.S;let e=u32(edgeFlags[q]);for(var j=lane;j<p.d;j+=64u){var v=emb[p.tok+chosen*p.d+j];v+=emb[p.row+r*p.d+j];v+=emb[p.col+column*p.d+j];v+=emb[p.edge+e*p.d+j];v+=emb[p.kind+"+this.info.kinds.pixel+"u*p.d+j];for(var k=0u;k<p.rows;k++){nextX[(base+k)*p.d+j]=v;}}}}",
+      "}",
     ].join("\\n");
-    const module=device.createShaderModule({code:shader});
+        const module=device.createShaderModule({code:shader});
     const pipeline=await device.createComputePipelineAsync({layout:"auto",compute:{module,entryPoint:"main"}});
     this.gpuSampler={pipeline,embeddings,offsets};return this.gpuSampler;
   }
@@ -465,7 +483,7 @@ export class SpriteModel {
         {binding:0,resource:{buffer:logits.gpuBuffer}},{binding:1,resource:{buffer:input}},{binding:2,resource:{buffer:tokens}},
         {binding:3,resource:{buffer:gpu.embeddings}},{binding:4,resource:{buffer:edge}},{binding:5,resource:{buffer:mask}},
         {binding:6,resource:{buffer:win}},{binding:7,resource:{buffer:randoms}},{binding:8,resource:{buffer:params}}]});
-      const enc=device.createCommandEncoder(),pass=enc.beginComputePass();pass.setPipeline(gpu.pipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(b/64));pass.end();device.queue.submit([enc.finish()]);};
+      const enc=device.createCommandEncoder(),pass=enc.beginComputePass();pass.setPipeline(gpu.pipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(b);pass.end();device.queue.submit([enc.finish()]);};
     try{cache=await this.cacheSet(B,2+p.S+n);for(let t=0;t<T0;t++){const next=await advance(t);if(held)held.dispose();held=next;}dispatch(held,0);
       for(let t=1;t<n;t++){const next=await advance(null);held.dispose();held=next;dispatch(held,t);}
       const enc=device.createCommandEncoder();enc.copyBufferToBuffer(tokens,0,readback,0,b*n*4);device.queue.submit([enc.finish()]);await readback.mapAsync(GPUMapMode.READ);
