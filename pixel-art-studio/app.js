@@ -28,10 +28,12 @@ function inferenceChunk(rowsPerSprite = 2) {
   const memory = Number(navigator.deviceMemory);
   const cores = navigator.hardwareConcurrency || 4;
   const lowMemory = Number.isFinite(memory) && memory > 0 ? memory <= 4 : cores <= 4;
-  // Keep the network-row budget (and therefore KV-cache memory) constant across modes.
+  // Auto keeps the network-row budget (and therefore KV-cache memory) conservative.
   // Fast mode uses one conditional row per sprite; guided mode uses conditional + unconditional.
   const rowBudget = backend === "webgpu" && memory >= 8 && cores >= 8 ? 12 : lowMemory ? 4 : 8;
-  return Math.max(1, Math.floor(rowBudget / rowsPerSprite));
+  const automatic = Math.max(1, Math.floor(rowBudget / rowsPerSprite));
+  const selected = $("batch")?.value || "auto";
+  return selected === "auto" ? automatic : Math.max(1, Math.min(8, Number(selected) || automatic));
 }
 async function warmupDecoder() {
   const size = backend === "webgpu" ? Number($("size").value) || 32 : 16;
