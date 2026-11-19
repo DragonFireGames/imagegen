@@ -492,7 +492,12 @@ export class SpriteModel {
       this.writePrefix(x0, j * T0 * d, strategies[i].rows[j - bases[i]], S, mask);
       this.writePixel(x0, (j * T0 + T0 - 1) * d, this.BOS, 0, 0, edge[0]);
     }
-    const gpuResult = await this.drawChunkGpu(strategies,p,rng,onPixel,B,b,n,x0,T0);
+    let gpuResult = null;
+    try { gpuResult = await this.drawChunkGpu(strategies,p,rng,onPixel,B,b,n,x0,T0); }
+    catch (error) {
+      if (error && error.name === "AbortError") throw error;
+      console.warn("GPU-resident sampling failed; retrying with CPU sampling.", error);
+    }
     if(gpuResult)return gpuResult;
     let logits, cache, cacheNext = null, pos = 0, lastYield = performance.now();
     const x = new Float32Array(B * d);
