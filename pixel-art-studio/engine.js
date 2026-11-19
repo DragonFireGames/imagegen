@@ -74,13 +74,6 @@ export async function loadModel({ ort, files, ep = "wasm", fetchBytes, onProgres
 }
 
 // ------------------------------------------------------------------------------------------------- random numbers
-function deriveSpriteSeed(seed, sprite, attempt) {
-  let x = (Number(seed) >>> 0) ^ Math.imul(sprite + 1, 0x9e3779b1) ^ Math.imul(attempt + 1, 0x85ebca6b);
-  x = Math.imul(x ^ (x >>> 16), 0x7feb352d);
-  x = Math.imul(x ^ (x >>> 15), 0x846ca68b);
-  return (x ^ (x >>> 16)) >>> 0;
-}
-
 function randomSeed() {
   const value = new Uint32Array(1);
   if (globalThis.crypto && globalThis.crypto.getRandomValues) globalThis.crypto.getRandomValues(value);
@@ -618,7 +611,7 @@ export class SpriteModel {
     const strategyOf = (id) => (strategyFor ? strategyFor(id, view) : shared);
     const p = { S, mask: m, win, temperature, topP, signal };
     const resolvedSeed = Number(seed) === -1 ? randomSeed() : (Number(seed) >>> 0);
-    const attempts = new Uint32Array(n);
+    const rng = makeRng(resolvedSeed);
     const images = new Array(n), stats = { seed: resolvedSeed, sampled: 0, rejected: 0, rounds: 0, reasons: {} };
     let pending = Array.from({ length: n }, (_, i) => i);
     while (pending.length && stats.rounds < maxRounds) {
@@ -633,12 +626,12 @@ export class SpriteModel {
           if (ids.length && used + st.rows.length > budget) break;
           ids.push(pending[s]); sts.push(st); used += st.rows.length; s++;
         }
-        const rngs = ids.map(id => makeRng(deriveSpriteSeed(resolvedSeed, id, attempts[id])));
+        const rngs = ids.map(() => rng);
         const got = await this.drawChunk(sts, p, rngs, onPixel ? (t, imgs) => onPixel(ids, t, imgs, view) : null);
         ids.forEach((id, k) => {
           stats.sampled++;
           const why = useFilter ? rejected(got[k], S) : null;
-          if (why) { stats.rejected++; stats.reasons[why] = (stats.reasons[why] || 0) + 1; attempts[id]++; again.push(id); return; }
+          if (why) { stats.rejected++; stats.reasons[why] = (stats.reasons[why] || 0) + 1; again.push(id); return; }
           images[id] = crop(got[k], S, o, w);
           if (onSprite) onSprite(id, images[id]);
         });
