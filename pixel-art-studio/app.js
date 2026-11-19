@@ -26,7 +26,11 @@ function showError(error) {
 function clearError() { $("error").textContent = ""; $("error").classList.add("hidden"); }
 function inferenceChunk() {
   const memory = Number(navigator.deviceMemory);
-  const lowMemory = Number.isFinite(memory) && memory > 0 ? memory <= 4 : (navigator.hardwareConcurrency || 4) <= 4;
+  const cores = navigator.hardwareConcurrency || 4;
+  const lowMemory = Number.isFinite(memory) && memory > 0 ? memory <= 4 : cores <= 4;
+  // A slightly larger batch improves GPU utilization, but costs cache memory.
+  // Only use it when both reported system memory and CPU capacity are ample.
+  if (backend === "webgpu" && memory >= 8 && cores >= 8) return 6;
   return lowMemory ? 2 : 4;
 }
 async function warmupDecoder() {
