@@ -261,6 +261,8 @@ export class SpriteModel {
       this.t[name] = new Float32Array(buf, v.offset, v.shape.reduce((a, b) => a * b, 1));
     this.d = info.d_model; this.K = info.n_colors; this.E = info.empty; this.BOS = info.bos;
     this.L = info.n_layers; this.H = info.n_heads; this.hd = this.d / this.H;
+    this.cacheInputNames = Array.from({ length: this.L }, (_, i) => [`past_k_${i}`, `past_v_${i}`]);
+    this.cacheOutputNames = Array.from({ length: this.L }, (_, i) => [`present_k_${i}`, `present_v_${i}`]);
     this.textDim = info.tables["cond_proj.weight"].shape[1];
     this.palette = Uint8Array.from(palette.flat());
   }
@@ -322,10 +324,16 @@ export class SpriteModel {
   /** One decoder call: x (B*T*d) + cache -> logits of the last token (B*(K+1)) and the longer cache. */
   async step(x, B, T, cache) {
     const feeds = { x: new this.ort.Tensor("float32", x, [B, T, this.d]) };
-    for (let i = 0; i < this.L; i++) { feeds[`past_k_${i}`] = cache[2 * i]; feeds[`past_v_${i}`] = cache[2 * i + 1]; }
+    for (let i = 0; i < this.L; i++) {
+      const names = this.cacheInputNames[i];
+      feeds[names[0]] = cache[2 * i]; feeds[names[1]] = cache[2 * i + 1];
+    }
     const out = await this.session.run(feeds);
     const next = [];
-    for (let i = 0; i < this.L; i++) next.push(out[`present_k_${i}`], out[`present_v_${i}`]);
+    for (let i = 0; i < this.L; i++) {
+      const names = this.cacheOutputNames[i];
+      next.push(out[names[0]], out[names[1]]);
+    }
     return { logits: out.logits.data, cache: next };
   }
 
@@ -357,20 +365,21 @@ export class SpriteModel {
       pos: new this.ort.Tensor("int64", BigInt64Array.of(BigInt(pos)), [1]),
     };
     if (reusable) reusable.position[0] = BigInt(pos);
-    for (let i = 0; i < this.L; i++) { feeds[`past_k_${i}`] = cache[2 * i]; feeds[`past_v_${i}`] = cache[2 * i + 1]; }
+    for (let i = 0; i < this.L; i++) {
+      const names = this.cacheInputNames[i];
+      feeds[names[0]] = cache[2 * i]; feeds[names[1]] = cache[2 * i + 1];
+    }
     let out;
     if (outputCache) {
-      const fetches = { logits: null };
-      for (let i = 0; i < this.L; i++) {
-        fetches[`present_k_${i}`] = outputCache[2 * i];
-        fetches[`present_v_${i}`] = outputCache[2 * i + 1];
-      }
-      out = await this.session.run(feeds, fetches);
+      out = await this.session.run(feeds, reusable.fetches[reusable.writeIndex]);
       return { logits: out.logits.data, cache: outputCache };
     }
     out = await this.session.run(feeds);
     const next = [];
-    for (let i = 0; i < this.L; i++) next.push(out[`present_k_${i}`], out[`present_v_${i}`]);
+    for (let i = 0; i < this.L; i++) {
+      const names = this.cacheOutputNames[i];
+      next.push(out[names[0]], out[names[1]]);
+    }
     return { logits: out.logits.data, cache: next };
   }
 
@@ -404,6 +413,8 @@ export class SpriteModel {
           x: new this.ort.Tensor("float32", x, [B, 1, d]),
           pos: new this.ort.Tensor("int64", position, [1]),
         },
+        fetches: null,
+        writeIndex: 1,
       };
     }
     const advance = async () => {  // one more token -> logits of the next pixel
@@ -413,12 +424,25 @@ export class SpriteModel {
         : await this.step(x, B, 1, cache);
       pos++;
       logits = r.logits; cache = r.cache;
-      if (reuseGpuCache) spareCache = prev;
-      else if (prev !== cache) SpriteModel.release(prev);
+      if (reuseGpuCache) {
+        spareCache = prev;
+        fixedStepState.writeIndex ^= 1;
+      } else if (prev !== cache) SpriteModel.release(prev);
     };
     if (this.fixedCache) {  // ping-pong fixed-size GPU buffers; avoid allocating 2 * layers buffers per pixel
       cache = await this.cacheSet(B, 2 + S + n);
-      if (reuseGpuCache) spareCache = await this.cacheSet(B, 2 + S + n);
+      if (reuseGpuCache) {
+        spareCache = await this.cacheSet(B, 2 + S + n);
+        fixedStepState.fetches = [cache, spareCache].map((buffers) => {
+          const fetches = { logits: null };
+          for (let i = 0; i < this.L; i++) {
+            const names = this.cacheOutputNames[i];
+            fetches[names[0]] = buffers[2 * i];
+            fetches[names[1]] = buffers[2 * i + 1];
+          }
+          return fetches;
+        });
+      }
       for (let i = 0; i < T0; i++) {
         for (let j = 0; j < B; j++) x.set(x0.subarray((j * T0 + i) * d, (j * T0 + i + 1) * d), j * d);
         await advance();
