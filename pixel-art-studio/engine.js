@@ -60,8 +60,8 @@ export async function loadModel({ ort, files, ep = "wasm", fetchBytes, onProgres
   const decoder = await fetchBytes(fixedCache ? files.decoderStatic : files.decoder, files.weights ? null : onProgress);
   const opts = { executionProviders: [ep], graphOptimizationLevel: "all", ...sessionOptions };
   if (files.weights) opts.externalData = [{ path: DATA_NAME, data: halfToFloat(await fetchBytes(files.weights, onProgress)) }];
-  if (ep === "webgpu") {  // keep the cache on the GPU between steps; only the logits come back
-    opts.preferredOutputLocation = {};
+  if (ep === "webgpu") {  // keep cache and logits on the GPU
+    opts.preferredOutputLocation = { logits: "gpu-buffer" };
     for (let i = 0; i < info.n_layers; i++) {
       opts.preferredOutputLocation[`present_k_${i}`] = "gpu-buffer";
       opts.preferredOutputLocation[`present_v_${i}`] = "gpu-buffer";
@@ -396,7 +396,9 @@ export class SpriteModel {
       next[o] = out[names[0]]; next[o + 1] = out[names[1]];
     }
     const result = reusable ? reusable.result : {};
-    result.logits = out.logits.data; result.cache = next;
+    if (reusable && reusable.gpuLogits) result.logitsTensor = out.logits;
+    else result.logits = out.logits.data;
+    result.cache = next;
     return result;
   }
 
