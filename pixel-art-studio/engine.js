@@ -359,7 +359,7 @@ export class SpriteModel {
   /** One call of decoder_static.onnx: token x (B*d) at position pos. (No preallocated outputs: for CPU tensors
    * onnxruntime-web 1.31 hands back the same objects but leaves their data untouched, so the cache stayed zero and
    * the model saw only the current pixel: horizontal stripes on phones.) */
-  async stepFixed(x, B, pos, cache, reusable = null) {
+  async stepFixed(x, B, pos, cache, reusable = null, nextCache = null) {
     const feeds = reusable ? reusable.feeds : {
       x: new this.ort.Tensor("float32", x, [B, 1, this.d]),
       pos: new this.ort.Tensor("int64", BigInt64Array.of(BigInt(pos)), [1]),
@@ -370,10 +370,10 @@ export class SpriteModel {
       feeds[names[0]] = cache[2 * i]; feeds[names[1]] = cache[2 * i + 1];
     }
     const out = await this.session.run(feeds);
-    const next = [];
+    const next = nextCache || new Array(2 * this.L);
     for (let i = 0; i < this.L; i++) {
-      const names = this.cacheOutputNames[i];
-      next.push(out[names[0]], out[names[1]]);
+      const names = this.cacheOutputNames[i], o = 2 * i;
+      next[o] = out[names[0]]; next[o + 1] = out[names[1]];
     }
     return { logits: out.logits.data, cache: next };
   }
@@ -396,7 +396,7 @@ export class SpriteModel {
       this.writePrefix(x0, j * T0 * d, strategies[i].rows[j - bases[i]], S, mask);
       this.writePixel(x0, (j * T0 + T0 - 1) * d, this.BOS, 0, 0, edge[0]);
     }
-    let logits, cache, pos = 0, lastYield = performance.now();
+    let logits, cache, cacheNext = null, pos = 0, lastYield = performance.now();
     const x = new Float32Array(B * d);
     let fixedStepState = null;
     if (this.fixedCache) {
@@ -411,13 +411,17 @@ export class SpriteModel {
     }
     const advance = async () => {  // one more token -> logits of the next pixel
       const prev = cache;
-      const r = this.fixedCache ? await this.stepFixed(x, B, pos, cache, fixedStepState) : await this.step(x, B, 1, cache);
+      const r = this.fixedCache
+        ? await this.stepFixed(x, B, pos, cache, fixedStepState, cacheNext)
+        : await this.step(x, B, 1, cache);
       pos++;
       logits = r.logits; cache = r.cache;
+      if (this.fixedCache) cacheNext = prev;
       if (prev !== cache) SpriteModel.release(prev);
     };
     if (this.fixedCache) {  // fixed-size cache: reuse input tensors and feed objects for every token
       cache = await this.cacheSet(B, 2 + S + n);
+      cacheNext = new Array(2 * this.L);
       for (let i = 0; i < T0; i++) {
         for (let j = 0; j < B; j++) x.set(x0.subarray((j * T0 + i) * d, (j * T0 + i + 1) * d), j * d);
         await advance();
