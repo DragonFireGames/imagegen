@@ -88,7 +88,6 @@ async function chooseBackend() {
   return "wasm";
 }
 async function loadLocalModel(ep) {
-  ort.env.wasm.proxy = ep === "wasm";
   return loadModel({ ort, files: modelFiles(MODEL_BASE), ep, fetchBytes, fixedCache: true, onProgress: downloadProgress("Downloading sprite model") });
 }
 async function boot() {
@@ -102,6 +101,9 @@ async function boot() {
     ort = await import(ORT_URL);
     ort.env.wasm.numThreads = self.crossOriginIsolated ? 0 : 1;
     backend = await chooseBackend();
+    // ONNX Runtime WASM environment flags must be set before the first session.
+    // Keep this fixed: WebGPU sessions may initialize WASM for CPU-assigned ops.
+    ort.env.wasm.proxy = backend === "wasm";
     setStatus("Downloading local sprite model…"); model = await loadLocalModel(backend);
     setStatus(backend === "webgpu" ? "Warming up WebGPU…" : "Warming up CPU inference…");
     $("phase").textContent = "Preparing the normal batch size and 32 × 32 cache";
@@ -132,7 +134,6 @@ async function boot() {
 }
 async function loadEncoder() {
   if (encoder) return encoder;
-  ort.env.wasm.proxy = true;
   setStatus("Downloading text encoder to this browser…"); $("phase").textContent = "First-time text encoder download";
   const { Tokenizer } = await import(TOKENIZERS_URL);
   encoder = await loadTextEncoder({ ort, Tokenizer, files: encoderFiles(ENCODER_BASE), fetchBytes, onProgress: downloadProgress("Downloading text encoder") });
