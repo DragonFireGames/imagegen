@@ -74,6 +74,20 @@ export async function loadModel({ ort, files, ep = "wasm", fetchBytes, onProgres
 }
 
 // ------------------------------------------------------------------------------------------------- random numbers
+function deriveSpriteSeed(seed, sprite, attempt) {
+  let x = (Number(seed) >>> 0) ^ Math.imul(sprite + 1, 0x9e3779b1) ^ Math.imul(attempt + 1, 0x85ebca6b);
+  x = Math.imul(x ^ (x >>> 16), 0x7feb352d);
+  x = Math.imul(x ^ (x >>> 15), 0x846ca68b);
+  return (x ^ (x >>> 16)) >>> 0;
+}
+
+function randomSeed() {
+  const value = new Uint32Array(1);
+  if (globalThis.crypto && globalThis.crypto.getRandomValues) globalThis.crypto.getRandomValues(value);
+  else value[0] = Math.floor(Math.random() * 4294967296);
+  return value[0];
+}
+
 export function makeRng(seed) {  // mulberry32: small, fast, seedable (the sprites differ from Python's for a seed)
   let a = (Number(seed) >>> 0) ^ 0x9e3779b9;
   return () => {
@@ -454,14 +468,14 @@ export class SpriteModel {
     const pipeline=await device.createComputePipelineAsync({layout:"auto",compute:{module,entryPoint:"main"}});
     this.gpuSampler={pipeline,embeddings,offsets};return this.gpuSampler;
   }
-  async drawChunkGpu(strategies,p,rng,onPixel,B,b,n,x0,T0){
+  async drawChunkGpu(strategies,p,rngs,onPixel,B,b,n,x0,T0){
     if(this.ep!=="webgpu"||!this.fixedCache||p.topP!==1||!this.gpuSampler)return null;
     const cfg=strategies[0]&&strategies[0].gpuConfig;
     if(!cfg||strategies.some(s=>!s.gpuConfig||s.rows.length!==strategies[0].rows.length||s.gpuConfig.guided!==cfg.guided||s.gpuConfig.gShape!==cfg.gShape||s.gpuConfig.gColour!==cfg.gColour))return null;
     const rows=strategies[0].rows.length;if(rows!==1&&rows!==2)return null;
     const device=await this.ort.env.webgpu.device,gpu=await this.ensureGpuSampler(device),make=(size,usage)=>device.createBuffer({size:Math.max(4,size),usage});
     const input=make(B*this.d*4,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST),tokens=make(b*n*4,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC);
-    const randomValues=new Float32Array(b*n*2);for(let i=0;i<randomValues.length;i++)randomValues[i]=rng();
+    const randomValues=new Float32Array(b*n*2);for(let i=0;i<b;i++)for(let j=0;j<n*2;j++)randomValues[i*n*2+j]=rngs[i]();
     const randoms=make(randomValues.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);device.queue.writeBuffer(randoms,0,randomValues);
     const edgeValues=Int32Array.from(edgeFlags(p.mask,p.S)),edge=make(edgeValues.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);device.queue.writeBuffer(edge,0,edgeValues);
     const maskValues=new Uint32Array(n),winValues=Uint32Array.from(p.win);for(let i=0;i<n;i++)maskValues[i]=p.mask?p.mask[i]:0;
@@ -495,7 +509,7 @@ export class SpriteModel {
   }
 
 
-  async drawChunk(strategies, p, rng, onPixel) {
+  async drawChunk(strategies, p, rngs, onPixel) {
     const { S, mask, win, temperature, topP } = p;
     const b = strategies.length, n = S * S, d = this.d, K = this.K, E = this.E;
     const bases = [];
@@ -511,7 +525,7 @@ export class SpriteModel {
       this.writePixel(x0, (j * T0 + T0 - 1) * d, this.BOS, 0, 0, edge[0]);
     }
     let gpuResult = null;
-    try { gpuResult = await this.drawChunkGpu(strategies,p,rng,onPixel,B,b,n,x0,T0); }
+    try { gpuResult = await this.drawChunkGpu(strategies,p,rngs,onPixel,B,b,n,x0,T0); }
     catch (error) {
       if (error && error.name === "AbortError") throw error;
       console.warn("GPU-resident sampling failed; retrying with CPU sampling.", error);
@@ -563,7 +577,7 @@ export class SpriteModel {
             pe = strategies[i].pixel(logits, bases[i], t, ctx);
             if (forceFill) pe = 0;
           }
-          tok[i] = rng() < pe ? E : draw(ctx.col, K, rng());
+          tok[i] = rngs[i]() < pe ? E : draw(ctx.col, K, rngs[i]);
           out[i][t] = tok[i] === E ? -1 : tok[i];
         }
         if (onPixel) onPixel(t, out);
@@ -603,8 +617,9 @@ export class SpriteModel {
     const shared = strategyFor ? null : Strategy.split(this, vector, gShape, gColour);
     const strategyOf = (id) => (strategyFor ? strategyFor(id, view) : shared);
     const p = { S, mask: m, win, temperature, topP, signal };
-    const rng = makeRng(seed);
-    const images = new Array(n), stats = { sampled: 0, rejected: 0, rounds: 0, reasons: {} };
+    const resolvedSeed = Number(seed) === -1 ? randomSeed() : (Number(seed) >>> 0);
+    const attempts = new Uint32Array(n);
+    const images = new Array(n), stats = { seed: resolvedSeed, sampled: 0, rejected: 0, rounds: 0, reasons: {} };
     let pending = Array.from({ length: n }, (_, i) => i);
     while (pending.length && stats.rounds < maxRounds) {
       stats.rounds++;
@@ -618,11 +633,12 @@ export class SpriteModel {
           if (ids.length && used + st.rows.length > budget) break;
           ids.push(pending[s]); sts.push(st); used += st.rows.length; s++;
         }
-        const got = await this.drawChunk(sts, p, rng, onPixel ? (t, imgs) => onPixel(ids, t, imgs, view) : null);
+        const rngs = ids.map(id => makeRng(deriveSpriteSeed(resolvedSeed, id, attempts[id])));
+        const got = await this.drawChunk(sts, p, rngs, onPixel ? (t, imgs) => onPixel(ids, t, imgs, view) : null);
         ids.forEach((id, k) => {
           stats.sampled++;
           const why = useFilter ? rejected(got[k], S) : null;
-          if (why) { stats.rejected++; stats.reasons[why] = (stats.reasons[why] || 0) + 1; again.push(id); return; }
+          if (why) { stats.rejected++; stats.reasons[why] = (stats.reasons[why] || 0) + 1; attempts[id]++; again.push(id); return; }
           images[id] = crop(got[k], S, o, w);
           if (onSprite) onSprite(id, images[id]);
         });
