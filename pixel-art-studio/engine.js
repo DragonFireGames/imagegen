@@ -184,6 +184,7 @@ export const Strategy = {
   plain(model, vector) {
     return {
       name: "plain", rows: [model.condition(vector)],
+      gpuConfig: { guided: false, gShape: 1, gColour: 1 },
       pixel: (L, base, t, c) => guided(L, base * (c.K + 1), L, -1, c.K, 1, 1, c.temperature, c.topP, c.col, c.order),
     };
   },
@@ -194,6 +195,7 @@ export const Strategy = {
     const V = model.K + 1;
     return {
       name: "split", rows: [model.condition(vector), model.condition(null)],
+      gpuConfig: { guided: true, gShape, gColour },
       pixel: (L, base, t, c) => guided(L, base * V, L, (base + 1) * V, c.K, gShape, gColour, c.temperature, c.topP, c.col, c.order),
     };
   },
@@ -405,6 +407,72 @@ export class SpriteModel {
   /** The runner: draws one sprite per strategy on an S x S canvas in parallel. Every strategy owns rows.length
    * contiguous rows of the batch; the runner knows nothing about guidance. Returns Int16Arrays (palette index,
    * -1 = transparent), one per strategy. */
+
+  async ensureGpuSampler(device) {
+    if(this.gpuSampler)return this.gpuSampler;
+    const names=["tok","row","col","edge","kind"],offsets={};let total=0;
+    for(const name of names){offsets[name]=total;total+=this.t[name].length;}
+    const packed=new Float32Array(total);for(const name of names)packed.set(this.t[name],offsets[name]);
+    const embeddings=device.createBuffer({size:packed.byteLength,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(embeddings,0,packed);
+    const shader=[
+      "struct P{B:u32,K:u32,d:u32,E:u32,S:u32,t:u32,rows:u32,guided:u32,gs:f32,gc:f32,temp:f32,topP:f32,hasMask:u32,tok:u32,row:u32,col:u32,edge:u32,kind:u32,pad0:u32,pad1:u32};",
+      "@group(0) @binding(0) var<storage,read> logits:array<f32>;@group(0) @binding(1) var<storage,read_write> nextX:array<f32>;",
+      "@group(0) @binding(2) var<storage,read_write> tokens:array<u32>;@group(0) @binding(3) var<storage,read> emb:array<f32>;",
+      "@group(0) @binding(4) var<storage,read> edgeFlags:array<i32>;@group(0) @binding(5) var<storage,read> mask:array<u32>;",
+      "@group(0) @binding(6) var<storage,read> win:array<u32>;@group(0) @binding(7) var<storage,read> randoms:array<f32>;@group(0) @binding(8) var<uniform> p:P;",
+      "fn lse(r:u32,V:u32)->f32{var m=-3.402823466e+38;for(var j=0u;j<p.K;j++){m=max(m,logits[r*V+j]);}var s=0.0;for(var j=0u;j<p.K;j++){s+=exp(logits[r*V+j]-m);}return m+log(s);}",
+      "@compute @workgroup_size(64) fn main(@builtin(global_invocation_id) id:vec3<u32>){let sprite=id.x;let count=p.B/p.rows;if(sprite>=count){return;}let V=p.K+1u;let base=sprite*p.rows;",
+      "let lc=lse(base,V);var odds=min(logits[base*V+p.K]-lc,log(999999.0));var scores:array<f32,"+this.K+">;",
+      "if(p.guided!=0u){let ur=base+1u;let lu=lse(ur,V);let uOdds=min(logits[ur*V+p.K]-lu,log(999999.0));odds=uOdds+p.gs*(odds-uOdds);for(var j=0u;j<p.K;j++){let u=logits[ur*V+j]-lu;scores[j]=u+p.gc*((logits[base*V+j]-lc)-u);}}else{for(var j=0u;j<p.K;j++){scores[j]=logits[base*V+j];}}",
+      "let pe=1.0/(1.0+exp(-odds));let inv=1.0/max(p.temp,0.000001);var mx=-3.402823466e+38;for(var j=0u;j<p.K;j++){scores[j]*=inv;mx=max(mx,scores[j]);}var sum=0.0;for(var j=0u;j<p.K;j++){scores[j]=exp(scores[j]-mx);sum+=scores[j];}for(var j=0u;j<p.K;j++){scores[j]/=sum;}",
+      "let ix=(sprite*p.S*p.S+p.t)*2u;let outside=win[p.t]==0u||(p.hasMask!=0u&&mask[p.t]==0u);let inside=p.hasMask!=0u&&mask[p.t]!=0u;var token=p.E;",
+      "if(inside||(!outside&&randoms[ix]>=pe)){let u=randoms[ix+1u];var acc=0.0;var selected=p.K-1u;var found=false;for(var j=0u;j<p.K;j++){acc+=scores[j];if(!found&&u<acc){selected=j;found=true;}}token=selected;}tokens[sprite*p.S*p.S+p.t]=token;",
+      "if(p.t+1u<p.S*p.S){let q=p.t+1u;let r=q/p.S;let column=q%p.S;let e=u32(edgeFlags[q]);for(var j=0u;j<p.d;j++){var v=emb[p.tok+token*p.d+j];v+=emb[p.row+r*p.d+j];v+=emb[p.col+column*p.d+j];v+=emb[p.edge+e*p.d+j];v+=emb[p.kind+"+this.info.kinds.pixel+"u*p.d+j];for(var k=0u;k<p.rows;k++){nextX[(base+k)*p.d+j]=v;}}}}",
+    ].join("\\n");
+    const module=device.createShaderModule({code:shader});
+    const pipeline=await device.createComputePipelineAsync({layout:"auto",compute:{module,entryPoint:"main"}});
+    this.gpuSampler={pipeline,embeddings,offsets};return this.gpuSampler;
+  }
+  async drawChunkGpu(strategies,p,rng,onPixel,B,b,n,x0,T0){
+    if(this.ep!=="webgpu"||!this.fixedCache||p.topP!==1)return null;
+    const cfg=strategies[0]&&strategies[0].gpuConfig;
+    if(!cfg||strategies.some(s=>!s.gpuConfig||s.rows.length!==strategies[0].rows.length||s.gpuConfig.guided!==cfg.guided||s.gpuConfig.gShape!==cfg.gShape||s.gpuConfig.gColour!==cfg.gColour))return null;
+    const rows=strategies[0].rows.length;if(rows!==1&&rows!==2)return null;
+    const device=await this.ort.env.webgpu.device,gpu=await this.ensureGpuSampler(device),make=(size,usage)=>device.createBuffer({size:Math.max(4,size),usage});
+    const input=make(B*this.d*4,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST),tokens=make(b*n*4,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC);
+    const randomValues=new Float32Array(b*n*2);for(let i=0;i<randomValues.length;i++)randomValues[i]=rng();
+    const randoms=make(randomValues.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);device.queue.writeBuffer(randoms,0,randomValues);
+    const edgeValues=Int32Array.from(edgeFlags(p.mask,p.S)),edge=make(edgeValues.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);device.queue.writeBuffer(edge,0,edgeValues);
+    const maskValues=new Uint32Array(n),winValues=Uint32Array.from(p.win);for(let i=0;i<n;i++)maskValues[i]=p.mask?p.mask[i]:0;
+    const mask=make(maskValues.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST),win=make(winValues.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);
+    device.queue.writeBuffer(mask,0,maskValues);device.queue.writeBuffer(win,0,winValues);
+    const params=make(80,GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST),readback=make(b*n*4,GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST);
+    const raw=new ArrayBuffer(80),u=new Uint32Array(raw),f=new Float32Array(raw);
+    u[0]=B;u[1]=this.K;u[2]=this.d;u[3]=this.E;u[4]=p.S;u[6]=rows;u[7]=cfg.guided?1:0;u[12]=p.mask?1:0;
+    u[13]=gpu.offsets.tok;u[14]=gpu.offsets.row;u[15]=gpu.offsets.col;u[16]=gpu.offsets.edge;u[17]=gpu.offsets.kind;
+    const inputTensor=this.ort.Tensor.fromGpuBuffer(input,{dataType:"float32",dims:[B,1,this.d]});USER_GPU_BUFFERS.set(inputTensor,input);
+    const position=new BigInt64Array(1),state={position,feeds:{x:inputTensor,pos:new this.ort.Tensor("int64",position,[1])},result:{},gpuLogits:true};
+    let cache=await this.cacheSet(B,2+p.S+n),cacheNext=new Array(2*this.L),held=null,pos=0;
+    const advance=async(prefix)=>{if(p.signal&&p.signal.aborted){const e=new Error("stopped");e.name="AbortError";throw e;}if(prefix)device.queue.writeBuffer(input,0,prefix);
+      const previous=cache,result=await this.stepFixed(null,B,pos,cache,state,cacheNext);pos++;cache=result.cache;cacheNext=previous;if(previous!==cache)SpriteModel.release(previous);return result.logitsTensor;};
+    const dispatch=(logits,t)=>{u[5]=t;f[8]=cfg.gShape;f[9]=cfg.gColour;f[10]=p.temperature;f[11]=p.topP;device.queue.writeBuffer(params,0,raw);
+      const group=device.createBindGroup({layout:gpu.pipeline.getBindGroupLayout(0),entries:[
+        {binding:0,resource:{buffer:logits.gpuBuffer}},{binding:1,resource:{buffer:input}},{binding:2,resource:{buffer:tokens}},
+        {binding:3,resource:{buffer:gpu.embeddings}},{binding:4,resource:{buffer:edge}},{binding:5,resource:{buffer:mask}},
+        {binding:6,resource:{buffer:win}},{binding:7,resource:{buffer:randoms}},{binding:8,resource:{buffer:params}}]});
+      const enc=device.createCommandEncoder(),pass=enc.beginComputePass();pass.setPipeline(gpu.pipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(b/64));pass.end();device.queue.submit([enc.finish()]);};
+    try{const prefix=new Float32Array(B*this.d);for(let t=0;t<T0;t++){for(let r=0;r<B;r++)prefix.set(x0.subarray((r*T0+t)*this.d,(r*T0+t+1)*this.d),r*this.d);
+        const next=await advance(prefix);if(held)held.dispose();held=next;}dispatch(held,0);
+      for(let t=1;t<n;t++){const next=await advance(null);held.dispose();held=next;dispatch(held,t);}
+      const enc=device.createCommandEncoder();enc.copyBufferToBuffer(tokens,0,readback,0,b*n*4);device.queue.submit([enc.finish()]);await readback.mapAsync(GPUMapMode.READ);
+      const values=new Uint32Array(readback.getMappedRange().slice(0));readback.unmap();
+      const out=Array.from({length:b},(_,i)=>{const a=new Int16Array(n);for(let t=0;t<n;t++)a[t]=values[i*n+t]===this.E?-1:values[i*n+t];return a;});
+      if(onPixel)for(let t=0;t<n;t++)onPixel(t,out);return out;
+    }finally{if(held)held.dispose();SpriteModel.release(cache);USER_GPU_BUFFERS.delete(inputTensor);input.destroy();
+      for(const x of [tokens,randoms,edge,mask,win,params,readback])x.destroy();}
+  }
+
+
   async drawChunk(strategies, p, rng, onPixel) {
     const { S, mask, win, temperature, topP } = p;
     const b = strategies.length, n = S * S, d = this.d, K = this.K, E = this.E;
@@ -420,6 +488,8 @@ export class SpriteModel {
       this.writePrefix(x0, j * T0 * d, strategies[i].rows[j - bases[i]], S, mask);
       this.writePixel(x0, (j * T0 + T0 - 1) * d, this.BOS, 0, 0, edge[0]);
     }
+    const gpuResult = await this.drawChunkGpu(strategies,p,rng,onPixel,B,b,n,x0,T0);
+    if(gpuResult)return gpuResult;
     let logits, cache, cacheNext = null, pos = 0, lastYield = performance.now();
     const x = new Float32Array(B * d);
     let fixedStepState = null;
