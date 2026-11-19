@@ -30,7 +30,7 @@ function inferenceChunk(rowsPerSprite = 2) {
   const lowMemory = Number.isFinite(memory) && memory > 0 ? memory <= 4 : cores <= 4;
   // Keep the network-row budget (and therefore KV-cache memory) constant across modes.
   // Fast mode uses one conditional row per sprite; guided mode uses conditional + unconditional.
-  const rowBudget = backend === "webgpu" && memory >= 8 && cores >= 8 ? 12 : backend === "webgpu" ? (lowMemory ? 4 : 8) : (lowMemory ? 4 : 8);
+  const rowBudget = backend === "webgpu" && memory >= 8 && cores >= 8 ? 12 : lowMemory ? 4 : 8;
   return Math.max(1, Math.floor(rowBudget / rowsPerSprite));
 }
 async function warmupDecoder() {
