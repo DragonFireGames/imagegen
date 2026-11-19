@@ -19,6 +19,10 @@ export function modelFiles(base) {
 
 export const DATA_NAME = "decoder.data";
 
+// GPU buffers passed to Tensor.fromGpuBuffer() remain caller-owned. Keep their
+// ownership separate from ORT-created output tensors, which must use dispose().
+const USER_GPU_BUFFERS = new WeakMap();
+
 const json = (bytes) => JSON.parse(new TextDecoder().decode(bytes));
 
 // On the CPU, onnxruntime-web computes inside session.run on this thread and resolves at once, so a loop of awaits
@@ -337,7 +341,21 @@ export class SpriteModel {
     return { logits: out.logits.data, cache: next };
   }
 
-  static release(cache) { for (const t of cache) if (t.location === "gpu-buffer") t.dispose(); }
+  static release(cache) {
+    for (const t of cache) {
+      if (t.location !== "gpu-buffer") continue;
+      const ownedBuffer = USER_GPU_BUFFERS.get(t);
+      if (ownedBuffer) {
+        // fromGpuBuffer() wraps a caller-owned buffer. ORT explicitly leaves its
+        // lifetime to us, so destroy the GPUBuffer rather than disposing the wrapper.
+        USER_GPU_BUFFERS.delete(t);
+        ownedBuffer.destroy();
+      } else {
+        // Outputs created by ORT own their GPU buffers and must be disposed by ORT.
+        t.dispose();
+      }
+    }
+  }
 
   /** A zero-filled fixed-size cache: 2 * layers tensors (B, H, M, hd). On WebGPU they are created on the GPU
    * (new buffers start as zeros): a CPU tensor would first be copied into the WebAssembly heap, which never shrinks
@@ -348,7 +366,9 @@ export class SpriteModel {
       const device = await this.ort.env.webgpu.device, size = B * this.H * M * this.hd * 4;
       for (let i = 0; i < 2 * this.L; i++) {
         const buf = device.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
-        out.push(this.ort.Tensor.fromGpuBuffer(buf, { dataType: "float32", dims, dispose: () => buf.destroy() }));
+        const tensor = this.ort.Tensor.fromGpuBuffer(buf, { dataType: "float32", dims });
+        USER_GPU_BUFFERS.set(tensor, buf);
+        out.push(tensor);
       }
       return out;
     }
