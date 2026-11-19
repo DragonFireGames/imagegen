@@ -9,9 +9,9 @@ const CACHE_NAME = "pixel-foundry-model-v1";
 const $ = (id) => document.getElementById(id);
 let ort, model, encoder, backend = "wasm", controller = null, loading = false, loadingModel = false, inferenceStarted = 0;
 function setStatus(s) { $("status").textContent = s; }
-function setGenerationComplete(count) {
+function setGenerationComplete(count, seed) {
   const seconds = Math.max((performance.now() - inferenceStarted) / 1000, 0.001);
-  setStatus("Finished · " + count + " sprites · " + seconds.toFixed(1) + " s · " + (count / seconds).toFixed(2) + " sprites/s");
+  setStatus("Finished · " + count + " sprites · seed " + seed + " · " + seconds.toFixed(1) + " s · " + (count / seconds).toFixed(2) + " sprites/s");
 }
 function setProgress(value, label) {
   $("progress").style.width = Math.max(0, Math.min(100, value * 100)) + "%";
@@ -188,8 +188,8 @@ async function generate() {
     setStatus("Encoding prompt locally…"); const enc = await loadEncoder(); settings.vector = await enc.encode(prompt);
     setStatus("Generating on your " + (backend === "webgpu" ? "GPU" : "CPU") + "…"); $("empty").classList.add("hidden");
     inferenceStarted = performance.now();
-    await model.generate(settings);
-    setGenerationComplete(count); $("phase").textContent = "Complete"; setProgress(1);
+    const result = await model.generate(settings);
+    setGenerationComplete(count, result.stats.seed); $("phase").textContent = "Complete"; setProgress(1);
   } catch (error) {
     if (error && error.name === "AbortError") { setStatus("Generation stopped"); $("phase").textContent = "Stopped"; }
     else if (backend === "webgpu" && model) {
@@ -199,7 +199,7 @@ async function generate() {
         backend = "wasm"; settings.chunk = inferenceChunk(rowsPerSprite); model = await loadLocalModel("wasm"); $("results").replaceChildren();
         setStatus("Warming up CPU inference…"); await warmupDecoder(); setStatus("Retrying generation on CPU…");
         inferenceStarted = performance.now();
-        await model.generate(settings); setGenerationComplete(count); $("phase").textContent = "Complete · CPU"; setProgress(1);
+        const result = await model.generate(settings); setGenerationComplete(count, result.stats.seed); $("phase").textContent = "Complete · CPU"; setProgress(1);
       } catch (fallbackError) { showError(fallbackError); setStatus("Generation failed"); }
     } else { showError(error); setStatus("Generation failed"); $("phase").textContent = "See error details"; }
   } finally { loading = false; controller = null; $("go").disabled = false; $("go").textContent = "✦ Generate sprites"; }
