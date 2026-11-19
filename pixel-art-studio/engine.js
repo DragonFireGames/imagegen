@@ -92,13 +92,13 @@ function logSumExp(a, off, len) {
 function emptyLogOdds(l, off, K, E, colourLogSum = logSumExp(l, off, K)) {
   // log(pEmpty / (1 - pEmpty)) simplifies exactly to emptyLogit - logsumexp(colourLogits).
   // This avoids normalizing the full vocabulary and then converting the probability back to log-odds.
-  return l[off + E] - colourLogSum;
+  return Math.min(l[off + E] - colourLogSum, Math.log(999999));
 }
 
 /** Guided distribution for one pixel. lc / lu: logits with and without text at offsets offC / offU (offU < 0 = no
  * guidance). Fills `col` (length K) with colour probabilities after temperature and top-p; returns p(EMPTY). */
 export function guided(lc, offC, lu, offU, K, gShape, gColour, temperature, topP, col, order) {
-  const V = K + 1, E = K;
+  const E = K;
   let s;
   if (offU >= 0) {
     const lsC = logSumExp(lc, offC, K), lsU = logSumExp(lu, offU, K);
@@ -121,7 +121,7 @@ export function guided(lc, offC, lu, offU, K, gShape, gColour, temperature, topP
  * condition. w[g] is caption g's weight at this pixel. Shape log-odds and colour log-probabilities are
  * s = s_u + sum_g w_g (s_g - s_u); then temperature and top-p as in guided(). */
 export function guidedMix(L, base, k, K, w, temperature, topP, col, order) {
-  const V = K + 1, E = K, offU = (base + k) * V;
+  const E = K, V = K + 1, offU = (base + k) * V;
   const lsU = logSumExp(L, offU, K), su = emptyLogOdds(L, offU, K, E, lsU);
   let s = su;
   for (let j = 0; j < K; j++) col[j] = L[offU + j] - lsU;
