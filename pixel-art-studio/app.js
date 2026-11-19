@@ -44,8 +44,6 @@ async function warmupDecoder() {
   let output = null;
   try {
     output = await model.stepFixed(x, batch, 0, cache);
-    // Compile the GPU sampling pipeline during model startup, not during the first visible generation.
-    if (backend === "webgpu") await model.ensureGpuSampler(await ort.env.webgpu.device);
   }
   finally {
     model.constructor.release(cache);
@@ -155,7 +153,6 @@ async function loadEncoder() {
   const { Tokenizer } = await import(TOKENIZERS_URL);
   setStatus("Preparing text encoder files…"); setProgress(0, "Preparing text encoder files…");
   encoder = await loadTextEncoder({ ort, Tokenizer, files: encoderFiles(ENCODER_BASE), fetchBytes, onProgress: downloadProgress("Downloading text encoder") });
-  await encoder.encode("pixel art sprite");
   return encoder;
 }
 function addSprite(indices, size, index) {
