@@ -449,7 +449,7 @@ export class SpriteModel {
       "if(lane==0u){let ix=(sprite*p.S*p.S+p.t)*2u;if(forceFill||randoms[ix]>=1.0/(1.0+exp(-odds))){let u=randoms[ix+1u];var acc=0.0;for(var j=0u;j<p.K;j++){acc+=scores[j];if(u<acc){chosen=j;break;}}}}}workgroupBarrier();",
       "if(lane==0u){tokens[sprite*p.S*p.S+p.t]=chosen;}if(p.t+1u<p.S*p.S){let q=p.t+1u;let r=q/p.S;let column=q%p.S;let e=u32(edgeFlags[q]);for(var j=lane;j<p.d;j+=64u){var v=emb[p.tok+chosen*p.d+j];v+=emb[p.row+r*p.d+j];v+=emb[p.col+column*p.d+j];v+=emb[p.edge+e*p.d+j];v+=emb[p.kind+"+this.info.kinds.pixel+"u*p.d+j];for(var k=0u;k<p.rows;k++){nextX[(base+k)*p.d+j]=v;}}}}",
       "}",
-    ].join("\\n");
+    ].join("\n");
         const module=device.createShaderModule({code:shader});
     const pipeline=await device.createComputePipelineAsync({layout:"auto",compute:{module,entryPoint:"main"}});
     this.gpuSampler={pipeline,embeddings,offsets};return this.gpuSampler;
