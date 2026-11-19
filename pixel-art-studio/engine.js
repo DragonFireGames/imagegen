@@ -455,7 +455,7 @@ export class SpriteModel {
     u[13]=gpu.offsets.tok;u[14]=gpu.offsets.row;u[15]=gpu.offsets.col;u[16]=gpu.offsets.edge;u[17]=gpu.offsets.kind;
     const inputTensor=this.ort.Tensor.fromGpuBuffer(input,{dataType:"float32",dims:[B,1,this.d]});USER_GPU_BUFFERS.set(inputTensor,input);
     const position=new BigInt64Array(1),state={position,feeds:{x:inputTensor,pos:new this.ort.Tensor("int64",position,[1])},result:{},gpuLogits:true};
-    let cache=await this.cacheSet(B,2+p.S+n),cacheNext=new Array(2*this.L),held=null,pos=0;
+    let cache=null,cacheNext=new Array(2*this.L),held=null,pos=0;
     const prefixBuffer=make(x0.byteLength,GPUBufferUsage.COPY_SRC|GPUBufferUsage.COPY_DST);device.queue.writeBuffer(prefixBuffer,0,x0);
     const advance=async(prefixIndex=null)=>{if(p.signal&&p.signal.aborted){const e=new Error("stopped");e.name="AbortError";throw e;}
       if(prefixIndex!==null){const copy=device.createCommandEncoder();copy.copyBufferToBuffer(prefixBuffer,prefixIndex*B*this.d*4,input,0,B*this.d*4);device.queue.submit([copy.finish()]);}
@@ -466,13 +466,13 @@ export class SpriteModel {
         {binding:3,resource:{buffer:gpu.embeddings}},{binding:4,resource:{buffer:edge}},{binding:5,resource:{buffer:mask}},
         {binding:6,resource:{buffer:win}},{binding:7,resource:{buffer:randoms}},{binding:8,resource:{buffer:params}}]});
       const enc=device.createCommandEncoder(),pass=enc.beginComputePass();pass.setPipeline(gpu.pipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(b/64));pass.end();device.queue.submit([enc.finish()]);};
-    try{for(let t=0;t<T0;t++){const next=await advance(t);if(held)held.dispose();held=next;}dispatch(held,0);
+    try{cache=await this.cacheSet(B,2+p.S+n);for(let t=0;t<T0;t++){const next=await advance(t);if(held)held.dispose();held=next;}dispatch(held,0);
       for(let t=1;t<n;t++){const next=await advance(null);held.dispose();held=next;dispatch(held,t);}
       const enc=device.createCommandEncoder();enc.copyBufferToBuffer(tokens,0,readback,0,b*n*4);device.queue.submit([enc.finish()]);await readback.mapAsync(GPUMapMode.READ);
       const values=new Uint32Array(readback.getMappedRange().slice(0));readback.unmap();
       const out=Array.from({length:b},(_,i)=>{const a=new Int16Array(n);for(let t=0;t<n;t++)a[t]=values[i*n+t]===this.E?-1:values[i*n+t];return a;});
       if(onPixel)for(let t=0;t<n;t++)onPixel(t,out);return out;
-    }finally{if(held)held.dispose();SpriteModel.release(cache);USER_GPU_BUFFERS.delete(inputTensor);input.destroy();
+    }finally{if(held)held.dispose();if(cache)SpriteModel.release(cache);USER_GPU_BUFFERS.delete(inputTensor);input.destroy();
       for(const x of [tokens,randoms,edge,mask,win,params,readback,prefixBuffer])x.destroy();}
   }
 
