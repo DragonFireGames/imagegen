@@ -393,6 +393,7 @@ export class SpriteModel {
       this.writePixel(x0, (j * T0 + T0 - 1) * d, this.BOS, 0, 0, edge[0]);
     }
     let logits, cache, spareCache = null, pos = 0, lastYield = performance.now();
+    const reuseGpuCache = this.fixedCache && this.ep === "webgpu";
     const x = new Float32Array(B * d);
     let fixedStepState = null;
     if (this.fixedCache) {
@@ -408,16 +409,16 @@ export class SpriteModel {
     const advance = async () => {  // one more token -> logits of the next pixel
       const prev = cache;
       const r = this.fixedCache
-        ? await this.stepFixed(x, B, pos, cache, fixedStepState, spareCache)
+        ? await this.stepFixed(x, B, pos, cache, fixedStepState, reuseGpuCache ? spareCache : null)
         : await this.step(x, B, 1, cache);
       pos++;
       logits = r.logits; cache = r.cache;
-      if (this.fixedCache) spareCache = prev;
+      if (reuseGpuCache) spareCache = prev;
       else if (prev !== cache) SpriteModel.release(prev);
     };
     if (this.fixedCache) {  // ping-pong fixed-size GPU buffers; avoid allocating 2 * layers buffers per pixel
       cache = await this.cacheSet(B, 2 + S + n);
-      spareCache = await this.cacheSet(B, 2 + S + n);
+      if (reuseGpuCache) spareCache = await this.cacheSet(B, 2 + S + n);
       for (let i = 0; i < T0; i++) {
         for (let j = 0; j < B; j++) x.set(x0.subarray((j * T0 + i) * d, (j * T0 + i + 1) * d), j * d);
         await advance();
