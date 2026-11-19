@@ -456,8 +456,10 @@ export class SpriteModel {
   async generate({ vector = null, n = 8, size = 16, seed = 0, gShape = 1, gColour = 2, temperature = 1, topP = 1,
                    mask = null, filter = true, chunk = 8, rows = 0, maxRounds = 50, onPixel = null, onSprite = null,
                    signal = null, strategyFor = null }) {
-    if (![16, 24, 32].includes(size)) throw new Error("size must be 16, 24 or 32");
-    const S = size === 24 ? 32 : size, w = size, o = (S - w) >> 1;
+    if (![8, 12, 16, 24, 32].includes(size)) throw new Error("size must be 8, 12, 16, 24 or 32");
+    // The model has learned 16x16 and 32x32 canvases. Smaller UI sizes are
+    // centered crops from the native 16x16 canvas, not resized generations.
+    const S = size <= 16 ? 16 : size === 24 ? 32 : size, w = size, o = (S - w) >> 1;
     let m = null;
     if (mask) {
       m = new Uint8Array(S * S);
