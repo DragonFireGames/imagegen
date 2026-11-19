@@ -24,18 +24,19 @@ function showError(error) {
   console.error(error);
 }
 function clearError() { $("error").textContent = ""; $("error").classList.add("hidden"); }
-function inferenceChunk() {
+function inferenceChunk(rowsPerSprite = 2) {
   const memory = Number(navigator.deviceMemory);
   const cores = navigator.hardwareConcurrency || 4;
   const lowMemory = Number.isFinite(memory) && memory > 0 ? memory <= 4 : cores <= 4;
-  // A slightly larger batch improves GPU utilization, but costs cache memory.
-  // Only use it when both reported system memory and CPU capacity are ample.
-  if (backend === "webgpu" && memory >= 8 && cores >= 8) return 6;
-  return lowMemory ? 2 : 4;
+  // Keep the network-row budget (and therefore KV-cache memory) constant across modes.
+  // Fast mode uses one conditional row per sprite; guided mode uses conditional + unconditional.
+  const rowBudget = backend === "webgpu" && memory >= 8 && cores >= 8 ? 12 : backend === "webgpu" ? (lowMemory ? 4 : 8) : (lowMemory ? 4 : 8);
+  return Math.max(1, Math.floor(rowBudget / rowsPerSprite));
 }
 async function warmupDecoder() {
   const size = backend === "webgpu" ? Number($("size").value) || 32 : 16;
-  const batch = backend === "webgpu" ? Math.min(inferenceChunk(), Number($("count").value) || 4) * 2 : 1;
+  const rowsPerSprite = $("mode").value === "fast" ? 1 : 2;
+  const batch = backend === "webgpu" ? Math.min(inferenceChunk(rowsPerSprite), Number($("count").value) || 4) * rowsPerSprite : 1;
   const cacheLength = backend === "webgpu" ? 2 + size + size * size : 4;
   const x = new Float32Array(batch * model.d);
   for (let row = 0; row < batch; row++) model.writePixel(x, row * model.d, model.BOS, 0, 0, 3);
@@ -160,9 +161,11 @@ async function generate() {
   $("empty").textContent = "Preparing prompt and generating sprites locally…"; controller = new AbortController();
   const size = Number($("size").value), count = Number($("count").value);
   let seed = Number($("seed").value); if (!Number.isFinite(seed)) seed = 0;
+  const fastMode = $("mode").value === "fast";
+  const rowsPerSprite = fastMode ? 1 : 2;
   const settings = {
-    n: count, size, seed, gShape: Number($("shape").value), gColour: Number($("colour").value),
-    temperature: 1, topP: 1, chunk: inferenceChunk(), signal: controller.signal,
+    n: count, size, seed, gShape: fastMode ? 1 : Number($("shape").value), gColour: fastMode ? 1 : Number($("colour").value),
+    filter: !fastMode, temperature: 1, topP: 1, chunk: inferenceChunk(rowsPerSprite), signal: controller.signal,
     onPixel: (ids, t, images, view) => {
       if ((t + 1) % view.S === 0 || t + 1 === view.S * view.S)
         setProgress((t + 1) / (view.S * view.S), "Drawing row · " + Math.ceil((t + 1) / view.S) + " / " + view.S);
@@ -181,7 +184,7 @@ async function generate() {
       try {
         console.warn("GPU inference failed; retrying on CPU.", error); setStatus("GPU inference failed · switching to CPU…");
         try { await model.session.release(); } catch (_) {}
-        backend = "wasm"; model = await loadLocalModel("wasm"); $("results").replaceChildren();
+        backend = "wasm"; settings.chunk = inferenceChunk(rowsPerSprite); model = await loadLocalModel("wasm"); $("results").replaceChildren();
         setStatus("Warming up CPU inference…"); await warmupDecoder(); setStatus("Retrying generation on CPU…");
         inferenceStarted = performance.now();
         await model.generate(settings); setGenerationComplete(count); $("phase").textContent = "Complete · CPU"; setProgress(1);
