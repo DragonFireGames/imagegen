@@ -61,7 +61,7 @@ export async function loadModel({ ort, files, ep = "wasm", fetchBytes, onProgres
   const opts = { executionProviders: [ep], graphOptimizationLevel: "all", ...sessionOptions };
   if (files.weights) opts.externalData = [{ path: DATA_NAME, data: halfToFloat(await fetchBytes(files.weights, onProgress)) }];
   if (ep === "webgpu") {  // keep cache and logits on the GPU
-    opts.preferredOutputLocation = { logits: "gpu-buffer" };
+    opts.preferredOutputLocation = {};
     for (let i = 0; i < info.n_layers; i++) {
       opts.preferredOutputLocation[`present_k_${i}`] = "gpu-buffer";
       opts.preferredOutputLocation[`present_v_${i}`] = "gpu-buffer";
@@ -455,7 +455,7 @@ export class SpriteModel {
     this.gpuSampler={pipeline,embeddings,offsets};return this.gpuSampler;
   }
   async drawChunkGpu(strategies,p,rng,onPixel,B,b,n,x0,T0){
-    if(this.ep!=="webgpu"||!this.fixedCache||p.topP!==1)return null;
+    if(this.ep!=="webgpu"||!this.fixedCache||p.topP!==1||!this.gpuSampler)return null;
     const cfg=strategies[0]&&strategies[0].gpuConfig;
     if(!cfg||strategies.some(s=>!s.gpuConfig||s.rows.length!==strategies[0].rows.length||s.gpuConfig.guided!==cfg.guided||s.gpuConfig.gShape!==cfg.gShape||s.gpuConfig.gColour!==cfg.gColour))return null;
     const rows=strategies[0].rows.length;if(rows!==1&&rows!==2)return null;
