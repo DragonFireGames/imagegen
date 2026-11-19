@@ -73,10 +73,18 @@ async function fetchBytes(url, onProgress) {
   if (!response.ok) throw new Error("Model download failed (" + response.status + "): " + url);
   const total = Number(response.headers.get("content-length")) || 0;
   let bytes;
-  if (onProgress && response.body && total) {
-    const reader = response.body.getReader(); bytes = new Uint8Array(total); let received = 0;
-    for (;;) { const part = await reader.read(); if (part.done) break; if (received + part.value.length > total) throw new Error("Download larger than announced: " + url); bytes.set(part.value, received); received += part.value.length; onProgress(received, total); }
-    if (received !== total) throw new Error("Download was incomplete: " + url);
+  if (onProgress && response.body) {
+    const reader = response.body.getReader(); let received = 0;
+    if (total) {
+      bytes = new Uint8Array(total);
+      for (;;) { const part = await reader.read(); if (part.done) break; if (received + part.value.length > total) throw new Error("Download larger than announced: " + url); bytes.set(part.value, received); received += part.value.length; onProgress(received, total); }
+      if (received !== total) throw new Error("Download was incomplete: " + url);
+    } else {
+      const parts = [];
+      for (;;) { const part = await reader.read(); if (part.done) break; parts.push(part.value); received += part.value.length; onProgress(received, 0); }
+      bytes = new Uint8Array(received); let offset = 0;
+      for (const part of parts) { bytes.set(part, offset); offset += part.length; }
+    }
   } else { bytes = new Uint8Array(await response.arrayBuffer()); if (onProgress) onProgress(bytes.length, total || bytes.length); }
   if (!cache) throw new Error("Browser storage is unavailable; model files cannot be saved for offline use.");
   try { await cache.put(url, new Response(bytes)); }
@@ -143,8 +151,9 @@ async function boot() {
 }
 async function loadEncoder() {
   if (encoder) return encoder;
-  setStatus("Downloading text encoder to this browser…"); $("phase").textContent = "First-time text encoder download";
+  setStatus("Loading text tokenizer…"); setProgress(0, "Loading text tokenizer…");
   const { Tokenizer } = await import(TOKENIZERS_URL);
+  setStatus("Preparing text encoder files…"); setProgress(0, "Preparing text encoder files…");
   encoder = await loadTextEncoder({ ort, Tokenizer, files: encoderFiles(ENCODER_BASE), fetchBytes, onProgress: downloadProgress("Downloading text encoder") });
   await encoder.encode("pixel art sprite");
   return encoder;
